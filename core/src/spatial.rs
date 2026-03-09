@@ -183,8 +183,36 @@ impl SpatialResolver {
         Ok((nalgebra::Rotation3::from_matrix(&r_final), t.into()))
     }
 
-    /// Updates the Homography matrix using a set of known 2D-3D point correspondences
-    /// using the Direct Linear Transform (DLT) algorithm.
+    /// Estimates the 3D world coordinates of a set of 2D keypoints.
+    /// This performs 'Kinematic Lifting' by assuming the player's root (hips)
+    /// height remains relatively stable or by using the ground plane as a reference.
+    pub fn lift_keypoints_to_3d(&self, kpts_2d: &Vec<(f32, f32)>) -> Vec<CourtPoint> {
+        let mut kpts_3d = Vec::new();
+        
+        // 1. Resolve the floor position (average of ankles)
+        let l_ank = kpts_2d.get(15).unwrap_or(&(0.0, 0.0));
+        let r_ank = kpts_2d.get(16).unwrap_or(&(0.0, 0.0));
+        
+        if let Ok(floor_pos) = self.resolve_floor_point((l_ank.0 + r_ank.0) / 2.0, (l_ank.1 + r_ank.1) / 2.0) {
+            for (u, v) in kpts_2d {
+                // For Stage 1, we approximate 3D height (Z) based on pixel displacement from floor
+                // Simplified: Z_3d ~ (v_floor - v_pixel) * Scale_Factor
+                // In production, this uses the PnP camera pose to project a ray from the camera
+                // and intersect it with a vertical plane at (floor_pos.x, floor_pos.y).
+                
+                let z_est = (floor_pos.y - v).abs() * 0.5; // Placeholder for ray-plane intersection
+                
+                kpts_3d.push(CourtPoint {
+                    x: floor_pos.x,
+                    y: floor_pos.y,
+                    z: z_est,
+                });
+            }
+        }
+        
+        kpts_3d
+    }
+
     pub fn calibrate(&mut self, anchors: Vec<(Point2<f32>, Point2<f32>)>) -> Result<()> {
         if anchors.len() < 4 {
             return Err(anyhow!("At least 4 points are required for calibration"));

@@ -55,6 +55,17 @@ impl GeometricReferee {
         let dist = (feet_pos - Point2::new(rim.x, rim.y)).norm();
         dist > NCAA_3PT_RADIUS
     }
+
+    /// Predicate: Does a point intersect the ball's 3D trajectory?
+    /// Used for detecting Blocks and Rebound contests.
+    pub fn is_blocking_path(&self, hand_pos: &Point3<f32>, ball_pos: &Point3<f32>) -> bool {
+        // Simple cylinder intersection: is hand within 20cm of ball in XY plane?
+        let dist_xy = (Point2::new(hand_pos.x, hand_pos.y) - Point2::new(ball_pos.x, ball_pos.y)).norm();
+        // And is hand at similar or higher Z?
+        let z_overlap = hand_pos.z >= ball_pos.z - 10.0;
+        
+        dist_xy < 20.0 && z_overlap
+    }
 }
 
 #[cfg(test)]
@@ -76,7 +87,39 @@ mod tests {
     #[test]
     fn test_out_of_bounds() {
         let ref_bot = GeometricReferee::new();
+        // Baseline check
         assert!(ref_bot.is_out_of_bounds(&Point2::new(-1.0, 10.0)));
+        // Sideline check
+        assert!(ref_bot.is_out_of_bounds(&Point2::new(100.0, -1.0)));
+        // Far corner check
+        assert!(ref_bot.is_out_of_bounds(&Point2::new(NCAA_COURT_LENGTH + 1.0, NCAA_COURT_WIDTH + 1.0)));
+        // Perfectly inside
         assert!(!ref_bot.is_out_of_bounds(&Point2::new(100.0, 100.0)));
+    }
+
+    #[test]
+    fn test_3pt_line_precision() {
+        let ref_bot = GeometricReferee::new();
+        // Point just inside the 3pt arc (Distance < 675cm)
+        let two_pt_pos = Point2::new(NCAA_BASELINE_TO_RIM + 500.0, NCAA_COURT_WIDTH / 2.0);
+        assert!(!ref_bot.is_3pt_attempt(&two_pt_pos, true));
+
+        // Point just outside the 3pt arc (Distance > 675cm)
+        let three_pt_pos = Point2::new(NCAA_BASELINE_TO_RIM + 700.0, NCAA_COURT_WIDTH / 2.0);
+        assert!(ref_bot.is_3pt_attempt(&three_pt_pos, true));
+    }
+
+    #[test]
+    fn test_block_intersection() {
+        let ref_bot = GeometricReferee::new();
+        let ball = Point3::new(100.0, 100.0, 250.0);
+        
+        // Successful block (hand near ball)
+        let hand_block = Point3::new(105.0, 105.0, 255.0);
+        assert!(ref_bot.is_blocking_path(&hand_block, &ball));
+        
+        // Miss (hand too far away)
+        let hand_miss = Point3::new(150.0, 100.0, 250.0);
+        assert!(!ref_bot.is_blocking_path(&hand_miss, &ball));
     }
 }
