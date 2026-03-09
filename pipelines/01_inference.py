@@ -7,76 +7,79 @@ from collections import Counter, deque
 from ultralytics import YOLO
 import easyocr
 import torch
+from behavior_engine import BehaviorStateMachine
+from core.vision.action_brain import ActionBrain
 
-def get_team_color(crop_img):
-    if crop_img is None or crop_img.size == 0: return "unknown"
-    h, w = crop_img.shape[:2]
-    center = crop_img[int(h*0.2):int(h*0.8), int(w*0.2):int(w*0.8)]
-    hsv = cv2.cvtColor(center if center.size > 0 else crop_img, cv2.COLOR_BGR2HSV)
-    return "light" if np.mean(hsv[:,:,2]) > 120 else "dark"
+# Constants for Feature Schema V2
+LABEL_MAP_INV = {0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"}
 
-def perform_ocr_voting(crops, reader):
-    votes = []
-    for crop in crops:
-        if crop.shape[0] < 20: continue
-        results = reader.readtext(crop)
-        for (_, text, prob) in results:
-            digits = re.sub(r'[^0-9]', '', text)
-            if 1 <= len(digits) <= 2 and prob >= 0.6:
-                votes.append(digits.zfill(2))
-    return Counter(votes).most_common(1)[0][0] if votes else None
+def project_pixel_to_court(u, v, H):
+    """
+    Python implementation of the Rust SpatialResolver logic.
+    Projects 2D pixel (u,v) to 3D court (x,y) using Homography H.
+    """
+    p = np.array([u, v, 1.0])
+    p_world = H @ p
+    if abs(p_world[2]) < 1e-6: return np.array([0.0, 0.0])
+    return p_world[:2] / p_world[2]
 
-def recognize_action(history_kpts):
+def construct_features_v2(kpt_history, ball_court_pos, player_court_pos, kpts_3d_approx, ball_3d_approx, device):
     """
-    Heuristic-based action recognition using skeletal keypoint history.
+    Real-time construction of 72-dim feature tensor.
+    Matches the 'Ground Truth' logic of generate_data.py.
     """
-    if len(history_kpts) < 15: return "idle"
-    kpts = np.array(history_kpts)
-    valid_mask = (kpts[:, 11, 0] > 0) & (kpts[:, 12, 0] > 0)
-    if np.sum(valid_mask) < 5: return "idle"
-    v_kpts = kpts[valid_mask]
-    wrists_above_head = np.mean(v_kpts[:, [9, 10], 1] < v_kpts[:, 0, 1]) > 0.6
-    hips_y = np.mean(v_kpts[:, [11, 12], 1], axis=1)
-    is_rising = (hips_y[-1] - hips_y[0]) < -0.02
-    return "jump_shot" if wrists_above_head and is_rising else "idle"
-
-def recognize_ref_signal(history_kpts):
-    """
-    Decodes NCAA Referee Hand Signals from skeletal keypoints.
-    """
-    if len(history_kpts) < 10: return None
-    kpts = np.array(history_kpts)
-    valid_mask = (kpts[:, 5, 0] > 0) & (kpts[:, 6, 0] > 0)
-    if np.sum(valid_mask) < 5: return None
-    v_kpts = kpts[valid_mask]
-    left_arm_up = np.mean(v_kpts[:, 9, 1] < v_kpts[:, 5, 1]) > 0.7
-    right_arm_up = np.mean(v_kpts[:, 10, 1] < v_kpts[:, 6, 1]) > 0.7
-    if left_arm_up and right_arm_up: return "ref_3pt_success"
-    if left_arm_up or right_arm_up: return "ref_3pt_attempt"
-    return None
-
-def is_referee(crop_img):
-    """
-    Identifies a referee based on visual cues (NCAA stripes or solid neutral).
-    """
-    if crop_img is None or crop_img.size == 0: return False
-    hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
-    return np.std(hsv[:,:,2]) > 40
+    if len(kpt_history) < 30: return None
+    kpts_2d = np.array(kpt_history) # (30, 17, 2)
+    features = []
+    
+    for t in range(30):
+        # 1. Local Pose (34)
+        pose = kpts_2d[t].flatten()
+        
+        # 2. Temporal (34)
+        if t > 0:
+            velocity = (kpts_2d[t] - kpts_2d[t-1]).flatten() * 0.1
+        else:
+            velocity = np.zeros(34)
+            
+        # 3. Interaction (2) - Wrist-to-Ball in CM (Scaled)
+        # Using 3D approximations for real distance
+        dist_l = np.linalg.norm(kpts_3d_approx[t][9] - ball_3d_approx[t]) * 0.01
+        dist_r = np.linalg.norm(kpts_3d_approx[t][10] - ball_3d_approx[t]) * 0.01
+        
+        # 4. Global (2) - Court Position in CM (Scaled)
+        court_context = player_court_pos * 0.001
+        
+        row = np.concatenate([pose, velocity, [dist_l, dist_r], court_context])
+        features.append(row)
+        
+    return torch.FloatTensor(np.array(features)).unsqueeze(0).to(device)
 
 def extract_game_dna(video_path, output_dir="data"):
-    print(f"Loading Models on {'GPU' if torch.cuda.is_available() else 'CPU'}...")
-    model = YOLO('yolov8n-pose.pt')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Loading Perception Models on {device}...")
+    det_model = YOLO('yolov8n.pt')
+    pose_model = YOLO('yolov8n-pose.pt')
     reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+    
+    # Mock Homography for Prototyping (Identity for now, in prod calibrated via Rust)
+    H = np.eye(3) 
+
+    brain = None
+    brain_path = "data/models/action_brain.pt"
+    if os.path.exists(brain_path):
+        brain = ActionBrain(num_classes=5).to(device)
+        brain.load_state_dict(torch.load(brain_path, map_location=device))
+        brain.eval()
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, "intelligent_game_dna.jsonl")
 
-    resolved_ids = {}
-    history = {}
-    kpt_history = {}
-    is_ref_map = {}
+    resolved_ids, history, kpt_history = {}, {}, {}
+    state_machines = {}
+    last_ball_court_pos = np.array([0.0, 0.0])
     frame_idx = 0
 
     with open(out_file, 'w') as f:
@@ -84,51 +87,48 @@ def extract_game_dna(video_path, output_dir="data"):
             success, frame = cap.read()
             if not success: break
             frame_idx += 1
-            results = model.track(frame, persist=True, verbose=False)
+            t_ms = int(frame_idx/fps*1000)
+            
+            det_results = det_model.track(frame, persist=True, classes=[0, 32], verbose=False)
+            pose_results = pose_model(frame, verbose=False)
+            
+            if det_results[0].boxes.id is not None:
+                # Update Ball
+                for b, c, conf in zip(det_results[0].boxes.xywh, det_results[0].boxes.cls, det_results[0].boxes.conf):
+                    if int(c) == 32:
+                        last_ball_court_pos = project_pixel_to_court(float(b[0]), float(b[1]), H)
+                        f.write(json.dumps({"kind": "ball", "t_ms": t_ms, "x": float(b[0]), "y": float(b[1]), "confidence_bps": int(conf*10000)}) + "\n")
 
-            if results[0].boxes.id is not None:
-                boxes = results[0].boxes.xywh
-                track_ids = results[0].boxes.id
-                class_ids = results[0].boxes.cls
-                confidences = results[0].boxes.conf
-                xyxy_boxes = results[0].boxes.xyxy
-                keypoints = results[0].keypoints.xyn.cpu().numpy() if results[0].keypoints is not None else None
+                boxes, track_ids = det_results[0].boxes.xywh, det_results[0].boxes.id
+                poses = pose_results[0].keypoints.xyn.cpu().numpy() if pose_results[0].keypoints is not None else []
 
-                for i, (box, tid, cls, conf, xyxy) in enumerate(zip(boxes, track_ids, class_ids, confidences, xyxy_boxes)):
+                for i, (box, tid) in enumerate(zip(boxes, track_ids)):
                     tid = int(tid)
-                    if cls == 0: # Person
-                        x1, y1, x2, y2 = map(int, xyxy)
-                        crop = frame[max(0, y1):min(frame.shape[0], y2), max(0, x1):min(frame.shape[1], x2)]
-                        if tid not in is_ref_map: is_ref_map[tid] = is_referee(crop)
+                    if int(det_results[0].boxes.cls[i]) == 0:
+                        player_kpts = poses[0].tolist() if len(poses) > 0 else None # Simp match
                         
-                        p_kpts = keypoints[i].tolist() if keypoints is not None and i < len(keypoints) else None
-                        if tid not in kpt_history: kpt_history[tid] = deque(maxlen=60)
-                        if p_kpts: kpt_history[tid].append(p_kpts)
+                        if tid not in kpt_history: kpt_history[tid] = deque(maxlen=30)
+                        if player_kpts: kpt_history[tid].append(player_kpts)
                         
-                        if is_ref_map[tid]:
-                            signal = recognize_ref_signal(kpt_history[tid])
-                            row = {"kind": "referee", "track_id": tid, "t_ms": int(frame_idx/fps*1000), "x": float(box[0]), "y": float(box[1]), "w": float(box[2]), "h": float(box[3]), "signal": signal}
-                            f.write(json.dumps(row) + "\n")
-                            continue
+                        # Real Court Projection
+                        player_court_pos = project_pixel_to_court(float(box[0]), float(box[1]), H)
 
-                        action = recognize_action(kpt_history[tid])
-                        if str(tid) not in resolved_ids:
-                            if tid not in history: history[tid] = deque(maxlen=30)
-                            history[tid].append(frame[max(0, y1):min(frame.shape[0], int(y1+(y2-y1)*0.6)), max(0, x1):min(frame.shape[1], x2)])
-                            if len(history[tid]) == 30:
-                                resolved_ids[str(tid)] = {"team": get_team_color(list(history[tid])[0]), "jersey_number": perform_ocr_voting(history[tid], reader)}
-                                print(f"Locked Track {tid} -> #{resolved_ids[str(tid)]['jersey_number']}")
+                        learned_label = None
+                        if brain and len(kpt_history[tid]) == 30:
+                            # Mock 3D for feature construction until lifting is ported
+                            kpts_3d_mock = [np.zeros((17, 3)) for _ in range(30)]
+                            ball_3d_mock = [np.zeros(3) for _ in range(30)]
+                            feat_tensor = construct_features_v2(kpt_history[tid], last_ball_court_pos, player_court_pos, kpts_3d_mock, ball_3d_mock, device)
+                            with torch.no_grad():
+                                output = brain(feat_tensor)
+                                learned_label = LABEL_MAP_INV[int(torch.argmax(output))]
 
-                        ident = resolved_ids.get(str(tid), {})
-                        row = {"kind": "player", "track_id": tid, "t_ms": int(frame_idx/fps*1000), "x": float(box[0]), "y": float(box[1]), "w": float(box[2]), "h": float(box[3]), "confidence_bps": int(conf*10000), "actor_jersey_number": ident.get("jersey_number"), "team_color": ident.get("team"), "action": action, "keypoints": p_kpts}
+                        row = {"kind": "player", "track_id": tid, "t_ms": t_ms, "action": learned_label or "unknown"}
                         f.write(json.dumps(row) + "\n")
-                    elif cls == 32: # Ball
-                        row = {"kind": "ball", "track_id": tid, "t_ms": int(frame_idx/fps*1000), "x": float(box[0]), "y": float(box[1]), "w": float(box[2]), "h": float(box[3]), "confidence_bps": int(conf*10000)}
-                        f.write(json.dumps(row) + "\n")
+
     cap.release()
-    print(f"Processing Complete. Output: {out_file}")
+    print(f"[INFO] Complete. Output: {out_file}")
 
 if __name__ == "__main__":
     import sys
-    video = sys.argv[1] if len(sys.argv) > 1 else "data/sample.mp4"
-    extract_game_dna(video)
+    extract_game_dna(sys.argv[1] if len(sys.argv) > 1 else "data/sample.mp4")
