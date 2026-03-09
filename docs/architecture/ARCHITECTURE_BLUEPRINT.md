@@ -33,6 +33,13 @@ HoopSense uses a **Core-and-Satellite** architecture to separate performance-cri
 - **Responsibility:** Manages the official "Game DNA." Implements retroactive event-rewind for fouls and possession logic.
 - **Output:** Shush Contract JSONL stream + Player Statistics.
 
+## 2. The Development Lifecycle (Quality Gates)
+
+### Agent-Based Review (tools/review)
+- **Tech:** Gemini Generalist Sub-Agent.
+- **Responsibility:** Audits every feature implementation for compliance with project mandates (Teach-First, Design-First), logic bugs, and NCAA consistency.
+- **Mechanism:** A pre-commit/manual trigger that generates a comprehensive review prompt based on staged git diffs.
+
 ## 2. The Capture Ecosystem (Satellites)
 
 ### Mobile Lens (Thin Client)
