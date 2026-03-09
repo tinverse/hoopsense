@@ -68,6 +68,14 @@ def run_pipeline(config_path):
     
     print(f"[COLAB] Pipeline Complete. Outputs in {output_dir}")
 
+    # 4. Automated Shutdown (Stop billing)
+    print("[COLAB] Terminating Instance...")
+    try:
+        from google.colab import runtime
+        runtime.unassign()
+    except Exception:
+        print("[WARN] unassign() failed. Manual shutdown may be required.")
+
 if __name__ == "__main__":
     config_file = "hoops_config.yaml" if len(sys.argv) < 2 else sys.argv[1]
     run_pipeline(config_file)
