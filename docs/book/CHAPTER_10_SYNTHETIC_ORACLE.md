@@ -17,14 +17,25 @@ Training on raw pixels (RGB) is hard because of lighting, jersey colors, and blu
 
 By generating millions of skeletal sequences for "Crossovers" vs. "Normal Dribbles," our **Temporal-Transformer (Chapter 6)** can learn the "Physics of the Move" without ever needing a human to draw a box.
 
-## 3. Bridging the "Sim-to-Real" Gap
+## 3. The Move Taxonomy (Kinematic Signatures)
+
+To generate a complete dataset, we define "Hard" kinematic signatures for every major basketball event.
+
+| Move | Kinematic Signature | AI Goal |
+| :--- | :--- | :--- |
+| **Jump Shot** | Rising hips + Wrists flickering above head apex. | Spot high-value scoring events. |
+| **Crossover** | Lateral hip sway + Rapid wrist-Z oscillation. | Identify ball-handling elite moves. |
+| **Rebound** | Maximum vertical extension + Downward wrist snap. | Attribute possession after misses. |
+| **Block** | Lateral jump + High-velocity hand swat at apex. | Measure defensive impact. |
+| **Steal** | Forward lunging torso + Low-Z hand reach. | Identify defensive IQ / turnovers. |
+
+## 4. Synthetic Noise & The Completeness Gate
 
 To ensure the AI works in a real, messy gym, we inject **Synthetic Noise** into the generator:
--   **Jitter:** Simulate a shaky hand-held phone.
--   **Occlusion:** Randomly "hide" keypoints (like an ankle or wrist) to teach the model how to infer missing data.
--   **Projection Error:** Artificially introduce lens distortion to test the robustness of the **Spatial Resolver**.
+-   **Gaussian Jitter:** Simulates the ±5 pixel "shake" of real pose estimation.
+-   **Self-Healing Calibration:** Every synthetic batch is passed through a **Completeness Gate** that verifies if the actor remains in the camera's "Visible Volume."
 
-## 4. The Loop: Synthetic -> Ref-API -> Real
+## 5. The Loop: Synthetic -> Ref-API -> Real
 
 1.  **Synthetic:** Train the baseline model on millions of computer-generated moves.
 2.  **Ref-API:** Deploy the model in a real gym. Use the human Referee's signals (Chapter 7) to confirm if the model's guess was right.

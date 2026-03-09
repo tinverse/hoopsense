@@ -2,21 +2,22 @@
 
 Basketball is a game of high-speed, multi-agent dynamics. In this chapter, we transition from tracking "where" things are (Chapters 1-3) to understanding **what** is happening. This is the difference between a set of moving points and a "Step-back Three."
 
-## 1. The Semantic Layer: What is an Action?
+## 1. The Semantic Layer: Intent vs. Motion
 
-An "Action" in HoopSense is a temporal sequence of skeletal poses that matches a known basketball move or an official signal. Unlike object detection, which works on a single frame, Action Recognition requires **context over time**.
+An "Action" in HoopSense is more than just a skeletal sequence; it is a **physically contextualized intent**. 
 
-### The Challenge: Temporal Vagueness
-- **Where does a shot start?** Is it when the knees bend? When the ball reaches the forehead?
-- **Intent vs. Accident:** A player losing their balance might look like a "Euro-step" to a simple classifier.
+### The Context Gap
+If we only look at a normalized skeleton, a "Jump" looks identical whether it is a Jump Shot, a Rebound, or a Block. To differentiate, we must feed the model a **Multimodal Feature Tensor** that includes:
 
-To solve this, we use a **Hierarchical Action Stack**.
+1.  **Kinematics (The Motion):** 17 joints + their relative velocities.
+2.  **Ball Context (The Object):** Proximity of the ball to the hands. (A jump with the ball at the wrist is likely a shot).
+3.  **Global Geometry (The Map):** The player's 3D position on the court. (A jump at the baseline is a corner three; a jump at the rim is a dunk).
 
-## 2. The Hierarchical Action Stack
-
-### Level 1: Atomic Keypoint Velocities (The "Physics")
-We calculate the 1st and 2nd derivatives of our 17 keypoints.
-- **Example:** High upward velocity of the `Wrist` keypoints + rising `Center of Mass` = Potential Shot Attempt.
+## 2. The Input Tensor Specification (D=72)
+Our Temporal-Transformer encodes a 1-second window (30 frames) of 72 features:
+- **34 Features:** Normalized (x, y) coordinates of 17 joints.
+- **34 Features:** Instantaneous velocity (Δx, Δy) of those joints.
+- **4 Features:** Global court (x, y) and Ball-relative distance.
 
 ### Level 2: Local Action Recognition (The "Move")
 We feed a 32-frame window (approx. 1 second) into a **Temporal-Transformer**.
