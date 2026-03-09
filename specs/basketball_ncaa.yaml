@@ -1,0 +1,30 @@
+# HoopSense DSL: NCAA Basketball Specification v1.0
+league: "NCAA"
+units: "metric"
+
+rules:
+  - id: "jump_shot"
+    type: "kinematic"
+    predicates:
+      - joint: "hips"
+        metric: "velocity_z"
+        operator: ">"
+        threshold: 0.02
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+    window_ms: 500
+
+  - id: "point_3"
+    type: "geometric"
+    conditions:
+      - event: "made_basket"
+      - distance_from: "rim"
+        operator: ">"
+        threshold: 675.0 # cm
+
+  - id: "ref_3pt_signal"
+    type: "signal"
+    pattern: "both_arms_raised"
+    confidence_gate: 0.8
