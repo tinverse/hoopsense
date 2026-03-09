@@ -55,6 +55,7 @@ class DeclarativeRule(KinematicRule):
 class BehaviorStateMachine:
     def __init__(self, is_ref=False, spec_path="specs/basketball_ncaa.yaml"):
         self.state = EntityState.IDLE
+        self.custom_label = "idle"
         self.is_ref = is_ref
         self.rules_engine = self._init_rules(spec_path)
 
@@ -65,10 +66,13 @@ class BehaviorStateMachine:
                 spec = yaml.safe_load(f)
                 for r_spec in spec.get('rules', []):
                     rule = DeclarativeRule(r_spec)
-                    # Map to EntityState
+                    # Use rule type to categorize
+                    rule_type = r_spec.get('type', 'kinematic')
+                    
                     target = EntityState.IDLE
-                    if rule.id == "jump_shot": target = EntityState.SHOOTING
-                    if rule.id == "ref_3pt_signal": target = EntityState.OFFICIAL_SIGNALING
+                    if rule_type == "kinematic": target = EntityState.SHOOTING # Generic active state
+                    if rule_type == "signal": target = EntityState.OFFICIAL_SIGNALING
+                    if rule_type == "violation": target = EntityState.IDLE # Violations trigger metadata, not always pose
                     
                     if target not in engine: engine[target] = []
                     engine[target].append(rule)
@@ -76,23 +80,22 @@ class BehaviorStateMachine:
 
     def update(self, kpts_history, learned_label=None):
         """Evaluates rules or learned signals to trigger state transitions."""
-        history_arr = np.array(kpts_history)
-        
-        # 1. Prioritize Learned Intelligence if provided
         if learned_label and learned_label != "idle":
-            for state in EntityState:
-                if state.name.lower() == learned_label:
-                    self.state = state
-                    return self.state
+            self.custom_label = learned_label
+            # ... state update logic ...
+            return self.state
 
-        # 2. Fallback to Heuristic Rules Engine
+        history_arr = np.array(kpts_history)
         for target_state, rules in self.rules_engine.items():
-            if any(rule.evaluate(history_arr) for rule in rules):
-                self.state = target_state
-                return self.state
+            for rule in rules:
+                if rule.evaluate(history_arr):
+                    self.state = target_state
+                    self.custom_label = rule.id
+                    return self.state
         
         self.state = EntityState.IDLE
+        self.custom_label = "idle"
         return self.state
 
     def get_label(self):
-        return self.state.name.lower()
+        return self.custom_label

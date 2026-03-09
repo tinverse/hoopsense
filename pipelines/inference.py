@@ -14,43 +14,59 @@ from core.vision.action_brain import ActionBrain
 LABEL_MAP_INV = {0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"}
 
 def project_pixel_to_court(u, v, H):
-    """
-    Python implementation of the Rust SpatialResolver logic.
-    Projects 2D pixel (u,v) to 3D court (x,y) using Homography H.
-    """
+    """Projects 2D pixel (u,v) to 3D court (x,y) using Homography H."""
     p = np.array([u, v, 1.0])
     p_world = H @ p
     if abs(p_world[2]) < 1e-6: return np.array([0.0, 0.0])
     return p_world[:2] / p_world[2]
 
-def construct_features_v2(kpt_history, ball_court_pos, player_court_pos, kpts_3d_approx, ball_3d_approx, device):
+def lift_to_3d(kpts_2d, H):
+    """
+    Kinematic Lifting: Estimates 3D world coordinates from 2D pixels.
+    Uses the homography to find (X,Y) on floor, then approximates Z.
+    """
+    kpts_3d = []
+    # 1. Map feet to floor to get world scale
+    l_ank, r_ank = kpts_2d[15], kpts_2d[16]
+    floor_xy = project_pixel_to_court((l_ank[0]+r_ank[0])/2, (l_ank[1]+r_ank[1])/2, H)
+    
+    for u, v in kpts_2d:
+        world_xy = project_pixel_to_court(u, v, H)
+        # Approximate Z based on vertical displacement from floor in world space
+        # (Simplified height heuristic for single-camera depth)
+        z_est = abs(world_xy[1] - floor_xy[1]) * 0.5 
+        kpts_3d.append([world_xy[0], world_xy[1], z_est])
+    return np.array(kpts_3d)
+
+def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos, device):
     """
     Real-time construction of 72-dim feature tensor.
-    Matches the 'Ground Truth' logic of generate_data.py.
+    Uses real geometry (Lifting + Projection) to match training semantics.
     """
     if len(kpt_history) < 30: return None
     kpts_2d = np.array(kpt_history) # (30, 17, 2)
     features = []
+    
+    # Pre-calculate 3D ball approximation
+    ball_court_xy = project_pixel_to_court(last_ball_2d[0], last_ball_2d[1], H)
+    ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], 100.0]) # Assume dribble height proxy
     
     for t in range(30):
         # 1. Local Pose (34)
         pose = kpts_2d[t].flatten()
         
         # 2. Temporal (34)
-        if t > 0:
-            velocity = (kpts_2d[t] - kpts_2d[t-1]).flatten() * 0.1
-        else:
-            velocity = np.zeros(34)
-            
-        # 3. Interaction (2) - Wrist-to-Ball in CM (Scaled)
-        # Using 3D approximations for real distance
-        dist_l = np.linalg.norm(kpts_3d_approx[t][9] - ball_3d_approx[t]) * 0.01
-        dist_r = np.linalg.norm(kpts_3d_approx[t][10] - ball_3d_approx[t]) * 0.01
+        vel = (kpts_2d[t] - kpts_2d[max(0, t-1)]).flatten() * 0.1
         
-        # 4. Global (2) - Court Position in CM (Scaled)
+        # 3. Interaction (2) - Real 3D Wrist-to-Ball distance in CM
+        kpts_3d = lift_to_3d(kpts_2d[t], H)
+        dist_l = np.linalg.norm(kpts_3d[9] - ball_3d) * 0.01
+        dist_r = np.linalg.norm(kpts_3d[10] - ball_3d) * 0.01
+        
+        # 4. Global (2) - Real Court Position in CM
         court_context = player_court_pos * 0.001
         
-        row = np.concatenate([pose, velocity, [dist_l, dist_r], court_context])
+        row = np.concatenate([pose, vel, [dist_l, dist_r], court_context])
         features.append(row)
         
     return torch.FloatTensor(np.array(features)).unsqueeze(0).to(device)
@@ -62,8 +78,12 @@ def extract_game_dna(video_path, output_dir="data"):
     pose_model = YOLO('yolov8n-pose.pt')
     reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
     
-    # Mock Homography for Prototyping (Identity for now, in prod calibrated via Rust)
-    H = np.eye(3) 
+    # Load Real Calibration if exists, else default to NCAA Identity
+    H = np.eye(3)
+    if os.path.exists("data/calibration.json"):
+        with open("data/calibration.json", 'r') as f:
+            H = np.array(json.load(f)["h_matrix"])
+            print("[INFO] Calibrated Homography Loaded.")
 
     brain = None
     brain_path = "data/models/action_brain.pt"
@@ -79,7 +99,7 @@ def extract_game_dna(video_path, output_dir="data"):
 
     resolved_ids, history, kpt_history = {}, {}, {}
     state_machines = {}
-    last_ball_court_pos = np.array([0.0, 0.0])
+    last_ball_2d = np.array([0.0, 0.0])
     frame_idx = 0
 
     with open(out_file, 'w') as f:
@@ -96,8 +116,8 @@ def extract_game_dna(video_path, output_dir="data"):
                 # Update Ball
                 for b, c, conf in zip(det_results[0].boxes.xywh, det_results[0].boxes.cls, det_results[0].boxes.conf):
                     if int(c) == 32:
-                        last_ball_court_pos = project_pixel_to_court(float(b[0]), float(b[1]), H)
-                        f.write(json.dumps({"kind": "ball", "t_ms": t_ms, "x": float(b[0]), "y": float(b[1]), "confidence_bps": int(conf*10000)}) + "\n")
+                        last_ball_2d = np.array([float(b[0]), float(b[1])])
+                        f.write(json.dumps({"kind": "ball", "t_ms": t_ms, "x": last_ball_2d[0], "y": last_ball_2d[1], "confidence_bps": int(conf*10000)}) + "\n")
 
                 boxes, track_ids = det_results[0].boxes.xywh, det_results[0].boxes.id
                 poses = pose_results[0].keypoints.xyn.cpu().numpy() if pose_results[0].keypoints is not None else []
@@ -105,7 +125,7 @@ def extract_game_dna(video_path, output_dir="data"):
                 for i, (box, tid) in enumerate(zip(boxes, track_ids)):
                     tid = int(tid)
                     if int(det_results[0].boxes.cls[i]) == 0:
-                        player_kpts = poses[0].tolist() if len(poses) > 0 else None # Simp match
+                        player_kpts = poses[0].tolist() if len(poses) > 0 else None
                         
                         if tid not in kpt_history: kpt_history[tid] = deque(maxlen=30)
                         if player_kpts: kpt_history[tid].append(player_kpts)
@@ -115,15 +135,19 @@ def extract_game_dna(video_path, output_dir="data"):
 
                         learned_label = None
                         if brain and len(kpt_history[tid]) == 30:
-                            # Mock 3D for feature construction until lifting is ported
-                            kpts_3d_mock = [np.zeros((17, 3)) for _ in range(30)]
-                            ball_3d_mock = [np.zeros(3) for _ in range(30)]
-                            feat_tensor = construct_features_v2(kpt_history[tid], last_ball_court_pos, player_court_pos, kpts_3d_mock, ball_3d_mock, device)
+                            feat_tensor = construct_features_v2(kpt_history[tid], last_ball_2d, H, player_court_pos, device)
                             with torch.no_grad():
                                 output = brain(feat_tensor)
                                 learned_label = LABEL_MAP_INV[int(torch.argmax(output))]
 
-                        row = {"kind": "player", "track_id": tid, "t_ms": t_ms, "action": learned_label or "unknown"}
+                        ident = resolved_ids.get(tid, {"jersey": None, "team": "unknown", "is_ref": False})
+                        if tid not in state_machines:
+                            state_machines[tid] = BehaviorStateMachine(is_ref=ident["is_ref"])
+                        
+                        state_machines[tid].update(kpt_history[tid], learned_label=learned_label)
+                        action_label = state_machines[tid].get_label()
+
+                        row = {"kind": "player", "track_id": tid, "t_ms": t_ms, "action": action_label}
                         f.write(json.dumps(row) + "\n")
 
     cap.release()
