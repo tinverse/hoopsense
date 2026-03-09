@@ -9,9 +9,11 @@ def run_agent_review(diff):
     You are a Senior Code Reviewer for the HoopSense project.
     Review the following git diff for:
     1. Compliance with the 'Teach-First' and 'Design-First' mandates in GEMINI.md.
-    2. Logic bugs or regressions in the Rust/Python vision logic.
-    3. Consistency with the NCAA rule hierarchy.
-    4. Completeness of tests for new functionality.
+    2. Adherence to Rust Best Practices (clippy, ownership, zero-cost abstractions).
+    3. Adherence to Python Best Practices (PEP8, type-hinting, efficiency).
+    4. Logic bugs or regressions in the vision/spatial math.
+    5. Consistency with the NCAA rule hierarchy.
+    6. Completeness of tests for new functionality.
 
     DIFF:
     {diff}

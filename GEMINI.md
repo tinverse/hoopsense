@@ -6,7 +6,10 @@ This document defines the foundational mandates for Gemini's operation within th
 Build a basketball video analysis system (player/ball tracking, jersey OCR, event inference, stat generation) that serves as both a functional tool and a learning artifact for humans and agents.
 
 ## Non-Negotiable Constraints
-- **Design-First Workflow:** Requirements -> Use Cases -> Architecture -> Detailed Design -> Code -> Tests -> Review. Never skip documentation updates.
+- **Design-First Workflow:** Requirements -> Use Cases -> Architecture -> Detailed Design -> Code -> Tests -> Review. 
+- **Mandatory Documentation Sync:** Never skip documentation updates. The Book MUST be updated whenever a feature's mental model or implementation changes.
+- **Mandatory Periodic Reviews:** Periodically audit the entire `docs/` and `TASK_STATUS.md` for drift.
+- **Engineering Standards:** Strictly follow Rust (clippy, idiomatic patterns) and Python (PEP8, type hinting) best practices.
 - **Teach-First:** Continuously explain ML/math concepts to a competent software engineer. Write for a CS graduate new to ML.
 - **Implementation:** Prefer original implementations of public algorithm families in **Rust** (Python for initial prototyping/orchestration). Do not copy third-party source code.
 - **Verification:** Every change MUST include tests. All affected tests must pass before completion.
