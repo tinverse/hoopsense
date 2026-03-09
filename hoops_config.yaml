@@ -1,0 +1,18 @@
+# HoopSense Execution Config
+project_name: "HoopSense MVP"
+video_source: "gdrive" # or "local"
+gdrive_video_path: "/content/drive/MyDrive/HoopSense/my_sample_video.mp4"
+output_dir: "/content/drive/MyDrive/HoopSense/outputs"
+
+runtime:
+  accelerator: "T4" # Verified at runtime
+  packages:
+    - "ultralytics"
+    - "easyocr"
+    - "opencv-python-headless"
+    - "pyyaml"
+
+perception:
+  model: "yolov8n-pose.pt"
+  ocr_buffer_size: 30
+  conf_threshold: 0.5
