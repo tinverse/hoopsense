@@ -4,3 +4,5 @@
 .tmux/
 .venv/
 node_modules/
+*.xlsx
+*.mp4
