@@ -6,10 +6,8 @@
 - [x] Chapter 1: Identity Fusion & The MVP Pipeline (Python)
 - [x] Chapter 2: The Data Ingestion Interface (JSONL Contract)
 - [x] Chapter 3: The Spatial Resolver (Rust)
-  - [x] Homography Matrix implementation
-  - [x] PnP Camera Pose Solver
-  - [x] Lens Undistortion (Radial-Tangential Model)
-  - [x] 2D-to-3D Coordinate Projection (DLT Verified)
+- [x] Foundation: Agent-Based Review Infrastructure (tools/review)
+- [x] Geometric Truths: Spatial Rules Engine (Rust)
 
 ## Part II: The Machine Mind (Inference)
 - [ ] Chapter 4: The Perceiver (YOLO Fine-tuning)
@@ -32,7 +30,10 @@
 - [ ] Chapter 9: Defensive Intelligence (IQ Stats)
 
 ## Part IV: The Ecosystem (Monetization & Gaming)
-- [ ] Chapter 10: The Avatar Pipeline (.gltf Export)
+- [>] Chapter 10: The Avatar Pipeline (.gltf Export) - **IN PROGRESS**
+  - [x] Synthetic Data Generator (Procedural MoCap -> 2D)
+  - [ ] 3D joint reconstruction from 2D sequence
+  - [ ] Rig mapping to .gltf
 - [ ] Chapter 11: The NIL Marketplace (Ad Branding)
 - [ ] Chapter 12: Scaling the Network
 
