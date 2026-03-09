@@ -1,4 +1,6 @@
 import numpy as np
+import yaml
+import os
 from enum import Enum
 from collections import deque
 
@@ -10,47 +12,53 @@ class EntityState(Enum):
     OFFICIAL_SIGNALING = 4
 
 class KinematicRule:
-    """Base class for a spatial-temporal rule."""
     def evaluate(self, kpts_history):
         raise NotImplementedError
 
-class JumpShotRule(KinematicRule):
-    def evaluate(self, kpts):
-        if len(kpts) < 15: return False
-        # Calculate velocity and pose metrics
-        # (Using the same logic as before, but encapsulated as a Rule)
-        v_kpts = kpts[np.all(kpts[:, [11, 12], 0] > 0, axis=1)]
-        if len(v_kpts) < 5: return False
-        
-        wrists_above_head = np.mean(v_kpts[:, [9, 10], 1] < v_kpts[:, 0, 1].reshape(-1, 1)) > 0.6
-        hips_y = np.mean(v_kpts[:, [11, 12], 1], axis=1)
-        is_rising = (hips_y[-1] - hips_y[0]) < -0.02
-        return wrists_above_head and is_rising
-
-class Ref3ptSuccessRule(KinematicRule):
-    def evaluate(self, kpts):
-        if len(kpts) < 10: return False
-        v_kpts = kpts[np.all(kpts[:, [5, 6], 0] > 0, axis=1)]
-        if len(v_kpts) < 5: return False
-        
-        left_arm_up = np.mean(v_kpts[:, 9, 1] < v_kpts[:, 5, 1].reshape(-1, 1)) > 0.7
-        right_arm_up = np.mean(v_kpts[:, 10, 1] < v_kpts[:, 6, 1].reshape(-1, 1)) > 0.7
-        return left_arm_up and right_arm_up
-
-import yaml
-import os
-
 class DeclarativeRule(KinematicRule):
+    """
+    Evaluates kinematic rules defined in the HoopScript DSL.
+    Currently supports metric-based predicates (velocity, position).
+    """
     def __init__(self, spec):
         self.id = spec['id']
         self.predicates = spec.get('predicates', [])
+        # Joint mapping for common NCAA names
+        self.joint_map = {"hips": [11, 12], "wrists": [9, 10], "head": [0], "shoulders": [5, 6]}
 
     def evaluate(self, kpts):
-        # Placeholder for dynamic predicate evaluation logic
-        # For now, we still map to the optimized JumpShotRule if id matches
-        if self.id == "jump_shot":
-            return JumpShotRule().evaluate(kpts)
-        return False
+        """kpts: (T, 17, 2) normalized to box."""
+        if len(kpts) < 15: return False
+        
+        # Every predicate in the rule must pass
+        for pred in self.predicates:
+            joint_idx = self.joint_map.get(pred['joint'])
+            if not joint_idx: continue
+            
+            # Extract relevant joint(s) data
+            joint_data = kpts[:, joint_idx, :] # (T, num_joints, 2)
+            
+            metric = pred['metric']
+            op = pred['operator']
+            threshold = pred.get('threshold', 0.0)
+            
+            if metric == "velocity_z" or metric == "velocity_y":
+                # In normalized 2D, vertical movement is Y axis
+                y_coords = np.mean(joint_data[:, :, 1], axis=1)
+                velocity = y_coords[-1] - y_coords[0]
+                if op == ">" and not (velocity < -threshold): return False # Y-down is positive
+                if op == "<" and not (velocity > threshold): return False
+                
+            elif metric == "pos_y":
+                ref_joint = pred.get('reference')
+                if ref_joint:
+                    ref_idx = self.joint_map.get(ref_joint)
+                    ref_y = np.mean(kpts[:, ref_idx, 1], axis=1)
+                    curr_y = np.mean(joint_data[:, :, 1], axis=1)
+                    # Wrist < Head means Wrist is higher (smaller Y)
+                    if op == "<" and not np.mean(curr_y < ref_y) > 0.6: return False
+                    
+        return True
 
 class BehaviorStateMachine:
     def __init__(self, is_ref=False, spec_path="specs/basketball_ncaa.yaml"):
@@ -66,23 +74,19 @@ class BehaviorStateMachine:
                 spec = yaml.safe_load(f)
                 for r_spec in spec.get('rules', []):
                     rule = DeclarativeRule(r_spec)
-                    # Use rule type to categorize
                     rule_type = r_spec.get('type', 'kinematic')
                     
                     target = EntityState.IDLE
-                    if rule_type == "kinematic": target = EntityState.SHOOTING # Generic active state
+                    if rule_type == "kinematic": target = EntityState.SHOOTING
                     if rule_type == "signal": target = EntityState.OFFICIAL_SIGNALING
-                    if rule_type == "violation": target = EntityState.IDLE # Violations trigger metadata, not always pose
                     
                     if target not in engine: engine[target] = []
                     engine[target].append(rule)
         return engine
 
     def update(self, kpts_history, learned_label=None):
-        """Evaluates rules or learned signals to trigger state transitions."""
         if learned_label and learned_label != "idle":
             self.custom_label = learned_label
-            # ... state update logic ...
             return self.state
 
         history_arr = np.array(kpts_history)
