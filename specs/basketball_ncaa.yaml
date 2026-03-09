@@ -1,83 +1,50 @@
-# HoopSense DSL: NCAA Basketball Specification v1.0
+# HoopSense DSL: Comprehensive NCAA Basketball Specification
 league: "NCAA"
-units: "metric"
+version: "2.0.0-full"
 
-global_states:
-  - id: "offense"
-    trigger: "possession_active"
-  - id: "defense"
-    trigger: "possession_inactive"
+categories:
+  - id: "possession_events"
+    rules: ["shot_attempt", "made_shot", "missed_shot", "pass", "catch", "dribble", "pickup", "turnover", "steal", "rebound", "oreb", "dreb", "block", "assist"]
+  
+  - id: "shot_subtypes"
+    rules: ["free_throw", "layup", "floater", "pull_up", "catch_and_shoot", "step_back", "dunk", "tip_in", "hook_shot", "3pt_attempt", "2pt_attempt"]
+
+  - id: "ball_states"
+    rules: ["ball_released", "ball_received", "ball_loose", "ball_controlled", "ball_out_of_bounds"]
+
+  - id: "defensive_events"
+    rules: ["contest", "help_defense", "closeout", "deflection", "screen_nav", "switch", "double_team"]
+
+  - id: "violations"
+    rules: ["travel", "double_dribble", "carry", "kick_ball", "foul", "shooting_foul", "offensive_foul", "timeout", "substitution"]
 
 rules:
-  - id: "jump_shot"
+  # --- CORE KINEMATIC EXAMPLES (Full library to be expanded in Oracle) ---
+  - id: "step_back"
     type: "kinematic"
-    preconditions:
-      - actor: "self"
-        team_state: "offense"
-        state: "has_possession"
-...
-  - id: "block"
-    type: "kinematic"
-    preconditions:
-      - actor: "self"
-        team_state: "defense"
     predicates:
-      - joint: "wrist"
-        metric: "pos_z"
-        operator: "intersects"
-        reference: "ball_trajectory"
-
       - joint: "hips"
-        metric: "velocity_z"
-        operator: ">"
-        threshold: 0.02
-      - joint: "wrists"
-        metric: "pos_y"
+        metric: "velocity_y" # Moving away from rim
         operator: "<"
-        reference: "head"
-    window_ms: 500
+        threshold: -0.05
+      - transition: "jump_shot"
 
-  - id: "point_3"
+  - id: "dunk"
     type: "geometric"
-    preconditions:
-      - event: "made_basket"
     conditions:
-      - distance_from: "rim"
+      - joint: "wrists"
+        metric: "pos_z"
         operator: ">"
-        threshold: 675.0 # cm
+        reference: "rim_height"
+      - ball_state: "controlled"
 
-  - id: "euro_step"
-    type: "kinematic"
-    preconditions:
-      - actor: "self"
-        state: "has_possession"
-    phases:
-      - id: "entry_step"
-        predicates:
-          - joint: "hips"
-            metric: "velocity_x"
-            operator: "<"
-            threshold: -0.04
-      - id: "cross_step"
-        predicates:
-          - joint: "hips"
-            metric: "velocity_x"
-            operator: ">"
-            threshold: 0.04
-    constraints:
-      - joint: "torso"
-        metric: "velocity_y"
-        operator: ">"
-        threshold: 0.02
-    window_ms: 800
-
-  - id: "violation_traveling"
+  - id: "travel"
     type: "violation"
     predicates:
       - joint: "ankles"
-        metric: "ground_contact_count"
+        metric: "steps_since_dribble"
         operator: ">"
         threshold: 2
-      - context: "possession"
-        status: "active"
-    window_ms: 1000
+
+# --- REJECTION POLICY ---
+# Every rule MUST map to a unique ID in the Action Brain classification head.
