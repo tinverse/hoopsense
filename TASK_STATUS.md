@@ -22,7 +22,10 @@
   - [x] Custom Temporal Transformer Architecture (PyTorch)
   - [x] Training pipeline for synthetic MoveLibrary
   - [x] Synchronized Taxonomy (DSL <-> Brain)
+  - [x] Professional Training Loop (Stratified, GPU, Per-Class Metrics)
+  - [ ] Bio-mechanical Synthetic Oracle (Anatomical Constraints)
   - [ ] Fine-tuning on Ref-API validated real data
+
 
 
 ## Part III: The Official Logic (Game Sense)

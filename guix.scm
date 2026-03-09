@@ -8,6 +8,7 @@
    "python-virtualenv"
    "python-numpy"
    "python-ipython"
+   "python-pytorch"
    "opencv"
    "ffmpeg"
    "pkg-config"

@@ -4,7 +4,7 @@ version: "2.0.0-full"
 
 categories:
   - id: "possession_events"
-    rules: ["shot_attempt", "made_shot", "missed_shot", "pass", "catch", "dribble", "pickup", "turnover", "steal", "rebound", "oreb", "dreb", "block", "assist", "pass_chest"]
+    rules: ["shot_attempt", "made_shot", "missed_shot", "pass", "catch", "dribble", "pickup", "turnover", "steal", "rebound", "oreb", "dreb", "block", "assist", "pass_chest", "crossover"]
   
   - id: "shot_subtypes"
     rules: ["free_throw", "layup", "floater", "pull_up", "catch_and_shoot", "step_back", "dunk", "tip_in", "hook_shot", "3pt_attempt", "2pt_attempt", "euro_step_left", "euro_step_right"]
@@ -18,7 +18,26 @@ categories:
   - id: "violations"
     rules: ["travel", "double_dribble", "carry", "kick_ball", "foul", "shooting_foul", "offensive_foul", "timeout", "substitution"]
 
+  - id: "system_labels"
+    rules: ["jump_shot", "idle_bystander"]
+
 rules:
+  - id: "idle_bystander"
+    type: "kinematic"
+    predicates:
+      - joint: "hips"
+        metric: "velocity_z"
+        operator: "<"
+        threshold: 0.001
+
+  - id: "crossover"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "velocity_x"
+        operator: ">"
+        threshold: 0.05
+
   - id: "jump_shot"
     type: "kinematic"
     preconditions:

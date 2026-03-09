@@ -1,8 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Rust / Cargo
+core/target/
+**/*.rs.bk
+
+# Data & Models
+data/
+*.jsonl
+*.pt
+
+# Environment
+.env
+.venv
+env/
+venv/
 .envrc
-.secrets
-.nvim_sessions/
-.tmux/
-.venv/
-node_modules/
-*.xlsx
-*.mp4
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store

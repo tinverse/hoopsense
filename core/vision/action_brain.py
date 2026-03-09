@@ -4,10 +4,10 @@ import os
 
 class ActionBrain(nn.Module):
     """
-    A High-Capacity Temporal Transformer for Basketball Action Recognition.
-    Handles comprehensive event taxonomy (50+ classes).
+    A Temporal Transformer for Basketball Action Recognition.
+    Capacity is tuned for current synthetic dataset scale.
     """
-    def __init__(self, input_dim=72, model_dim=512, num_heads=8, num_layers=6, num_classes=64):
+    def __init__(self, input_dim=72, model_dim=128, num_heads=4, num_layers=2, num_classes=64):
         super(ActionBrain, self).__init__()
         self.input_projection = nn.Linear(input_dim, model_dim)
         self.pos_encoding = nn.Parameter(torch.randn(1, 30, model_dim))
@@ -15,18 +15,18 @@ class ActionBrain(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=model_dim, 
             nhead=num_heads, 
-            dim_feedforward=model_dim * 4,
+            dim_feedforward=model_dim * 2,
             batch_first=True,
-            dropout=0.1
+            dropout=0.3 # Increased dropout for regularization
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
         self.classifier = nn.Sequential(
             nn.LayerNorm(model_dim),
-            nn.Dropout(0.2),
-            nn.Linear(model_dim, 256),
+            nn.Dropout(0.3),
+            nn.Linear(model_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, num_classes)
+            nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
