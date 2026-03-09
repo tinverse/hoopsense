@@ -4,10 +4,10 @@ import os
 
 class ActionBrain(nn.Module):
     """
-    A Custom Temporal Transformer for Basketball Action Recognition.
-    Input: (Batch, Seq_Len, 72) - 30 frames of multimodal features.
+    A High-Capacity Temporal Transformer for Basketball Action Recognition.
+    Handles comprehensive event taxonomy (50+ classes).
     """
-    def __init__(self, input_dim=72, model_dim=256, num_heads=8, num_layers=3, num_classes=5):
+    def __init__(self, input_dim=72, model_dim=512, num_heads=8, num_layers=6, num_classes=64):
         super(ActionBrain, self).__init__()
         self.input_projection = nn.Linear(input_dim, model_dim)
         self.pos_encoding = nn.Parameter(torch.randn(1, 30, model_dim))
@@ -15,7 +15,7 @@ class ActionBrain(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=model_dim, 
             nhead=num_heads, 
-            dim_feedforward=model_dim * 2,
+            dim_feedforward=model_dim * 4,
             batch_first=True,
             dropout=0.1
         )
@@ -23,7 +23,10 @@ class ActionBrain(nn.Module):
         
         self.classifier = nn.Sequential(
             nn.LayerNorm(model_dim),
-            nn.Linear(model_dim, num_classes)
+            nn.Dropout(0.2),
+            nn.Linear(model_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_classes)
         )
 
     def forward(self, x):
