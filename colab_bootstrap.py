@@ -63,7 +63,7 @@ def run_pipeline(config_path):
     # Ensure local path is in sys.path for imports
     sys.path.append(os.getcwd())
     
-    from pipelines.01_inference import extract_game_dna
+    from pipelines.inference import extract_game_dna
     extract_game_dna(video_path, output_dir=output_dir)
     
     print(f"[COLAB] Pipeline Complete. Outputs in {output_dir}")

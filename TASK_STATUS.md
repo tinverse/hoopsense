@@ -7,7 +7,9 @@
 - [x] Chapter 2: The Data Ingestion Interface (JSONL Contract)
 - [x] Chapter 3: The Spatial Resolver (Rust)
 - [x] Foundation: Agent-Based Review Infrastructure (tools/review)
+- [x] Foundation: Headless Colab Automator (hoops colab / hoops collect)
 - [x] Geometric Truths: Spatial Rules Engine (Rust)
+- [x] Orchestration: Rust Spatial Processor (Bridge)
 
 ## Part II: The Machine Mind (Inference)
 - [ ] Chapter 4: The Perceiver (YOLO Fine-tuning)
@@ -15,10 +17,11 @@
   - [x] 17-point skeletal extraction (YOLOv8-pose)
   - [ ] Rig mapping to .gltf
   - [ ] Biometric stat inference (Release height, Jump vertical)
-- [>] Chapter 6: Action Recognition (Temporal Transformers) - **IN PROGRESS**
-  - [x] Heuristic Jump Shot detector (Wrist/Hip velocity)
-  - [ ] Temporal-Transformer training (Step-back, Euro-step)
-  - [ ] Violation detection (Traveling, Double-dribble)
+- [>] Chapter 6: Action Recognition (Temporal Transformers) - **TRAINING IN PROGRESS**
+  - [x] Custom Temporal Transformer Architecture (PyTorch)
+  - [x] Training pipeline for synthetic MoveLibrary
+  - [>] Model training on synthetic dataset
+  - [ ] Fine-tuning on Ref-API validated real data
 
 ## Part III: The Official Logic (Game Sense)
 - [x] Chapter 7: The Ref-API (Signal Detection)
@@ -37,10 +40,9 @@
 - [ ] Chapter 11: The NIL Marketplace (Ad Branding)
 - [ ] Chapter 12: Scaling the Network
 
----
-
-### Legend
-- [x] Complete
-- [ ] Incomplete
-- [!] Blocked
-- [>] In Progress
+## Quality Gates & Verification
+- [x] Rust Core Logic Tests (7/7 Passing)
+- [x] Python Behavior Engine Tests (3/3 Passing)
+- [x] Synthetic Projection Tests (2/2 Passing)
+- [x] Contract Schema Validation (tools/review)
+- [x] Agent-Based Review Infrastructure
