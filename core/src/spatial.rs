@@ -270,23 +270,40 @@ mod tests {
     fn test_undistortion() {
         let mut resolver = SpatialResolver::new(1920.0, 1080.0);
         
-        // Define intrinsics (fx=1000, fy=1000, cx=960, cy=540)
-        // and distortion (k1=0.1, others=0) -> Mild barrel/pincushion
-        resolver.set_intrinsics(1000.0, 1000.0, 960.0, 540.0, vec![0.1, 0.0, 0.0, 0.0, 0.0]);
+        // 1. Define Intrinsics and Distortion
+        let fx = 1000.0;
+        let fy = 1000.0;
+        let cx = 960.0;
+        let cy = 540.0;
+        let k1 = 0.1;
+        resolver.set_intrinsics(fx, fy, cx, cy, vec![k1, 0.0, 0.0, 0.0, 0.0]);
         
-        // Let's take a point at (1060, 540) -> x_normalized = (1060-960)/1000 = 0.1, y=0
-        // r^2 = 0.01
-        // radial = 1 + 0.1*0.01 = 1.001
-        // x_distorted_norm = 0.1 * 1.001 = 0.1001
-        // u_distorted = 0.1001 * 1000 + 960 = 1060.1
+        // 2. Define an 'Original' undistorted point
+        let u_orig = 1060.0;
+        let v_orig = 540.0;
         
-        // The resolver.undistort_point takes the *distorted* pixel (1060.1, 540)
-        // and should return close to the *undistorted* original (1060, 540).
-        let undistorted = resolver.undistort_point(1060.1, 540.0);
+        // 3. Manually calculate the distorted position (Forward Model)
+        // x_norm = (u - cx) / fx
+        let x_norm = (u_orig - cx) / fx;
+        let y_norm = (v_orig - cy) / fy;
+        let r2 = x_norm * x_norm + y_norm * y_norm;
         
-        println!("Undistorted: {:?}", undistorted);
+        // x_distorted = x_norm * (1 + k1*r^2)
+        let radial = 1.0 + k1 * r2;
+        let x_dist_norm = x_norm * radial;
+        let y_dist_norm = y_norm * radial;
         
-        assert!((undistorted.x - 1060.0).abs() < 1e-2);
-        assert!((undistorted.y - 540.0).abs() < 1e-2);
+        // u_distorted = x_dist_norm * fx + cx
+        let u_distorted = x_dist_norm * fx + cx;
+        let v_distorted = y_dist_norm * fy + cy;
+        
+        // 4. Verify that the resolver recovers the original point
+        let undistorted = resolver.undistort_point(u_distorted, v_distorted);
+        
+        println!("Distorted Input: ({}, {})", u_distorted, v_distorted);
+        println!("Recovered Output: {:?}", undistorted);
+        
+        assert!((undistorted.x - u_orig).abs() < 1e-2);
+        assert!((undistorted.y - v_orig).abs() < 1e-2);
     }
 }
