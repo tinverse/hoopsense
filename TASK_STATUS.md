@@ -12,16 +12,18 @@
 - [x] Orchestration: Rust Spatial Processor (Bridge)
 
 ## Part II: The Machine Mind (Inference)
-- [ ] Chapter 4: The Perceiver (YOLO Fine-tuning)
+- [x] Chapter 4: The Perceiver (YOLO Fine-tuning)
 - [>] Chapter 5: The Kinematic Rig (Pose Estimation) - **IN PROGRESS**
   - [x] 17-point skeletal extraction (YOLOv8-pose)
+  - [x] Stage 1 Kinematic Lifting (Pseudo-Z)
   - [ ] Rig mapping to .gltf
   - [ ] Biometric stat inference (Release height, Jump vertical)
-- [>] Chapter 6: Action Recognition (Temporal Transformers) - **TRAINING IN PROGRESS**
+- [x] Chapter 6: Action Recognition (Temporal Transformers)
   - [x] Custom Temporal Transformer Architecture (PyTorch)
   - [x] Training pipeline for synthetic MoveLibrary
-  - [>] Model training on synthetic dataset
+  - [x] Synchronized Taxonomy (DSL <-> Brain)
   - [ ] Fine-tuning on Ref-API validated real data
+
 
 ## Part III: The Official Logic (Game Sense)
 - [x] Chapter 7: The Ref-API (Signal Detection)

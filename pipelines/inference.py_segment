@@ -1,0 +1,93 @@
+def extract_game_dna(video_path, output_dir="data"):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Loading Perception Models on {device}...")
+    det_model = YOLO('yolov8n.pt')
+    pose_model = YOLO('yolov8n-pose.pt')
+    reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+    
+    H = np.eye(3)
+    if os.path.exists("data/calibration.json"):
+        with open("data/calibration.json", 'r') as f:
+            H = np.array(json.load(f)["h_matrix"])
+
+    brain = None
+    brain_path = "data/models/action_brain.pt"
+    if os.path.exists(brain_path):
+        brain = ActionBrain(num_classes=len(LABEL_MAP_INV)).to(device)
+        brain.load_state_dict(torch.load(brain_path, map_location=device))
+        brain.eval()
+
+    cap = cv2.VideoCapture(video_path)
+    fps, w, h = cap.get(cv2.CAP_PROP_FPS) or 30.0, cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    out_file = os.path.join(output_dir, "intelligent_game_dna.jsonl")
+    checkpoint_path = os.path.join(output_dir, "checkpoint.json")
+
+    # Resume from checkpoint if exists
+    frame_idx = 0
+    resolved_ids = {}
+    if os.path.exists(checkpoint_path):
+        with open(checkpoint_path, 'r') as f:
+            checkpoint = json.load(f)
+            frame_idx = checkpoint.get("last_frame", 0)
+            resolved_ids = {int(k): v for k, v in checkpoint.get("identities", {}).items()}
+            print(f"[INFO] Resuming from frame {frame_idx}")
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+
+    kpt_history, state_machines = {}, {}
+    last_ball_2d = np.array([0.0, 0.0])
+    
+    mode = 'a' if frame_idx > 0 else 'w'
+    with open(out_file, mode) as f:
+        while cap.isOpened():
+            success, frame = cap.read()
+            if not success: break
+            frame_idx += 1
+            t_ms = int(frame_idx/fps*1000)
+            
+            det_results = det_model.track(frame, persist=True, classes=[0, 32], verbose=False)
+            pose_results = pose_model(frame, verbose=False)
+            
+            # 1. Update Ball Position
+            if det_results[0].boxes.id is not None:
+                for b, c, conf in zip(det_results[0].boxes.xywh, det_results[0].boxes.cls, det_results[0].boxes.conf):
+                    if int(c) == 32:
+                        last_ball_2d = np.array([float(b[0]), float(b[1])])
+                        f.write(json.dumps({"kind": "ball", "t_ms": t_ms, "x": last_ball_2d[0], "y": last_ball_2d[1], "confidence_bps": int(conf*10000)}) + "\n")
+
+                # 2. Process Players
+                boxes, track_ids = det_results[0].boxes.xywh, det_results[0].boxes.id
+                poses = pose_results[0].keypoints.xyn.cpu().numpy() if pose_results[0].keypoints is not None else []
+
+                for i, (box, tid) in enumerate(zip(boxes, track_ids)):
+                    tid = int(tid)
+                    if int(det_results[0].boxes.cls[i]) == 0:
+                        player_kpts = match_pose_to_box(box, poses, w, h)
+                        if tid not in kpt_history: kpt_history[tid] = deque(maxlen=30)
+                        if player_kpts: kpt_history[tid].append(player_kpts)
+                        
+                        player_court_pos = project_pixel_to_court(float(box[0]), float(box[1]), H)
+                        learned_label = None
+                        if brain and len(kpt_history[tid]) == 30:
+                            kpts_3d_mock = [np.zeros((17, 3)) for _ in range(30)]
+                            ball_3d_mock = [np.zeros(3) for _ in range(30)]
+                            feat_tensor = construct_features_v2(kpt_history[tid], last_ball_2d, H, player_court_pos, kpts_3d_mock, ball_3d_mock, device)
+                            with torch.no_grad():
+                                output = brain(feat_tensor)
+                                learned_label = LABEL_MAP_INV[int(torch.argmax(output))]
+
+                        if tid not in state_machines: state_machines[tid] = BehaviorStateMachine()
+                        state_machines[tid].update(kpt_history[tid], learned_label=learned_label)
+                        
+                        row = {"kind": "player", "track_id": tid, "t_ms": t_ms, "action": state_machines[tid].get_label()}
+                        f.write(json.dumps(row) + "\n")
+
+            # 3. Save Periodic Checkpoint
+            if frame_idx % 500 == 0:
+                with open(checkpoint_path, 'w') as cp_f:
+                    json.dump({"last_frame": frame_idx, "identities": resolved_ids}, cp_f)
+                print(f"[INFO] Checkpoint saved at frame {frame_idx}")
+
+    cap.release()
+    print(f"[INFO] Complete. Output: {out_file}")

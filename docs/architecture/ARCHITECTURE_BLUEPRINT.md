@@ -29,6 +29,11 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Responsibility:** Predicts ball flight paths; identifies shot apex (arc); and detects 3D rim intersections for deterministic scoring.
 - **Value:** Smoothes noisy visual detections into physically valid movements.
 
+### Layer 6: Acoustic Auditing (Audio Head)
+- **Tech:** Keyword Spotting (CNN/Whisper).
+- **Responsibility:** Identifies localized vocal cues ("Sub!", "Time-out!") to provide temporal anchors for state changes.
+- **Value:** Ignores non-localized environmental noise like distant whistles.
+
 ## 2. Orchestration (The Bridge)
 
 ### Spatial Processor (core/src/bin/spatial_processor.rs)

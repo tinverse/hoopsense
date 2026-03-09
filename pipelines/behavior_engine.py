@@ -22,15 +22,29 @@ class DeclarativeRule(KinematicRule):
     """
     def __init__(self, spec):
         self.id = spec['id']
+        self.spec = spec
         self.predicates = spec.get('predicates', [])
+        self.preconditions = spec.get('preconditions', [])
+        self.conditions = spec.get('conditions', [])
         # Joint mapping for common NCAA names
-        self.joint_map = {"hips": [11, 12], "wrists": [9, 10], "head": [0], "shoulders": [5, 6]}
+        self.joint_map = {"hips": [11, 12], "wrists": [9, 10], "head": [0], "shoulders": [5, 6], "ankles": [15, 16]}
 
     def evaluate(self, kpts):
         """kpts: (T, 17, 2) normalized to box."""
         if len(kpts) < 15: return False
         
-        # Every predicate in the rule must pass
+        # 1. Evaluate Preconditions (Mocked for now)
+        for pre in self.preconditions:
+            if pre.get('actor') == 'self' and pre.get('state') == 'has_possession':
+                # In a real scenario, we'd check if the ball is near the player
+                pass
+
+        # 2. Evaluate Conditions (Mocked for now)
+        for cond in self.conditions:
+            if cond.get('ball_state') == 'controlled':
+                pass
+
+        # 3. Evaluate Predicates
         for pred in self.predicates:
             joint_idx = self.joint_map.get(pred['joint'])
             if not joint_idx: continue
@@ -42,13 +56,20 @@ class DeclarativeRule(KinematicRule):
             op = pred['operator']
             threshold = pred.get('threshold', 0.0)
             
-            if metric == "velocity_z" or metric == "velocity_y":
+            if metric in ["velocity_z", "velocity_y"]:
                 # In normalized 2D, vertical movement is Y axis
+                # Y-up in image is negative Y-coord
                 y_coords = np.mean(joint_data[:, :, 1], axis=1)
                 velocity = y_coords[-1] - y_coords[0]
-                if op == ">" and not (velocity < -threshold): return False # Y-down is positive
+                if op == ">" and not (velocity < -threshold): return False 
                 if op == "<" and not (velocity > threshold): return False
                 
+            elif metric == "velocity_x":
+                x_coords = np.mean(joint_data[:, :, 0], axis=1)
+                velocity = x_coords[-1] - x_coords[0]
+                if op == ">" and not (velocity > threshold): return False
+                if op == "<" and not (velocity < -threshold): return False
+
             elif metric == "pos_y":
                 ref_joint = pred.get('reference')
                 if ref_joint:

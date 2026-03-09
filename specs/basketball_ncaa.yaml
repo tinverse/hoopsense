@@ -4,10 +4,10 @@ version: "2.0.0-full"
 
 categories:
   - id: "possession_events"
-    rules: ["shot_attempt", "made_shot", "missed_shot", "pass", "catch", "dribble", "pickup", "turnover", "steal", "rebound", "oreb", "dreb", "block", "assist"]
+    rules: ["shot_attempt", "made_shot", "missed_shot", "pass", "catch", "dribble", "pickup", "turnover", "steal", "rebound", "oreb", "dreb", "block", "assist", "pass_chest"]
   
   - id: "shot_subtypes"
-    rules: ["free_throw", "layup", "floater", "pull_up", "catch_and_shoot", "step_back", "dunk", "tip_in", "hook_shot", "3pt_attempt", "2pt_attempt"]
+    rules: ["free_throw", "layup", "floater", "pull_up", "catch_and_shoot", "step_back", "dunk", "tip_in", "hook_shot", "3pt_attempt", "2pt_attempt", "euro_step_left", "euro_step_right"]
 
   - id: "ball_states"
     rules: ["ball_released", "ball_received", "ball_loose", "ball_controlled", "ball_out_of_bounds"]
@@ -19,24 +19,92 @@ categories:
     rules: ["travel", "double_dribble", "carry", "kick_ball", "foul", "shooting_foul", "offensive_foul", "timeout", "substitution"]
 
 rules:
-  # --- CORE KINEMATIC EXAMPLES (Full library to be expanded in Oracle) ---
-  - id: "step_back"
+  - id: "jump_shot"
+    type: "kinematic"
+    preconditions:
+      - actor: "self"
+        state: "has_possession"
+    predicates:
+      - joint: "hips"
+        metric: "velocity_z"
+        operator: ">"
+        threshold: 0.02
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+
+  - id: "dunk"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+      - joint: "hips"
+        metric: "velocity_y"
+        operator: "<"
+        threshold: -0.05
+
+  - id: "layup"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+
+  - id: "euro_step_left"
     type: "kinematic"
     predicates:
       - joint: "hips"
-        metric: "velocity_y" # Moving away from rim
+        metric: "velocity_x"
+        operator: "<"
+        threshold: -0.02
+
+  - id: "euro_step_right"
+    type: "kinematic"
+    predicates:
+      - joint: "hips"
+        metric: "velocity_x"
+        operator: ">"
+        threshold: 0.02
+
+  - id: "pass_chest"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "velocity_z"
+        operator: ">"
+        threshold: 0.05
+
+  - id: "block"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+
+  - id: "steal"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "velocity_x"
+        operator: ">"
+        threshold: 0.02
+
+  - id: "rebound"
+    type: "kinematic"
+    predicates:
+      - joint: "wrists"
+        metric: "pos_y"
+        operator: "<"
+        reference: "head"
+      - joint: "hips"
+        metric: "velocity_y"
         operator: "<"
         threshold: -0.05
-      - transition: "jump_shot"
-
-  - id: "dunk"
-    type: "geometric"
-    conditions:
-      - joint: "wrists"
-        metric: "pos_z"
-        operator: ">"
-        reference: "rim_height"
-      - ball_state: "controlled"
 
   - id: "travel"
     type: "violation"
@@ -46,5 +114,11 @@ rules:
         operator: ">"
         threshold: 2
 
-# --- REJECTION POLICY ---
-# Every rule MUST map to a unique ID in the Action Brain classification head.
+  - id: "step_back"
+    type: "kinematic"
+    predicates:
+      - joint: "hips"
+        metric: "velocity_y"
+        operator: "<"
+        threshold: -0.05
+
