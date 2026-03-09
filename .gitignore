@@ -1,0 +1,6 @@
+.envrc
+.secrets
+.nvim_sessions/
+.tmux/
+.venv/
+node_modules/
