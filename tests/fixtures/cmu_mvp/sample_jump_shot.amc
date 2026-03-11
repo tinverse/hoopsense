@@ -1,0 +1,97 @@
+:FULLY-SPECIFIED
+:DEGREES
+1
+root 0 0 100 0 0 0
+lfemur 0 0 0
+ltibia 0 0 0
+lfoot 0 0 0
+rfemur 0 0 0
+rtibia 0 0 0
+rfoot 0 0 0
+lowerback 0 0 0
+upperback 0 0 0
+thorax 0 0 0
+lowerneck 0 0 0
+head 0 0 0
+lhumerus -10 0 0
+lradius -20 0 0
+lwrist 0 0 0
+rhumerus -15 0 0
+rradius -25 0 0
+rwrist 0 0 0
+2
+root 0 0 100 0 0 0
+lfemur 0 0 0
+ltibia 0 0 0
+lfoot 0 0 0
+rfemur 0 0 0
+rtibia 0 0 0
+rfoot 0 0 0
+lowerback 2 0 0
+upperback 1 0 0
+thorax 2 0 0
+lowerneck 0 0 0
+head 0 0 0
+lhumerus -20 0 0
+lradius -35 0 0
+lwrist 0 0 0
+rhumerus -30 0 0
+rradius -45 0 0
+rwrist 0 0 0
+3
+root 4 0 100 0 0 0
+lfemur 0 0 0
+ltibia 0 0 0
+lfoot 0 0 0
+rfemur 0 0 0
+rtibia 0 0 0
+rfoot 0 0 0
+lowerback 4 0 0
+upperback 2 0 0
+thorax 4 0 0
+lowerneck 1 0 0
+head 0 0 0
+lhumerus -30 0 0
+lradius -45 0 0
+lwrist 0 0 0
+rhumerus -50 0 0
+rradius -65 0 0
+rwrist 0 0 0
+4
+root 8 0 102 0 0 0
+lfemur 0 0 0
+ltibia 0 0 0
+lfoot 0 0 0
+rfemur 0 0 0
+rtibia 0 0 0
+rfoot 0 0 0
+lowerback 5 0 0
+upperback 3 0 0
+thorax 5 0 0
+lowerneck 2 0 0
+head 0 0 0
+lhumerus -40 0 0
+lradius -55 0 0
+lwrist 0 0 0
+rhumerus -75 0 0
+rradius -85 0 0
+rwrist 0 0 0
+5
+root 12 0 105 0 0 0
+lfemur 0 0 0
+ltibia 0 0 0
+lfoot 0 0 0
+rfemur 0 0 0
+rtibia 0 0 0
+rfoot 0 0 0
+lowerback 6 0 0
+upperback 4 0 0
+thorax 6 0 0
+lowerneck 3 0 0
+head 0 0 0
+lhumerus -45 0 0
+lradius -60 0 0
+lwrist 0 0 0
+rhumerus -95 0 0
+rradius -105 0 0
+rwrist 0 0 0

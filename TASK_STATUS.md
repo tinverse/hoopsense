@@ -23,7 +23,10 @@
   - [x] Training pipeline for synthetic MoveLibrary
   - [x] Synchronized Taxonomy (DSL <-> Brain)
   - [x] Professional Training Loop (Stratified, GPU, Per-Class Metrics)
-  - [ ] Bio-mechanical Synthetic Oracle (Anatomical Constraints)
+  - [>] Bio-mechanical Synthetic Oracle (Anatomical Constraints) - **IN PROGRESS**
+    - [x] ASF/AMC parser + FK MVP for one motion fixture
+    - [x] 17-point adapter + `features_v2` compatibility
+    - [ ] Expand beyond single-fixture Oracle motion set
   - [ ] Fine-tuning on Ref-API validated real data
 
 
@@ -44,6 +47,12 @@
   - [ ] Rig mapping to .gltf
 - [ ] Chapter 11: The NIL Marketplace (Ad Branding)
 - [ ] Chapter 12: Scaling the Network
+- [>] Chapter 13: NVIDIA Orin Migration (HoopBox) - **IN PROGRESS**
+  - [x] ARM64 Guix Manifest (`guix_orin.scm`)
+  - [x] Hardware Bridge Script (`setup_orin.sh`)
+  - [ ] TensorRT Model Optimization
+  - [ ] Real-time Inference Pipeline (JetPack + VPI)
+
 
 ## Quality Gates & Verification
 - [x] Rust Core Logic Tests (7/7 Passing)

@@ -143,7 +143,7 @@ def get_look_at_matrix(cam_pos, target_pos):
     up = np.cross(forward, right)
     return np.vstack([right, up, forward])
 
-def project_to_2d(skeleton_3d_seq, K, R, t_vec):
+def project_to_2d(skeleton_3d_seq, K, R, t_vec, noise_std=0.0):
     skeleton_2d = np.zeros((skeleton_3d_seq.shape[0], 17, 2))
     extrinsic = np.hstack((R, t_vec.reshape(3, 1)))
     for i in range(skeleton_3d_seq.shape[0]):
@@ -152,7 +152,18 @@ def project_to_2d(skeleton_3d_seq, K, R, t_vec):
             x_cam = extrinsic @ X_w
             x_pix_h = K @ x_cam
             skeleton_2d[i, j] = x_pix_h[:2] / x_pix_h[2]
+        if noise_std > 0.0:
+            skeleton_2d[i] += np.random.normal(scale=noise_std, size=skeleton_2d[i].shape)
     return skeleton_2d
+
+
+def run_oracle_generator(output_file, asf_path, amc_path, label="jump_shot"):
+    from tools.synthetic.amc_oracle import generate_oracle_sample
+    from tools.synthetic.amc_oracle import write_oracle_dataset
+
+    sample = generate_oracle_sample(asf_path, amc_path, label)
+    write_oracle_dataset(output_file, [sample])
+    print(f"[INFO] Generated Oracle-backed features to {output_file}")
 
 def run_generator(output_file, num_samples=20):
     K = np.array([[1000, 0, 960], [0, 1000, 540], [0, 0, 1]])
