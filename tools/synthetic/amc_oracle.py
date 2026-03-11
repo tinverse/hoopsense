@@ -300,9 +300,14 @@ def synthetic_ball_track(coco_sequence: np.ndarray, label: str) -> np.ndarray:
 
 
 def generate_oracle_sample(asf_path: str | Path, amc_path: str | Path, label: str) -> dict[str, object]:
-    from tools.synthetic.generate_data import compute_features_v2
-    from tools.synthetic.generate_data import get_look_at_matrix
-    from tools.synthetic.generate_data import project_to_2d
+    try:
+        from tools.synthetic.generate_data import compute_features_v2
+        from tools.synthetic.generate_data import get_look_at_matrix
+        from tools.synthetic.generate_data import project_to_2d
+    except ModuleNotFoundError:
+        from generate_data import compute_features_v2
+        from generate_data import get_look_at_matrix
+        from generate_data import project_to_2d
 
     skeleton = AcclaimParser.parse_asf(asf_path)
     frames = AcclaimParser.parse_amc(amc_path, skeleton.root.order, skeleton.bones)

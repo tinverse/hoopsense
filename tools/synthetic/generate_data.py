@@ -1,6 +1,7 @@
 import numpy as np
 import json
 import os
+import sys
 
 class MoveLibrary:
     @staticmethod
@@ -147,8 +148,12 @@ def project_to_2d(skeleton_3d_seq, K, R, t_vec, noise_std=0.0):
 
 
 def run_oracle_generator(output_file, asf_path, amc_path, label="jump_shot"):
-    from tools.synthetic.amc_oracle import generate_oracle_sample
-    from tools.synthetic.amc_oracle import write_oracle_dataset
+    try:
+        from tools.synthetic.amc_oracle import generate_oracle_sample
+        from tools.synthetic.amc_oracle import write_oracle_dataset
+    except ModuleNotFoundError:
+        from amc_oracle import generate_oracle_sample
+        from amc_oracle import write_oracle_dataset
 
     sample = generate_oracle_sample(asf_path, amc_path, label)
     write_oracle_dataset(output_file, [sample])
@@ -191,4 +196,16 @@ def run_generator(output_file, num_samples=20):
     print(f"[INFO] Generated ground-truth features to {output_file}")
 
 if __name__ == "__main__":
-    run_generator("data/training/synthetic_dataset_v2.jsonl")
+    if "--oracle" in sys.argv:
+        try:
+            oracle_idx = sys.argv.index("--oracle")
+            asf_path = sys.argv[oracle_idx + 1]
+            amc_path = sys.argv[oracle_idx + 2]
+        except IndexError as exc:
+            raise SystemExit("Usage: generate_data.py --oracle <asf_path> <amc_path> [label] [output_file]") from exc
+        label = sys.argv[oracle_idx + 3] if len(sys.argv) > oracle_idx + 3 else "jump_shot"
+        output_file = sys.argv[oracle_idx + 4] if len(sys.argv) > oracle_idx + 4 else "data/training/synthetic_dataset_v2.jsonl"
+        run_oracle_generator(output_file, asf_path, amc_path, label=label)
+    else:
+        output_file = sys.argv[1] if len(sys.argv) > 1 else "data/training/synthetic_dataset_v2.jsonl"
+        run_generator(output_file)

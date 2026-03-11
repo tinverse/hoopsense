@@ -1,12 +1,14 @@
 import unittest
 import numpy as np
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from tools.synthetic.amc_oracle import AcclaimParser
 from tools.synthetic.amc_oracle import Coco17Adapter
 from tools.synthetic.amc_oracle import KinematicOracle
 from tools.synthetic.amc_oracle import generate_oracle_sample
 from tools.synthetic.generate_data import MoveLibrary, get_look_at_matrix, project_to_2d
+from tools.synthetic.generate_data import run_oracle_generator
 
 class TestSyntheticGenerator(unittest.TestCase):
     def setUp(self):
@@ -67,6 +69,15 @@ class TestSyntheticGenerator(unittest.TestCase):
         self.assertEqual(sample["label"], "jump_shot")
         self.assertEqual(len(sample["features_v2"]), 30)
         self.assertEqual(len(sample["features_v2"][0]), 72)
+
+    def test_oracle_generator_writes_jsonl_dataset(self):
+        with TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "oracle_dataset.jsonl"
+            run_oracle_generator(output_path, self.asf_path, self.amc_path, label="jump_shot")
+
+            lines = output_path.read_text().strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn('"schema_version": "2.0.0"', lines[0])
 
 if __name__ == "__main__":
     unittest.main()
