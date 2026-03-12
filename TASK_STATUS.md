@@ -7,6 +7,10 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.34` define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
+- `L3.35` add a perception-quality report artifact for representative clips
+- `L3.36` document candidate Python-versus-Rust ownership split for the perception layer
+- `L3.37` decide the first migration target, if any, based on performance, determinism, and implementation risk
 - `L3.17` align this status file with the plan tree and layered architecture
 - `L3.18` define Oracle dataset manifests and validation checks
 - `L3.19` record Action Brain training lineage beside checkpoints
@@ -48,6 +52,8 @@ The current highest-priority frontier is:
 - [x] Court geometry, homography, and camera state
 - [>] Identity fusion, tracking, and temporal continuity
 - [>] Pose estimation and kinematic lifting
+- [>] Perception-and-geometry readiness gate before Action Brain expansion
+- [ ] Python-versus-Rust boundary decision for perception and geometry
 
 ### Action Brain and Synthetic Oracle
 - [x] Stable Action Brain feature contract (`features_v2`)
@@ -96,8 +102,12 @@ The current highest-priority frontier is:
 - [x] Preserve the Oracle MVP parser/FK path for one fixture motion
 - [x] Maintain a reproducible GPU training smoke test and checkpoint write path
 - [x] Require plan-tree updates before substantial architecture or implementation changes
+- [x] Define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
+- [x] Add a perception-quality report artifact for representative clips
 
 ### Active or Next
+- [ ] Document candidate Python-versus-Rust ownership split for ingestion, tracking, pose, geometry, and lifting
+- [ ] Decide the first migration target, if any, based on performance, determinism, and implementation risk
 - [ ] Bring `TASK_STATUS.md` into alignment with the layered feature plan
 - [ ] Define Oracle dataset manifest fields and validation checks
 - [ ] Record Action Brain training lineage beside each checkpoint
@@ -126,8 +136,11 @@ What is currently true:
 - the layered feature architecture is now documented
 - MLOps is now a first-class product concern in the requirements, architecture, and plan
 - DevOps is now a first-class product concern in the requirements, architecture, and plan
+- the geometry layer now has a shared pure-Python module and a readiness-report artifact
 
 What is not yet true:
+- perception and geometry are not yet explicitly gated as training-readiness inputs
+- the Python-versus-Rust boundary for this layer is not yet decided
 - possession context is not yet implemented as a durable ledger contract
 - event attribution and stats generation are not yet complete
 - dataset manifests and checkpoint lineage are not yet implemented
@@ -148,6 +161,7 @@ What is not yet true:
 - [ ] Oracle dataset manifest validation implemented
 - [ ] Checkpoint lineage recording implemented
 - [ ] Slice-based evaluation report implemented
+- [x] Geometry readiness report artifact implemented
 - [ ] CI workflow implemented
 - [ ] Functional-core CI split implemented
 - [ ] Conditional training workflow implemented

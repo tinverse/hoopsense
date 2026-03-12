@@ -8,6 +8,10 @@ The product architecture is also governed by layered MLOps and DevOps strategies
 
 Currently, HoopSense utilizes a Python-based perception pipeline for rapid iteration and model validation. The long-term goal is to migrate performance-critical perception to Rust.
 
+Near-term priority:
+- solidify the Perception and Geometry layer as a trusted input substrate before expanding Action Brain work
+- explicitly evaluate the Python-vs-Rust boundary for ingestion, tracking continuity, geometry, and lifting
+
 ### Layer 1: The Perceiver (Python Prototype)
 - **Tech:** YOLOv8-pose + BoT-SORT.
 - **Responsibility:** Ingests raw video frames; identifies skeletons for players, the ball, and referees.
@@ -26,6 +30,34 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Implementation:** **Rust (hoopsense-core)**
 - **Responsibility:** High-performance spatial math. Handles Lens Undistortion, Homography (DLT), Camera Pose (PnP), and Dynamic SLAM-lite state tracking.
 - **Value:** This is the deterministic "measurement" layer that ensures 3D stat accuracy.
+
+### Perception-and-Geometry Readiness Gate
+
+Before substantial Action Brain expansion, HoopSense should verify:
+- video ingestion stability: deterministic frame/timestamp handling
+- detection/tracking quality: stable player and ball tracks with measured ID-switch/dropout behavior
+- pose quality: acceptable keypoint completeness and confidence on representative basketball motion
+- court geometry quality: sane homography/projection behavior on known court anchors
+- lifting quality: consistent `X,Y,Z` output and biomechanical sanity
+
+This gate exists because the Action Brain only sees the representation produced by these layers.
+
+### Python vs Rust Boundary
+
+The repo should explicitly evaluate which parts of this layer belong in Python versus Rust.
+
+Python is currently favored for:
+- rapid model iteration
+- detector/tracker integration
+- experimentation-heavy pose workflows
+
+Rust is currently favored for:
+- deterministic geometry
+- low-level numeric kernels
+- contract-sensitive ledger/math components
+- performance-critical re-entry and validation paths
+
+The decision should be made subsystem by subsystem, not as an all-or-nothing rewrite.
 
 ### Layer 5: The Game State Ledger (Rust Core)
 - **Responsibility:** Consolidates possession context and events into an official, retroactive ledger with temporal reconciliation.

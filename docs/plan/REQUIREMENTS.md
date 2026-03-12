@@ -6,6 +6,7 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **FR-01: Multi-Source Ingestion:** Support video from 720p (Mobile/IMU-fused) to 4K (Fixed HoopBox/DSLR).
 - **FR-02: Spatial Resolution:** Map 2D pixel coordinates to 3D court coordinates (X, Y, Z in cm) with <15cm error.
 - **FR-03: Temporal Consistency:** Maintain persistent identity (Player ID) across camera cuts, pans, and occlusions.
+- **FR-03a: Perception Readiness Gate:** Video ingestion, detection/tracking, pose estimation, and court geometry/lifting must meet explicit readiness checks before major Action Brain expansion.
 - **FR-04: Action Recognition:** Identify basketball-specific events (Dribble, Shot, Pass, Crossover, Euro-step).
 - **FR-04a: Local Motion Classification:** Classify short-horizon player motion from synchronized pose and ball features.
 - **FR-04b: Possession Context Modeling:** Track possession origin, ballhandler, dribble count, pass chains, and offense zone outside the Action Brain.
@@ -23,6 +24,7 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **FR-16: Drift Monitoring:** The system must detect drift in action distribution, pose quality, ball visibility, and environment characteristics over time.
 - **FR-17: Deployment Compatibility Tracking:** Each model artifact must declare and validate compatible runtime targets such as cloud/x86 and Jetson/ARM64.
 - **FR-18: Reproducible Environment Definitions:** Development and target runtime environments must be defined in checked-in manifests or build specs.
+- **FR-18a: Perception Runtime Boundary Decision:** The repo must explicitly decide which parts of the perception-and-geometry layer stay in Python and which parts migrate to Rust.
 - **FR-19: CI Quality Gates:** The project must have automated checks for code quality, contracts, and documentation coherence.
 - **FR-19a: Functional-Core CI:** CI must be split into functional-core pipelines so changes trigger only the relevant checks.
 - **FR-19b: Conditional Training CI:** Training and heavy evaluation must run only when ML-related files or explicit triggers require it.
@@ -40,6 +42,7 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 
 ## Non-Functional Requirements
 - **NFR-01: Performance:** Process a 1-hour game in <2 hours on standard GPU hardware.
+- **NFR-01a: Perception Input Quality:** The perception-and-geometry layer must be measured for ingestion stability, track continuity, pose quality, and court/lifting consistency before being treated as training-ready input.
 - **NFR-02: Security:** Obfuscate and encrypt model weights in mobile thin clients to protect intellectual property.
 - **NFR-03: Resilience:** Self-healing calibration for "HoopBox" mounts subject to vibration or accidental shifts.
 - **NFR-04: Privacy:** Automatic blurring of non-consenting bystanders and COPPA compliance for youth athletes.
@@ -58,6 +61,7 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **ML Frameworks:** YOLOv11+ for detection, ViTPose/RTMPose for skeletal rigs, BoT-SORT for memory-backed tracking.
 - **Environment:** Guix-managed toolchains for deterministic builds.
 - **Feature Layering Constraint:** The Action Brain remains a narrow local classifier; possession logic and stats must remain separable and auditable.
+- **Readiness Constraint:** Perception and geometry quality gates should be green before substantial Action Brain dataset expansion or retraining campaigns.
 - **MLOps Constraint:** Dataset, feature, evaluation, and promotion artifacts must be versioned and reviewable as first-class project outputs.
 - **DevOps Constraint:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback packaging and runtime boundary where necessary.
 - **CI Constraint:** Fast path-based functional pipelines are preferred; integration and training pipelines should be gated and selective.

@@ -6,6 +6,8 @@ import os
 import yaml
 from collections import Counter, deque
 from pipelines.behavior_engine import BehaviorStateMachine
+from pipelines.geometry import lift_keypoints_to_3d
+from pipelines.geometry import project_pixel_to_court
 
 # Constants for Feature Schema V2
 LABEL_MAP_INV = {0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"}
@@ -23,34 +25,6 @@ def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
     return {i: label for i, label in enumerate(labels)}
 
 LABEL_MAP_INV = get_label_map()
-
-def project_pixel_to_court(u, v, H):
-    p = np.array([u, v, 1.0])
-    p_world = H @ p
-    if abs(p_world[2]) < 1e-6: return np.array([0.0, 0.0])
-    return p_world[:2] / p_world[2]
-
-def lift_to_3d(kpts_2d, H):
-    """
-    Estimates 3D court coordinates (cm) from 2D pixel keypoints.
-    NOTE: This is a Stage 1 kinematic lifter. It uses the ground plane 
-    as a reference and estimates Z (height) based on vertical displacement 
-    from the feet in the projected court space.
-    """
-    kpts_3d = []
-    # 1. Resolve floor position (midpoint of ankles)
-    l_ank, r_ank = kpts_2d[15], kpts_2d[16]
-    floor_xy = project_pixel_to_court((l_ank[0]+r_ank[0])/2, (l_ank[1]+r_ank[1])/2, H)
-    
-    # 2. Lift each joint
-    for u, v in kpts_2d:
-        world_xy = project_pixel_to_court(u, v, H)
-        # Approximate Z: The difference in projected Y-coordinate on the court 
-        # floor is a proxy for height when the camera is at a high angle.
-        # This is a 'pseudo-Z' until we implement the full Ray-Plane intersection.
-        z_est = abs(world_xy[1] - floor_xy[1]) * 0.75 # 0.75 is a heuristic scale for high-angle shots
-        kpts_3d.append([world_xy[0], world_xy[1], z_est])
-    return np.array(kpts_3d)
 
 def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos, kpts_3d_approx, ball_3d_approx, device):
     """
@@ -76,7 +50,7 @@ def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos, kpts_3
         vel = (kpts_2d[t] - kpts_2d[max(0, t-1)]).flatten() * 0.1
         
         # 3D Context for distance metrics
-        kpts_3d = lift_to_3d(kpts_2d[t], H)
+        kpts_3d = lift_keypoints_to_3d(kpts_2d[t], H)
         # Distance from wrists to ball (normalized to meters for the model)
         dist_l = np.linalg.norm(kpts_3d[9] - ball_3d) * 0.01
         dist_r = np.linalg.norm(kpts_3d[10] - ball_3d) * 0.01
@@ -107,12 +81,18 @@ def match_pose_to_box(box, poses, frame_w, frame_h):
 
 from pipelines.audio_head import AudioHead
 
-def extract_game_dna(video_path, output_dir="data"):
+def extract_game_dna(video_path=None, output_dir="data"):
     import torch
     from ultralytics import YOLO
     import easyocr
     from core.vision.action_brain import ActionBrain
     
+    # Load config if no path provided
+    if video_path is None:
+        with open("hoops_config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+        video_path = config.get("local_video_path", "data/sample.mp4")
+
     # 1. Initialize Audio Head (Concurrent Stream)
     a_head = AudioHead()
     audio_file = a_head.extract_audio(video_path)

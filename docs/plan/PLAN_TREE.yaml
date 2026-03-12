@@ -84,6 +84,16 @@ levels:
       title: Pose estimation and kinematic lifting
       owner: A0
       status: in_progress
+    - id: L2.32
+      parent: L1.1
+      title: Perception-and-geometry readiness gate before Action Brain expansion
+      owner: A0
+      status: in_progress
+    - id: L2.33
+      parent: L1.1
+      title: Python-versus-Rust boundary decision for perception and geometry
+      owner: A0
+      status: pending
 
     - id: L2.5
       parent: L1.2
@@ -397,9 +407,33 @@ levels:
       title: Add initial Terraform layout for shared buckets, registry, and service accounts
       owner: A0
       status: pending
+    - id: L3.34
+      parent: L2.32
+      title: Define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
+      owner: A0
+      status: completed
+    - id: L3.35
+      parent: L2.32
+      title: Add a perception-quality report artifact for representative clips
+      owner: A0
+      status: completed
+    - id: L3.36
+      parent: L2.33
+      title: Document candidate Python-versus-Rust ownership split for ingestion, tracking, pose, geometry, and lifting
+      owner: A0
+      status: pending
+    - id: L3.37
+      parent: L2.33
+      title: Decide the first migration target, if any, based on performance, determinism, and implementation risk
+      owner: A0
+      status: pending
 
 priorities:
   current_frontier:
+    - L3.34
+    - L3.35
+    - L3.36
+    - L3.37
     - L3.17
     - L3.18
     - L3.19
@@ -426,6 +460,7 @@ priorities:
     - Make dataset lineage and container-target boundaries explicit before additional platform complexity lands.
     - Keep CI cost-effective by isolating cores and gating training-heavy workflows.
     - Add Terraform only for the stable shared cloud layer, not for still-fluid experiments.
+    - Do not expand Action Brain work materially until the perception-and-geometry readiness gate is explicit.
     - Expand the Oracle only after the MVP contract stays stable.
     - Introduce possession context before attempting stats generation.
     - Keep deployment guidance separated by platform to avoid environment drift.
