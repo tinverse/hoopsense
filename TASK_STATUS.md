@@ -7,26 +7,17 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.36` document candidate Python-versus-Rust ownership split for the perception layer
 - `L3.37` decide the first migration target, if any, based on performance, determinism, and implementation risk
-- `L3.18` define Oracle dataset manifests and validation checks
-- `L3.19` record Action Brain training lineage beside checkpoints
 - `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
-- `L3.25` add a checked-in CI workflow for Python, Rust, docs, and contract checks
 - `L3.26` publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
 - `L3.29` define functional-core CI ownership and path triggers
 - `L3.30` add a lightweight integration pipeline that depends on selected core workflows
 - `L3.31` gate training smoke/evaluation workflows behind ML-specific changes or manual triggers
 - `L3.32` define which GCP resources stay on direct `gcloud` versus move into Terraform
 - `L3.33` add initial Terraform layout for shared buckets, registry, and service accounts
-- `L3.4` scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
-- `L3.9` define the `PossessionContext` contract
-- `L3.10` implement the first ballhandler/dribble/pass tracking slice
-- `L3.12` define the first stat-ready event set
 - `L3.20` add first slice-based evaluation outputs
 - `L3.27` define dataset version lineage and promotion rules across Oracle/synthetic training sets
 - `L3.28` define multi-arch or explicitly split cloud-vs-Orin container strategy
-- `L3.11` implement offense zone and transition flag derivation in the possession context
 
 ## L0 Product Goal
 
@@ -50,8 +41,8 @@ The current highest-priority frontier is:
 - [x] Court geometry, homography, and camera state
 - [>] Identity fusion, tracking, and temporal continuity
 - [>] Pose estimation and kinematic lifting
-- [>] Perception-and-geometry readiness gate before Action Brain expansion
-- [ ] Python-versus-Rust boundary decision for perception and geometry
+- [>] Perception-and-geometry readiness gate
+- [>] Python-versus-Rust boundary decision for perception and geometry
 
 ### Action Brain and Synthetic Oracle
 - [x] Stable Action Brain feature contract (`features_v2`)
@@ -62,8 +53,8 @@ The current highest-priority frontier is:
 ### Possession Context and Game-State Reasoning
 - [>] Possession context contract in the ledger
 - [>] Ball control, dribble count, and pass-chain tracking
-- [ ] Offense zone, transition, and drive semantics
-- [>] Referee-assisted rewind and correction logic
+- [>] Offense zone, transition, and drive semantics
+- [ ] Referee-assisted rewind and correction logic
 
 ### Event Attribution and Stats Generation
 - [>] Event attribution rules combining motion, ball, and possession state
@@ -77,19 +68,19 @@ The current highest-priority frontier is:
 
 ### Collaboration, Review, and Project Control
 - [x] Gemini/Codex collaboration bridge and review workflow
-- [>] Plan-driven execution and task synchronization
+- [x] Plan-driven execution and task synchronization
 - [>] Documentation and task-status alignment
 
 ### MLOps Governance and Model Lifecycle Control
-- [ ] Dataset manifests, lineage, and validation policy
-- [ ] Training run lineage and checkpoint lifecycle
+- [>] Dataset manifests, lineage, and validation policy
+- [>] Training run lineage and checkpoint lifecycle
 - [ ] Slice-based evaluation and drift monitoring
 - [ ] Deployment compatibility reporting across cloud and edge targets
 
 ### DevOps Reproducibility and Delivery Control
 - [>] Guix-first development and environment reproducibility
 - [>] Docker fallback packaging and cloud image discipline
-- [ ] CI quality gates for code, contracts, and docs
+- [>] CI quality gates for code, contracts, and docs
 - [ ] Cloud and edge delivery guidance with explicit target boundaries
 - [ ] Multi-pipeline CI architecture by functional core
 - [ ] Terraform adoption for stable shared GCP infrastructure
@@ -102,66 +93,54 @@ The current highest-priority frontier is:
 - [x] Require plan-tree updates before substantial architecture or implementation changes
 - [x] Define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
 - [x] Add a perception-quality report artifact for representative clips
-- [ ] Document candidate Python-versus-Rust ownership split for ingestion, tracking, pose, geometry, and lifting
-- [ ] Decide the first migration target, if any, based on performance, determinism, and implementation risk
-- [ ] Define Oracle dataset manifest fields and validation checks
-- [ ] Record Action Brain training lineage beside each checkpoint
-- [ ] Make Docker docs explicitly cloud-oriented and not the native Orin story
-- [ ] Add a checked-in CI workflow for Python, Rust, docs, and contract checks
-- [ ] Publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
-- [ ] Define functional-core CI ownership and path triggers
-- [ ] Add a lightweight integration pipeline that depends on selected core workflows
-- [ ] Gate training smoke/evaluation workflows behind ML-specific changes or manual triggers
-- [ ] Define which GCP resources stay on direct `gcloud` versus move into Terraform
-- [ ] Add initial Terraform layout for shared buckets, registry, and service accounts
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
 - [ ] Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+- [ ] Generate MVP box-score rows from attributed events
+- [ ] Implement offense zone and transition flag derivation in the possession context
+- [ ] Document candidate Python-versus-Rust ownership split for the perception layer
+- [ ] Implement first-pass dataset manifests with SHA-256 hashing
+- [ ] Integrate training lineage recording (git commit + data hash) into training loop
+- [ ] Establish initial CI plumbing (.github/workflows/ci.yml)
+- [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
+
+### Active or Next
+- [ ] Verify actual CUDA acceleration in the Orin container (Refactored probe ready)
+- [ ] Decide the first migration target based on performance and risk (TrackManager identified)
 - [ ] Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
 - [ ] Add first slice reports for action class, camera/view, and pose quality
-- [ ] Implement offense zone and transition flag derivation in the possession context
 
 ## Product Reality Check
 
 What is currently true:
-- the Action Brain is a narrow local-motion classifier, not the full game-reasoning system
+- the Action Brain is a narrow local-motion classifier
 - `features_v2` remains the current frozen neural contract
-- Oracle scale-out code exists locally but the repo-local generated dataset has not yet been re-materialized as verification evidence
-- a GPU training path has produced an initial checkpoint
-- the layered feature architecture is now documented
-- MLOps is now a first-class product concern in the requirements, architecture, and plan
-- DevOps is now a first-class product concern in the requirements, architecture, and plan
-- the geometry layer now has a shared pure-Python module and a readiness-report artifact
-- local possession and stats code exists in Rust and Python, but end-to-end verification is still incomplete
-- Orin is the current first target for smoke tests and initial training runs
-- cloud remains the scale-out path after the Orin path is stable
+- the layered feature architecture is documented
+- the geometry layer has a shared module and readiness report artifact
+- an Orin container logic probe exists
+- basic manifest hashing, training lineage scaffolding, and initial CI plumbing now exist locally
+- possession and stat primitives exist locally in Rust and Python, but need tighter end-to-end verification
 
 What is not yet true:
-- perception and geometry are not yet explicitly gated as training-readiness inputs
-- the Python-versus-Rust boundary for this layer is not yet decided
-- possession and stats changes are not yet fully verified by repolocal tests in this shell
-- offense zone and transition flags are not yet derived in the possession context
-- dataset manifests and checkpoint lineage are not yet implemented
-- a checked-in CI workflow does not yet exist
+- Oracle scale-out has not yet been re-materialized and verified as an on-disk dataset artifact
+- the possession context contract is not yet proven end to end in inference output
+- CUDA acceleration is not yet proven in every runtime path
+- dataset promotion rules are not yet defined
 - the CI architecture is not yet split by functional core
 - no Terraform layer exists yet for shared GCP infrastructure
-- deployment guidance is not yet fully separated between Jetson/ARM64 and cloud/x86
 
 ## Quality Gates
 
-- [ ] Rust core logic re-verified in the current shell for PossessionContext and box-score changes
-- [ ] Python behavior-engine/perception gate tests re-verified in the current shell
+- [ ] Rust core logic verified for PossessionContext and box-score changes
+- [ ] Python behavior-engine/perception gate tests verified
 - [x] Synthetic Oracle tests passing
 - [x] Tooling review tests passing
 - [x] Documentation updated for layered feature architecture
 - [x] Planning invariant checked into `AGENTS.md`
+- [>] Orin hardware validation (CUDA/PyTorch)
 - [ ] Oracle dataset manifest validation implemented
 - [ ] Checkpoint lineage recording implemented
 - [ ] Slice-based evaluation report implemented
 - [x] Geometry readiness report artifact implemented
-- [ ] CI workflow implemented
-- [ ] Functional-core CI split implemented
-- [ ] Conditional training workflow implemented
-- [ ] Terraform baseline implemented for stable shared GCP resources
-- [ ] Cloud/x86 and Jetson/ARM64 runbooks published
+- [ ] Initial CI workflow implemented
