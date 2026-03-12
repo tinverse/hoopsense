@@ -14,7 +14,6 @@ from pipelines.audio_head import AudioHead
 LABEL_MAP_INV = {0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"}
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
-    """Dynamically builds the label map from the DSL categories."""
     if not os.path.exists(spec_path):
         return {0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"}
     with open(spec_path, 'r') as f:
@@ -28,7 +27,6 @@ def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
 LABEL_MAP_INV = get_label_map()
 
 class KalmanFilter:
-    """A simple linear Kalman filter for smoothing position data."""
     def __init__(self, process_variance=1e-4, measurement_variance=1e-2):
         self.process_variance = process_variance
         self.measurement_variance = measurement_variance
@@ -41,18 +39,14 @@ class KalmanFilter:
             self.posteri_estimate = measurement
             self.initialized = True
             return self.posteri_estimate
-
         priori_estimate = self.posteri_estimate
         priori_error_estimate = self.posteri_error_estimate + self.process_variance
-
         blending_factor = priori_error_estimate / (priori_error_estimate + self.measurement_variance)
         self.posteri_estimate = priori_estimate + blending_factor * (measurement - priori_estimate)
         self.posteri_error_estimate = (1 - blending_factor) * priori_error_estimate
-
         return self.posteri_estimate
 
 class TrackManager:
-    """Handles track lifecycle, Kalman filtering, and feature aggregation."""
     def __init__(self, tid):
         self.tid = tid
         self.kf_x = KalmanFilter()
@@ -62,7 +56,7 @@ class TrackManager:
         self.court_x = 0.0
         self.court_y = 0.0
         self.pos_3d = np.zeros(3)
-        self.team = 0 # 0: Unknown, 1: Home, 2: Away
+        self.team = 1 # Default to Home for now
 
     def update_position(self, x, y):
         self.court_x = self.kf_x.update(x)
@@ -72,7 +66,6 @@ class TrackManager:
     def add_keypoints(self, kpts, H):
         if kpts is not None:
             self.kpt_history.append(kpts)
-            # Update 3D position (using hips or midpoint of feet)
             kpts_np = np.array(kpts)
             if np.any(kpts_np[11:13] > 0):
                 self.pos_3d = lift_keypoints_to_3d(kpts_np, H)[11:13].mean(axis=0)
@@ -111,13 +104,10 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
         video_path = config.get("local_video_path", "data/sample.mp4")
     a_head = AudioHead()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Loading Unified Perception Model on {device}...")
     pose_model = YOLO('yolov8n-pose.pt')
     if smoke_test:
-        print("[SMOKE TEST] Initializing models and processing dummy frame...")
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         pose_model(dummy)
-        print("[SUCCESS] Models initialized.")
         return
     H = np.eye(3)
     if os.path.exists("data/calibration.json"):
@@ -127,19 +117,15 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
     brain_path = "data/models/action_brain.pt"
     if os.path.exists(brain_path):
         brain = ActionBrain(num_classes=len(LABEL_MAP_INV)).to(device)
-        brain.load_state_dict(torch.load(brain_path, map_location=device))
-        brain.eval()
+        brain.load_state_dict(torch.load(brain_path, map_location=device)); brain.eval()
     cap = cv2.VideoCapture(video_path)
     fps, w, h = cap.get(cv2.CAP_PROP_FPS) or 30.0, cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, "intelligent_game_dna.jsonl")
-    checkpoint_path = os.path.join(output_dir, "checkpoint.json")
-    frame_idx, resolved_ids = 0, {}
-    tracks = {}
+    frame_idx, tracks = 0, {}
     possession_engine = PossessionEngine()
     last_ball_2d = np.array([0.0, 0.0])
-    mode = 'a' if frame_idx > 0 else 'w'
-    with open(out_file, mode) as f:
+    with open(out_file, 'w') as f:
         while cap.isOpened():
             success, frame = cap.read()
             if not success: break
@@ -147,19 +133,16 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
             t_ms = int(frame_idx/fps*1000)
             results = pose_model.track(frame, persist=True, classes=[0, 32], verbose=False)
             if results[0].boxes.id is not None:
-                # 1. Ball Detection
                 ball_3d = None
                 for b, c, conf in zip(results[0].boxes.xywh, results[0].boxes.cls, results[0].boxes.conf):
                     if int(c) == 32:
                         last_ball_2d = np.array([float(b[0]), float(b[1])])
                         ball_court_xy = project_pixel_to_court(last_ball_2d[0], last_ball_2d[1], H)
-                        ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], 50.0]) # Assume dribble height
+                        ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], 50.0])
                         f.write(json.dumps({"kind": "ball", "t_ms": t_ms, "x": float(b[0]), "y": float(b[1]), "confidence_bps": int(conf*10000)}) + "\n")
-                # 2. Player Processing
                 boxes = results[0].boxes.xywh.cpu().numpy()
                 tids = results[0].boxes.id.int().cpu().numpy()
                 classes = results[0].boxes.cls.int().cpu().numpy()
-                confs = results[0].boxes.conf.cpu().numpy()
                 keypoints = results[0].keypoints.xyn.cpu().numpy() if results[0].keypoints is not None else None
                 player_map = {}
                 for i, tid in enumerate(tids):
@@ -170,11 +153,9 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
                         sx, sy = tm.update_position(raw_court_pos[0], raw_court_pos[1])
                         tm.add_keypoints(keypoints[i].tolist() if keypoints is not None else None, H)
                         player_map[tid] = {'pos_3d': tm.pos_3d, 'team': tm.team}
-                # 3. Possession & Layer 3 Events
                 pos_events = possession_engine.update(player_map, ball_3d, t_ms)
                 for ev in pos_events:
                     f.write(json.dumps(ev) + "\n")
-                # 4. Action Reasoning
                 for tid in player_map.keys():
                     tm = tracks[tid]
                     learned_label = None
