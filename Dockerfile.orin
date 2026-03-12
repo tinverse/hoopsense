@@ -1,0 +1,40 @@
+# HoopSense Orin Dockerfile
+# Base: NVIDIA L4T PyTorch (JetPack 5.1)
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+# 1. Install System Dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    curl \
+    ca-certificates \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1b. Install a modern Rust toolchain for the repo's Cargo.lock format.
+ENV RUSTUP_HOME=/root/.rustup
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --default-toolchain stable
+
+# 2. Upgrade Pip (Fixes dependency resolution issues)
+RUN python3 -m pip install --upgrade pip
+
+# 3. Install Python Dependencies
+# ultralytics requires torch/torchvision, which are pre-installed in the base image.
+# We install dependencies without upgrading torch to avoid breaking the L4T bindings.
+RUN pip3 install --no-cache-dir \
+    pyyaml \
+    ultralytics \
+    easyocr \
+    opencv-python-headless \
+    scipy
+
+# 4. Set Workspace
+WORKDIR /app
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+# 5. Default Command
+CMD ["/bin/bash"]
