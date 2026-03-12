@@ -7,10 +7,15 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **FR-02: Spatial Resolution:** Map 2D pixel coordinates to 3D court coordinates (X, Y, Z in cm) with <15cm error.
 - **FR-03: Temporal Consistency:** Maintain persistent identity (Player ID) across camera cuts, pans, and occlusions.
 - **FR-04: Action Recognition:** Identify basketball-specific events (Dribble, Shot, Pass, Crossover, Euro-step).
+- **FR-04a: Local Motion Classification:** Classify short-horizon player motion from synchronized pose and ball features.
+- **FR-04b: Possession Context Modeling:** Track possession origin, ballhandler, dribble count, pass chains, and offense zone outside the Action Brain.
+- **FR-04c: Event Attribution:** Combine local action predictions with possession context and geometry to infer shots, passes, rebounds, steals, fouls, and turnovers.
 - **FR-05: Referee API:** Decode official hand signals within a 2-second window to validate points and fouls.
 - **FR-06: Game State Ledger:** Implement a retroactive event-rewind system for fouls and score corrections.
 - **FR-07: Avatar Generation:** Export skeletal rigs in .gltf format compatible with Roblox/Minecraft/Unity.
 - FR-08: Defensive Intelligence: Calculate contest radii, defensive pressure, and "IQ" stats based on defender proximity.
+- **FR-10: Layered Feature Contracts:** Maintain a stable Action Brain feature contract (`features_v2`) while allowing richer possession, event, and stat features in higher layers.
+- **FR-11: Stat Generation:** Generate box-score events and derived player metrics from attributed events, not directly from neural logits.
 - FR-09: Action Taxonomy & Signal Decoding:
     - **Scoring Actions:** 1-pt, 2-pt, 3-pt attempts vs. makes.
     - **Dribble Actions:** Crossover, Between-the-legs, Behind-the-back, Hesitation.
@@ -31,3 +36,4 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **Rule Hierarchy:** NCAA > NBA > FIBA (Precedence for signal decoding and foul logic).
 - **ML Frameworks:** YOLOv11+ for detection, ViTPose/RTMPose for skeletal rigs, BoT-SORT for memory-backed tracking.
 - **Environment:** Guix-managed toolchains for deterministic builds.
+- **Feature Layering Constraint:** The Action Brain remains a narrow local classifier; possession logic and stats must remain separable and auditable.

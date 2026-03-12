@@ -15,7 +15,9 @@ The "Synthetic Oracle" works by running our **Spatial Resolver (Chapter 3)** in 
 
 Training on raw pixels (RGB) is hard because of lighting, jersey colors, and blur. However, training on **Skeletal Keypoints** is mathematically clean.
 
-By generating millions of skeletal sequences for "Crossovers" vs. "Normal Dribbles," our **Temporal-Transformer (Chapter 6)** can learn the "Physics of the Move" without ever needing a human to draw a box.
+By generating skeletal sequences for "Crossovers" vs. "Normal Dribbles," our **Temporal Transformer** can learn the "Physics of the Move" without ever needing a human to draw a box.
+
+This Oracle feeds the local motion layer. It does not directly generate official events or player stats. Those require the higher-layer possession and attribution logic described in `LAYERED_FEATURE_SCHEMA.md`.
 
 ## 3. The Move Taxonomy (Kinematic Signatures)
 
@@ -25,7 +27,7 @@ To generate a complete dataset, we define "Hard" kinematic signatures for every 
 | :--- | :--- | :--- |
 | **Jump Shot** | Rising hips + Wrists flickering above head apex. | Spot high-value scoring events. |
 | **Crossover** | Lateral hip sway + Rapid wrist-Z oscillation. | Identify ball-handling elite moves. |
-| **Rebound** | Maximum vertical extension + Downward wrist snap. | Attribute possession after misses. |
+| **Rebound** | Maximum vertical extension + Downward wrist snap. | Provide local motion evidence for later possession attribution. |
 | **Block** | Lateral jump + High-velocity hand swat at apex. | Measure defensive impact. |
 | **Steal** | Forward lunging torso + Low-Z hand reach. | Identify defensive IQ / turnovers. |
 
@@ -37,9 +39,10 @@ To ensure the AI works in a real, messy gym, we inject **Synthetic Noise** into 
 
 ## 5. The Loop: Synthetic -> Ref-API -> Real
 
-1.  **Synthetic:** Train the baseline model on millions of computer-generated moves.
+1.  **Synthetic:** Train the baseline Action Brain on Oracle-generated motion windows.
 2.  **Ref-API:** Deploy the model in a real gym. Use the human Referee's signals (Chapter 7) to confirm if the model's guess was right.
 3.  **Feedback:** Use the Referee-validated "Real" data to fine-tune the model, closing the gap between simulation and reality.
+4.  **Attribution:** Combine the model output with possession context and geometry to generate explainable basketball events and stats.
 
 ---
 
@@ -47,3 +50,4 @@ To ensure the AI works in a real, messy gym, we inject **Synthetic Noise** into 
 -   **3D MoCap** provides the "Physics."
 -   **Projective Geometry** provides the "Perspective."
 -   **Auto-labeling** provides the "Scale."
+-   **Possession and stats layers** provide the basketball meaning above local motion labels.

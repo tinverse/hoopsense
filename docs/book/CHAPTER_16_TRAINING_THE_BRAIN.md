@@ -1,6 +1,8 @@
 # Chapter 16: Training the Temporal Brain – Self-Attention & Sim-to-Real
 
-We treat basketball understanding as a high-dimensional sequence classification problem. This chapter details the **Temporal Transformer** architecture used to extract semantic intent from the multimodal kinematic manifold.
+We treat local basketball motion understanding as a high-dimensional sequence classification problem. This chapter details the **Temporal Transformer** architecture used by the Action Brain to classify short motion windows from the multimodal kinematic manifold.
+
+This chapter is intentionally narrow. The Action Brain predicts local motion classes. Possession context, event attribution, and stat generation are separate higher layers.
 
 ## 1. The Multi-Head Self-Attention Mechanism
 
@@ -29,9 +31,18 @@ The primary challenge in our "Double Hybrid" strategy is the **Domain Shift** be
 2.  **Multimodal Consistency:** By including the **Ball-to-Wrist Distance** (grounded in cm), we provide a feature that is robust to 2D pixel noise. The "Physics of the Ball" acts as a regularizer for the "Noise of the Pose."
 3.  **Label Smoothing:** We use Soft-Labels to account for the temporal vagueness of when an action truly "starts" or "ends."
 
+## 4. What This Model Does Not Do
+- It does not decide who started the possession.
+- It does not decide whether a pass became an assist.
+- It does not maintain a game ledger.
+- It does not directly output box-score statistics.
+
+Those responsibilities belong to the layers above the Action Brain.
+
 ---
 
 **Research Summary:**
 - **Attention:** Replaces manual heuristics with learned relevance weights.
 - **Topology:** Preserved via harmonic positional signals.
 - **Robustness:** Achieved through adversarial noise injection in the Synthetic Oracle.
+- **System boundary:** The model is a local classifier inside a larger reasoning stack.

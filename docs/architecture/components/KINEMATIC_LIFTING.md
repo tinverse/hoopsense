@@ -16,5 +16,15 @@ We solve depth ambiguity using three anchors:
 - **Stage 1:** Simple Geometric Lifting (using known bone lengths).
 - **Stage 2:** Learned Lifting (training a model to predict 3D from 2D using our Synthetic Oracle as ground truth).
 
-## 4. Output: The Avatar Rig
-The result is a stream of (X, Y, Z) coordinates ready for mapping to standard humanoid bones in `.gltf` format.
+## 4. Output: Shared Geometry for Multiple Layers
+The result is a stream of `(X, Y, Z)` coordinates in HoopSense court coordinates:
+- `X, Y`: court plane
+- `Z`: height
+
+This geometric stream is shared by multiple downstream consumers:
+- the Synthetic Oracle projection path
+- Action Brain feature construction
+- possession and spacing analysis
+- avatar export to `.gltf`
+
+Lifting is therefore a geometry service, not an Action Brain-specific output.

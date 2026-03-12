@@ -26,13 +26,23 @@
 
 ### UC-01: Game-Day Automated Tracking
 - **Actor:** Coach / HoopBox
-- **Description:** The system ingests a fixed or panning feed, identifies all players, and maintains a "Game DNA" ledger.
-- **Outcome:** A JSONL stream of all movements and events.
+- **Description:** The system ingests a fixed or panning feed, identifies all players, classifies local motion, tracks possession context, and maintains a "Game DNA" ledger.
+- **Outcome:** A JSONL stream of movements, attributed events, and stat-ready possession context.
 
 ### UC-02: Referee Signal Reconciliation
 - **Actor:** System / Referee
 - **Description:** The AI identifies a "3-point attempt" signal from the Ref and looks back 2 seconds to confirm the shot origin.
 - **Outcome:** Official validation of the inferred statistic.
+
+### UC-04: Possession Reasoning
+- **Actor:** Coach / Analyst
+- **Description:** The system tracks how a possession started, who handled the ball, how many dribbles occurred, and where the offense moved on the floor before the event.
+- **Outcome:** A possession timeline that supports pass-chain analysis, drive identification, and transition vs half-court reasoning.
+
+### UC-05: Stat Attribution
+- **Actor:** Coach / Analyst / Athlete
+- **Description:** The system combines local action predictions, ball trajectory, court geometry, and possession state to decide whether a sequence is a shot attempt, assist opportunity, rebound, steal, or turnover.
+- **Outcome:** Box-score stats and explainable event records rather than raw neural labels.
 
 ### UC-03: Virtual Avatar Export
 - **Actor:** Athlete
