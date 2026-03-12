@@ -2,6 +2,30 @@
 
 This repository uses a project-scoped Gemini collaboration workflow in addition to the primary coding agent.
 
+## Planning Invariant
+
+- Plan-first execution is required for substantial work.
+- Before architecture changes, feature work, or multi-file implementation, update `docs/plan/PLAN_TREE.yaml`.
+- Decompose requirements into executable tasks in the plan tree before coding.
+- Prioritize work from the current plan frontier instead of ad hoc task selection.
+- When coordinating with Gemini or other agents, use the plan tree as the source of truth for:
+  - task boundaries
+  - ownership
+  - priority
+  - completion status
+- If implementation changes the task graph, update the plan tree before or alongside the code change.
+- `TASK_STATUS.md` is a human-readable execution snapshot and should be kept aligned with the plan tree, not used as the sole planning artifact.
+
+## Planning Workflow
+
+For substantial tasks:
+1. Update `docs/plan/PLAN_TREE.yaml`.
+2. Expand the relevant requirement into concrete child tasks until the next frontier is implementable and testable.
+3. Prioritize the frontier.
+4. Consult Gemini when useful on requirements, use cases, architecture, design, or implementation.
+5. Execute the highest-priority task slice.
+6. Reconcile code, tests, docs, and `TASK_STATUS.md` back to the plan tree.
+
 ## Persistent Gemini Session
 
 - Use the project-scoped Gemini session, not ad hoc folder-specific chats.

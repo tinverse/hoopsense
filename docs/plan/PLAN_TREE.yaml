@@ -1,0 +1,325 @@
+meta:
+  project: HoopSense
+  lifecycle: requirements-first SDLC
+  strategy: breadth-first with MVP-first frontiers
+  branching_rule: "each expanded parent should usually have 3-5 children"
+  leaf_rule: "leaf node must be implementable, testable, and reviewable"
+  confidence_gate: "advance the frontier only when the current slice is validated"
+  source_requirements: docs/plan/REQUIREMENTS.md
+  supporting_docs:
+    - docs/architecture/components/LAYERED_FEATURE_SCHEMA.md
+    - docs/architecture/components/FEATURE_SCHEMA_V2.md
+    - docs/architecture/ML_OPS_STRATEGY.md
+    - TASK_STATUS.md
+  last_updated: "2026-03-12"
+
+levels:
+  L0:
+    - id: L0.1
+      title: Trustworthy basketball understanding from video
+      owner: A0
+      status: in_progress
+
+  L1:
+    - id: L1.1
+      parent: L0.1
+      title: Perception and geometry foundation
+      owner: A0
+      status: in_progress
+    - id: L1.2
+      parent: L0.1
+      title: Action Brain and synthetic Oracle training loop
+      owner: A0
+      status: in_progress
+    - id: L1.3
+      parent: L0.1
+      title: Possession context and game-state reasoning
+      owner: A0
+      status: pending
+    - id: L1.4
+      parent: L0.1
+      title: Event attribution and stats generation
+      owner: A0
+      status: pending
+    - id: L1.5
+      parent: L0.1
+      title: Deployment, runtime, and operator workflow
+      owner: A0
+      status: in_progress
+    - id: L1.6
+      parent: L0.1
+      title: Collaboration, review, and project control
+      owner: A0
+      status: in_progress
+    - id: L1.7
+      parent: L0.1
+      title: MLOps governance and model lifecycle control
+      owner: A0
+      status: in_progress
+
+  L2:
+    - id: L2.1
+      parent: L1.1
+      title: Multi-source ingestion and deterministic video contracts
+      owner: A0
+      status: completed
+    - id: L2.2
+      parent: L1.1
+      title: Court geometry, homography, and camera state
+      owner: A0
+      status: completed
+    - id: L2.3
+      parent: L1.1
+      title: Identity fusion, tracking, and temporal continuity
+      owner: A0
+      status: in_progress
+    - id: L2.4
+      parent: L1.1
+      title: Pose estimation and kinematic lifting
+      owner: A0
+      status: in_progress
+
+    - id: L2.5
+      parent: L1.2
+      title: Stable Action Brain feature contract (`features_v2`)
+      owner: A0
+      status: completed
+    - id: L2.6
+      parent: L1.2
+      title: Oracle MoCap ingestion, FK, and dataset generation
+      owner: A0
+      status: in_progress
+    - id: L2.7
+      parent: L1.2
+      title: Action Brain training, evaluation, and checkpoint lifecycle
+      owner: A0
+      status: in_progress
+    - id: L2.8
+      parent: L1.2
+      title: Sim-to-real fine-tuning and validation loop
+      owner: A0
+      status: pending
+
+    - id: L2.9
+      parent: L1.3
+      title: Possession context contract in the ledger
+      owner: A0
+      status: pending
+    - id: L2.10
+      parent: L1.3
+      title: Ball control, dribble count, and pass-chain tracking
+      owner: A0
+      status: pending
+    - id: L2.11
+      parent: L1.3
+      title: Offense zone, transition, and drive semantics
+      owner: A0
+      status: pending
+    - id: L2.12
+      parent: L1.3
+      title: Referee-assisted rewind and correction logic
+      owner: A0
+      status: in_progress
+
+    - id: L2.13
+      parent: L1.4
+      title: Event attribution rules combining motion, ball, and possession state
+      owner: A0
+      status: pending
+    - id: L2.14
+      parent: L1.4
+      title: Stat ledger and box-score generation
+      owner: A0
+      status: pending
+    - id: L2.15
+      parent: L1.4
+      title: Shot chart, defensive metrics, and report outputs
+      owner: A0
+      status: pending
+
+    - id: L2.16
+      parent: L1.5
+      title: Native Orin environment and ARM64 runtime validation
+      owner: A0
+      status: in_progress
+    - id: L2.17
+      parent: L1.5
+      title: Cloud/x86 training environment and artifact parity
+      owner: A0
+      status: in_progress
+    - id: L2.18
+      parent: L1.5
+      title: Real-time inference pipeline and model optimization
+      owner: A0
+      status: pending
+
+    - id: L2.19
+      parent: L1.6
+      title: Gemini/Codex collaboration bridge and review workflow
+      owner: A0
+      status: completed
+    - id: L2.20
+      parent: L1.6
+      title: Plan-driven execution and task synchronization
+      owner: A0
+      status: in_progress
+    - id: L2.21
+      parent: L1.6
+      title: Documentation and task-status alignment
+      owner: A0
+      status: in_progress
+
+    - id: L2.22
+      parent: L1.7
+      title: Dataset manifests, lineage, and validation policy
+      owner: A0
+      status: pending
+    - id: L2.23
+      parent: L1.7
+      title: Training run lineage and checkpoint lifecycle
+      owner: A0
+      status: pending
+    - id: L2.24
+      parent: L1.7
+      title: Slice-based evaluation and drift monitoring
+      owner: A0
+      status: pending
+    - id: L2.25
+      parent: L1.7
+      title: Deployment compatibility reporting across cloud and edge targets
+      owner: A0
+      status: pending
+
+  L3:
+    - id: L3.1
+      parent: L2.4
+      title: Finish `.gltf` rig mapping from lifted skeleton output
+      owner: A0
+      status: pending
+    - id: L3.2
+      parent: L2.4
+      title: Add biometric lift-derived metrics such as release height and jump vertical
+      owner: A0
+      status: pending
+
+    - id: L3.3
+      parent: L2.6
+      title: Preserve the Oracle MVP parser/FK path for one fixture motion
+      owner: A0
+      status: completed
+    - id: L3.4
+      parent: L2.6
+      title: Scale Oracle ingestion to subject 124 while preserving `features_v2`
+      owner: A0
+      status: pending
+    - id: L3.5
+      parent: L2.6
+      title: Scale Oracle ingestion to additional basketball subjects after validation
+      owner: A0
+      status: pending
+    - id: L3.6
+      parent: L2.7
+      title: Maintain a reproducible GPU training smoke test and checkpoint write path
+      owner: A0
+      status: completed
+    - id: L3.7
+      parent: L2.7
+      title: Expand dataset size and class coverage beyond the current 4-class Oracle slice
+      owner: A0
+      status: pending
+    - id: L3.8
+      parent: L2.7
+      title: Evaluate Action Brain on real pose sequences using the current checkpoint
+      owner: A0
+      status: pending
+
+    - id: L3.9
+      parent: L2.9
+      title: Define `PossessionContext` fields and ledger serialization contract
+      owner: A0
+      status: pending
+    - id: L3.10
+      parent: L2.10
+      title: Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
+      owner: A0
+      status: pending
+    - id: L3.11
+      parent: L2.11
+      title: Add coarse `offense_zone` and `transition_flag` derivation
+      owner: A0
+      status: pending
+    - id: L3.12
+      parent: L2.13
+      title: Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+      owner: A0
+      status: pending
+    - id: L3.13
+      parent: L2.14
+      title: Generate MVP box-score rows from attributed events
+      owner: A0
+      status: pending
+
+    - id: L3.14
+      parent: L2.16
+      title: Keep Orin host and container validation commands documented and repeatable
+      owner: A0
+      status: in_progress
+    - id: L3.15
+      parent: L2.17
+      title: Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
+      owner: A0
+      status: pending
+
+    - id: L3.16
+      parent: L2.20
+      title: Require plan-tree updates before substantial architecture or implementation changes
+      owner: A0
+      status: completed
+    - id: L3.17
+      parent: L2.21
+      title: Bring `TASK_STATUS.md` into alignment with the layered feature plan
+      owner: A0
+      status: pending
+    - id: L3.18
+      parent: L2.22
+      title: Define Oracle dataset manifest fields and validation checks
+      owner: A0
+      status: pending
+    - id: L3.19
+      parent: L2.23
+      title: Record Action Brain training lineage beside each checkpoint
+      owner: A0
+      status: pending
+    - id: L3.20
+      parent: L2.24
+      title: Add first slice reports for action class, camera/view, and pose quality
+      owner: A0
+      status: pending
+    - id: L3.21
+      parent: L2.24
+      title: Define drift baselines for action distribution, pose confidence, and ball visibility
+      owner: A0
+      status: pending
+    - id: L3.22
+      parent: L2.25
+      title: Publish explicit compatibility records for cloud/x86 and Jetson/ARM64 artifacts
+      owner: A0
+      status: pending
+
+priorities:
+  current_frontier:
+    - L3.17
+    - L3.18
+    - L3.19
+    - L3.4
+    - L3.9
+    - L3.10
+    - L3.12
+    - L3.15
+    - L3.20
+  rationale:
+    - Align task tracking with the actual architecture before more feature work lands.
+    - Put dataset and checkpoint governance in place before scaling training complexity.
+    - Expand the Oracle only after the MVP contract stays stable.
+    - Introduce possession context before attempting stats generation.
+    - Keep deployment guidance separated by platform to avoid environment drift.

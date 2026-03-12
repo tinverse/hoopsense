@@ -2,6 +2,8 @@
 
 HoopSense uses a **Core-and-Satellite** architecture to separate performance-critical vision logic from high-level application orchestration.
 
+The product architecture is also governed by a layered MLOps strategy. Data artifacts, feature contracts, evaluation reports, and model promotion records are first-class components of the system, not implementation byproducts.
+
 ## 1. The Prototyping Intelligence Stack (Python-First)
 
 Currently, HoopSense utilizes a Python-based perception pipeline for rapid iteration and model validation. The long-term goal is to migrate performance-critical perception to Rust.
@@ -15,21 +17,26 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Tech:** EasyOCR + HSV Clustering + Heuristic Rules.
 - **Responsibility:** Maps track IDs to jersey numbers; identifies high-level actions (Jump Shot) and referee signals via kinematic heuristics.
 
-### Layer 3: The Geometric Muscle (Rust Core)
+### Layer 3: Action Brain (Python Training / Inference Runtime)
+- **Tech:** Temporal Transformer over `features_v2`.
+- **Responsibility:** Performs narrow local-motion classification from pose, velocity, ball-distance, and court-position features.
+- **Boundary:** Does not directly own possession state, event attribution, or box-score stats.
+
+### Layer 4: The Geometric Muscle (Rust Core)
 - **Implementation:** **Rust (hoopsense-core)**
 - **Responsibility:** High-performance spatial math. Handles Lens Undistortion, Homography (DLT), Camera Pose (PnP), and Dynamic SLAM-lite state tracking.
 - **Value:** This is the deterministic "measurement" layer that ensures 3D stat accuracy.
 
-### Layer 4: The Game State Ledger (Rust Core)
-- **Responsibility:** Consolidates events into an official, retroactive ledger with temporal reconciliation.
+### Layer 5: The Game State Ledger (Rust Core)
+- **Responsibility:** Consolidates possession context and events into an official, retroactive ledger with temporal reconciliation.
 - **Output:** Shush Contract JSONL stream + Player Statistics.
 
-### Layer 5: Physics & Trajectory (Rust Core)
+### Layer 6: Physics & Trajectory (Rust Core)
 - **Tech:** Parabolic Least Squares Fitting.
 - **Responsibility:** Predicts ball flight paths; identifies shot apex (arc); and detects 3D rim intersections for deterministic scoring.
 - **Value:** Smoothes noisy visual detections into physically valid movements.
 
-### Layer 6: Acoustic Auditing (Audio Head)
+### Layer 7: Acoustic Auditing (Audio Head)
 - **Tech:** Keyword Spotting (CNN/Whisper).
 - **Responsibility:** Identifies localized vocal cues ("Sub!", "Time-out!") to provide temporal anchors for state changes.
 - **Value:** Ignores non-localized environmental noise like distant whistles.
@@ -48,7 +55,12 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Responsibility:** Audits every feature implementation for compliance with project mandates (Teach-First, Design-First), logic bugs, and NCAA consistency.
 - **Mechanism:** A pre-commit/manual trigger that generates a comprehensive review prompt based on staged git diffs.
 
-## 2. The Capture Ecosystem (Satellites)
+### MLOps Control Plane
+- **Responsibility:** Governs dataset manifests, feature-contract validation, training run lineage, evaluation reports, promotion state, and deployment compatibility.
+- **Key Rule:** No dataset or checkpoint should be treated as production-ready without explicit validation evidence.
+- **Scope:** Covers both cloud/x86 training and Jetson/ARM64 deployment targets.
+
+## 4. The Capture Ecosystem (Satellites)
 
 ### Mobile Lens (Thin Client)
 - **Environment:** Android/iOS.
@@ -62,7 +74,7 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Tech:** Magic Lantern fork.
 - **Feature:** High-bitrate capture and focal-length telemetry for registered photographers.
 
-## 3. Cloud Deployment Strategy (Scaling)
+## 5. Cloud Deployment Strategy (Scaling)
 
 ### Containerization (The Guix-Docker Bridge)
 - **Method:** `guix pack -f docker`
@@ -74,5 +86,19 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Compute Engine (GCE) + GPU:** Headless batch processing of large video datasets using the HoopSense Docker image.
 - **Cloud Storage:** Standardized landing zone for raw video ingestion and JSONL "Shush" outputs.
 
-## 4. The Data Flow (The "Shush" Contract)
+## 6. The Data Flow (The "Shush" Contract)
 All layers communicate via a standardized JSONL format, ensuring the "Brain" (Rust) can process data regardless of the "Eye" (Mobile/HoopBox/DSLR).
+
+## 7. The ML Artifact Flow
+
+HoopSense treats the ML lifecycle as an explicit artifact graph:
+1. source data and Oracle assets
+2. validated datasets and manifests
+3. feature-contract validation
+4. training configs and runs
+5. candidate checkpoints
+6. evaluation and slice reports
+7. promotion records
+8. deployment-target compatibility reports
+
+This ML artifact flow is part of the product architecture because bad lineage or silent contract drift can invalidate downstream basketball reasoning.

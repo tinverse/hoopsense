@@ -1,61 +1,117 @@
 # HoopSense Task Status
 
-**Current Frontier:** Part I: Chapter 3 (Spatial Resolver - Rust Math Kernel)
+This file is a human-readable execution snapshot derived from `docs/plan/PLAN_TREE.yaml`.
 
-## Part I: The Lens & The Pixel (Ingestion)
-- [x] Chapter 1: Identity Fusion & The MVP Pipeline (Python)
-- [x] Chapter 2: The Data Ingestion Interface (JSONL Contract)
-- [x] Chapter 3: The Spatial Resolver (Rust)
-- [x] Foundation: Agent-Based Review Infrastructure (tools/review)
-- [x] Foundation: Headless Colab Automator (hoops colab / hoops collect)
-- [x] Geometric Truths: Spatial Rules Engine (Rust)
-- [x] Orchestration: Rust Spatial Processor (Bridge)
+## Current Frontier
 
-## Part II: The Machine Mind (Inference)
-- [x] Chapter 4: The Perceiver (YOLO Fine-tuning)
-- [>] Chapter 5: The Kinematic Rig (Pose Estimation) - **IN PROGRESS**
-  - [x] 17-point skeletal extraction (YOLOv8-pose)
-  - [x] Stage 1 Kinematic Lifting (Pseudo-Z)
-  - [ ] Rig mapping to .gltf
-  - [ ] Biometric stat inference (Release height, Jump vertical)
-- [x] Chapter 6: Action Recognition (Temporal Transformers)
-  - [x] Custom Temporal Transformer Architecture (PyTorch)
-  - [x] Training pipeline for synthetic MoveLibrary
-  - [x] Synchronized Taxonomy (DSL <-> Brain)
-  - [x] Professional Training Loop (Stratified, GPU, Per-Class Metrics)
-  - [>] Bio-mechanical Synthetic Oracle (Anatomical Constraints) - **MVP RESTORED**
-    - [x] ASF/AMC parser + FK MVP for one motion fixture
-    - [x] 17-point adapter + `features_v2` compatibility
-    - [ ] Scale-out: Multi-subject integration (06, 102, 124)
-  - [ ] Fine-tuning on Ref-API validated real data
+The current highest-priority frontier is:
+- align this status file with the plan tree and layered architecture
+- define Oracle dataset manifests and validation checks
+- record Action Brain training lineage beside checkpoints
+- scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
+- define the `PossessionContext` contract and the first ballhandler/dribble/pass tracking slice
+- define the first stat-ready event set
+- separate cloud/x86 and Jetson/ARM64 deployment guidance
+- add first slice-based evaluation outputs
 
+## L0 Product Goal
 
-## Part III: The Official Logic (Game Sense)
-- [x] Chapter 7: The Ref-API (Signal Detection)
-- [>] Chapter 8: The Game State Ledger (Rewind/Logic) - **IN PROGRESS**
-  - [x] Rust Ledger with Pending/History state
-  - [x] 2-second event validation loop
-  - [ ] Retroactive rewind/correction logic
-- [ ] Chapter 9: Defensive Intelligence (IQ Stats)
-- [ ] Chapter 9: Defensive Intelligence (IQ Stats)
+- [>] Trustworthy basketball understanding from video
 
-## Part IV: The Ecosystem (Monetization & Gaming)
-- [>] Chapter 10: The Avatar Pipeline (.gltf Export) - **IN PROGRESS**
-  - [x] Synthetic Data Generator (Procedural MoCap -> 2D)
-  - [ ] 3D joint reconstruction from 2D sequence
-  - [ ] Rig mapping to .gltf
-- [ ] Chapter 11: The NIL Marketplace (Ad Branding)
-- [ ] Chapter 12: Scaling the Network
-- [>] Chapter 13: NVIDIA Orin Migration (HoopBox) - **IN PROGRESS**
-  - [x] ARM64 Guix Manifest (`guix_orin.scm`)
-  - [x] Hardware Bridge Script (`setup_orin.sh`)
-  - [ ] TensorRT Model Optimization
-  - [ ] Real-time Inference Pipeline (JetPack + VPI)
+## L1 Workstreams
 
+- [>] Perception and geometry foundation
+- [>] Action Brain and synthetic Oracle training loop
+- [ ] Possession context and game-state reasoning
+- [ ] Event attribution and stats generation
+- [>] Deployment, runtime, and operator workflow
+- [>] Collaboration, review, and project control
+- [>] MLOps governance and model lifecycle control
 
-## Quality Gates & Verification
-- [x] Rust Core Logic Tests (7/7 Passing)
-- [x] Python Behavior Engine Tests (3/3 Passing)
-- [x] Synthetic Projection Tests (2/2 Passing)
-- [x] Contract Schema Validation (tools/review)
-- [x] Agent-Based Review Infrastructure
+## L2 Status By Workstream
+
+### Perception and Geometry Foundation
+- [x] Multi-source ingestion and deterministic video contracts
+- [x] Court geometry, homography, and camera state
+- [>] Identity fusion, tracking, and temporal continuity
+- [>] Pose estimation and kinematic lifting
+
+### Action Brain and Synthetic Oracle
+- [x] Stable Action Brain feature contract (`features_v2`)
+- [>] Oracle MoCap ingestion, FK, and dataset generation
+- [>] Action Brain training, evaluation, and checkpoint lifecycle
+- [ ] Sim-to-real fine-tuning and validation loop
+
+### Possession Context and Game-State Reasoning
+- [ ] Possession context contract in the ledger
+- [ ] Ball control, dribble count, and pass-chain tracking
+- [ ] Offense zone, transition, and drive semantics
+- [>] Referee-assisted rewind and correction logic
+
+### Event Attribution and Stats Generation
+- [ ] Event attribution rules combining motion, ball, and possession state
+- [ ] Stat ledger and box-score generation
+- [ ] Shot chart, defensive metrics, and report outputs
+
+### Deployment, Runtime, and Operator Workflow
+- [>] Native Orin environment and ARM64 runtime validation
+- [>] Cloud/x86 training environment and artifact parity
+- [ ] Real-time inference pipeline and model optimization
+
+### Collaboration, Review, and Project Control
+- [x] Gemini/Codex collaboration bridge and review workflow
+- [>] Plan-driven execution and task synchronization
+- [>] Documentation and task-status alignment
+
+### MLOps Governance and Model Lifecycle Control
+- [ ] Dataset manifests, lineage, and validation policy
+- [ ] Training run lineage and checkpoint lifecycle
+- [ ] Slice-based evaluation and drift monitoring
+- [ ] Deployment compatibility reporting across cloud and edge targets
+
+## Key L3 Execution Slices
+
+### Completed
+- [x] Preserve the Oracle MVP parser/FK path for one fixture motion
+- [x] Maintain a reproducible GPU training smoke test and checkpoint write path
+- [x] Require plan-tree updates before substantial architecture or implementation changes
+
+### Active or Next
+- [ ] Bring `TASK_STATUS.md` into alignment with the layered feature plan
+- [ ] Define Oracle dataset manifest fields and validation checks
+- [ ] Record Action Brain training lineage beside each checkpoint
+- [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
+- [ ] Define `PossessionContext` fields and ledger serialization contract
+- [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
+- [ ] Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+- [ ] Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
+- [ ] Add first slice reports for action class, camera/view, and pose quality
+
+## Product Reality Check
+
+What is currently true:
+- the Action Brain is a narrow local-motion classifier, not the full game-reasoning system
+- `features_v2` remains the current frozen neural contract
+- the Oracle MVP is restored and usable for one fixture motion
+- a GPU training path has produced an initial checkpoint
+- the layered feature architecture is now documented
+- MLOps is now a first-class product concern in the requirements, architecture, and plan
+
+What is not yet true:
+- possession context is not yet implemented as a durable ledger contract
+- event attribution and stats generation are not yet complete
+- dataset manifests and checkpoint lineage are not yet implemented
+- deployment guidance is not yet fully separated between Jetson/ARM64 and cloud/x86
+- `TASK_STATUS.md` was previously stale and is now being reset around the plan tree
+
+## Quality Gates
+
+- [x] Rust core logic tests passing
+- [x] Python behavior-engine tests passing
+- [x] Synthetic Oracle tests passing
+- [x] Tooling review tests passing
+- [x] Documentation updated for layered feature architecture
+- [x] Planning invariant checked into `AGENTS.md`
+- [ ] Oracle dataset manifest validation implemented
+- [ ] Checkpoint lineage recording implemented
+- [ ] Slice-based evaluation report implemented
