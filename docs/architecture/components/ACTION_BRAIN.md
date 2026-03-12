@@ -11,6 +11,8 @@ Instead of raw pixels, we feed a 3D tensor of shape `(Batch, 30, D)`.
     - `court_x`, `court_y`: Global position on the court (cm).
 - **Total Dimension (D):** 72.
 
+This input contract should stay narrow. Possession reasoning, event attribution, and stat generation belong in higher layers defined in `LAYERED_FEATURE_SCHEMA.md`.
+
 ## 2. Model Architecture
 - **Layer 1: Linear Projection:** Maps 72 features to a higher-dimensional embedding space (e.g., 256).
 - **Layer 2: Positional Encoding:** Injects temporal sequence information.

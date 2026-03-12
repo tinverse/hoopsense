@@ -2,6 +2,8 @@
 
 This document defines the exact ordering and normalization of the 72-dimensional Multimodal Feature Tensor.
 
+For the broader multi-layer feature system used by possession reasoning and stats generation, see `LAYERED_FEATURE_SCHEMA.md`.
+
 ## Schema Version: 2.0.0
 
 | Index Range | Feature Group | Sub-Features | Normalization |
