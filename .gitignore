@@ -8,7 +8,7 @@ core/target/
 **/*.rs.bk
 
 # Data & Models
-data/
+/data/
 *.jsonl
 *.pt
 
@@ -28,6 +28,8 @@ venv/
 .gemini/
 venv_temp/
 venv_hoops/
+venv_scan/
+*.log
 
 # Media
 *.mp4
