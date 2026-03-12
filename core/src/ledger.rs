@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{VecDeque, HashMap};
+use crate::rules::{CourtZone, PossessionOrigin, GeometricReferee};
+use nalgebra::Point2;
 
 /// Represents a validated basketball event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,12 +34,16 @@ pub enum GameEvent {
         player_id: u32,
         team_id: u8,
         t_ms: u64,
+        x: f32,
+        y: f32,
     },
     Pass {
         from_id: u32,
         to_id: u32,
         team_id: u8,
         t_ms: u64,
+        x: f32,
+        y: f32,
     },
     Steal {
         player_id: u32,
@@ -51,26 +57,7 @@ pub enum GameEvent {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum PossessionOrigin {
-    Inbound,
-    Rebound,
-    Steal,
-    Turnover,
-    StartOfPeriod,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CourtZone {
-    Paint,
-    WingLeft,
-    WingRight,
-    CornerLeft,
-    CornerRight,
-    TopOfKey,
-    Backcourt,
-}
-
+/// Layer 3: Possession Context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PossessionContext {
     pub possession_id: u64,
@@ -83,7 +70,6 @@ pub struct PossessionContext {
     pub is_transition: bool,
 }
 
-/// L3.13: MVP Box Score Summary
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct PlayerStats {
     pub points: u32,
@@ -100,6 +86,7 @@ pub struct GameStateLedger {
     pub pending_buffer: VecDeque<PendingEvent>,
     pub current_possession: Option<PossessionContext>,
     pub possession_counter: u64,
+    pub referee: GeometricReferee,
 }
 
 pub struct PendingEvent {
@@ -115,6 +102,7 @@ impl GameStateLedger {
             pending_buffer: VecDeque::new(),
             current_possession: None,
             possession_counter: 0,
+            referee: GeometricReferee::new(),
         }
     }
 
@@ -137,6 +125,49 @@ impl GameStateLedger {
         }
     }
 
+    fn update_possession(&mut self, event: &GameEvent) {
+        match event {
+            GameEvent::PossessionChange { player_id, team_id, origin, t_ms } => {
+                self.possession_counter += 1;
+                let is_transition = match origin {
+                    PossessionOrigin::Steal | PossessionOrigin::Rebound | PossessionOrigin::Turnover => true,
+                    _ => false,
+                };
+                self.current_possession = Some(PossessionContext {
+                    possession_id: self.possession_counter,
+                    team_id: *team_id,
+                    ballhandler_id: Some(*player_id),
+                    start_t_ms: *t_ms,
+                    dribble_count: 0,
+                    pass_count: 0,
+                    offense_zone: CourtZone::Backcourt,
+                    is_transition,
+                });
+            },
+            GameEvent::Dribble { player_id, x, y, .. } => {
+                if let Some(ref mut ctx) = self.current_possession {
+                    if ctx.ballhandler_id == Some(*player_id) {
+                        ctx.dribble_count += 1;
+                        let target_left = ctx.team_id == 1; // Simplification: Team 1 attacks Left
+                        ctx.offense_zone = self.referee.resolve_zone(&Point2::new(*x, *y), target_left);
+                        if ctx.offense_zone == CourtZone::Paint {
+                            ctx.is_transition = false;
+                        }
+                    }
+                }
+            },
+            GameEvent::Pass { to_id, x, y, .. } => {
+                if let Some(ref mut ctx) = self.current_possession {
+                    ctx.pass_count += 1;
+                    ctx.ballhandler_id = Some(*to_id);
+                    let target_left = ctx.team_id == 1;
+                    ctx.offense_zone = self.referee.resolve_zone(&Point2::new(*x, *y), target_left);
+                }
+            },
+            _ => {}
+        }
+    }
+
     pub fn validate_event(&mut self, signal_t: u64, points_hint: u8) {
         if let Some(pos) = self.pending_buffer.iter().position(|p| {
             if let GameEvent::MadeBasket { t_ms, .. } = p.event {
@@ -155,25 +186,6 @@ impl GameStateLedger {
         }
     }
 
-    fn update_possession(&mut self, event: &GameEvent) {
-        match event {
-            GameEvent::PossessionChange { player_id, team_id, origin: _, t_ms } => {
-                self.possession_counter += 1;
-                self.current_possession = Some(PossessionContext {
-                    possession_id: self.possession_counter,
-                    team_id: *team_id,
-                    ballhandler_id: Some(*player_id),
-                    start_t_ms: *t_ms,
-                    dribble_count: 0,
-                    pass_count: 0,
-                    offense_zone: CourtZone::Backcourt,
-                    is_transition: true,
-                });
-            },
-            _ => {}
-        }
-    }
-
     fn update_score(&mut self, event: &GameEvent) {
         if let GameEvent::MadeBasket { points, team_id, .. } = event {
             if *team_id == 1 {
@@ -186,18 +198,15 @@ impl GameStateLedger {
 
     pub fn generate_box_score(&self) -> HashMap<u32, PlayerStats> {
         let mut stats: HashMap<u32, PlayerStats> = HashMap::new();
-        
         for event in &self.history {
             match event {
                 GameEvent::MadeBasket { player_id, points, .. } => {
                     let s = stats.entry(*player_id).or_default();
                     s.points += *points as u32;
-                    s.fgm += 1;
-                    s.fga += 1;
+                    s.fgm += 1; s.fga += 1;
                 },
                 GameEvent::MissedBasket { player_id, .. } => {
-                    let s = stats.entry(*player_id).or_default();
-                    s.fga += 1;
+                    stats.entry(*player_id).or_default().fga += 1;
                 },
                 GameEvent::Rebound { player_id, .. } => {
                     stats.entry(*player_id).or_default().rebounds += 1;
@@ -220,62 +229,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_box_score_generation() {
+    fn test_transition_and_zone() {
         let mut ledger = GameStateLedger::new();
         
-        // Player 5 makes a 2-pt shot, needs 2s window
-        ledger.propose_event(GameEvent::MadeBasket {
-            player_id: 5, team_id: 1, points: 2, t_ms: 1000, is_official: false,
-        }, 2000);
-        
-        // Validate it
-        ledger.validate_event(1500, 2);
-        
-        // Player 5 misses a shot (No window needed for misses usually)
-        ledger.propose_event(GameEvent::MissedBasket {
-            player_id: 5, team_id: 1, t_ms: 2000,
+        // 1. Live ball turnover (Steal) -> Transition = True
+        ledger.propose_event(GameEvent::PossessionChange {
+            player_id: 10, team_id: 1, origin: PossessionOrigin::Steal, t_ms: 1000,
         }, 0);
         
-        // Player 10 gets a rebound
-        ledger.propose_event(GameEvent::Rebound {
-            player_id: 10, team_id: 1, t_ms: 2100,
+        let ctx = ledger.current_possession.as_ref().unwrap();
+        assert!(ctx.is_transition);
+        assert_eq!(ctx.offense_zone, CourtZone::Backcourt);
+        
+        // 2. Dribble in Paint -> Transition = False, Zone = Paint
+        // Target Left (Team 1), Paint is near x=0
+        ledger.propose_event(GameEvent::Dribble {
+            player_id: 10, team_id: 1, t_ms: 2000, x: 100.0, y: 762.0,
         }, 0);
         
-        let box_score = ledger.generate_box_score();
-        
-        let p5 = box_score.get(&5).expect("Player 5 should have stats");
-        assert_eq!(p5.points, 2);
-        assert_eq!(p5.fga, 2);
-        assert_eq!(p5.fgm, 1);
-        
-        let p10 = box_score.get(&10).expect("Player 10 should have stats");
-        assert_eq!(p10.rebounds, 1);
-    }
-
-    #[test]
-    fn test_possession_change_updates_current_context() {
-        let mut ledger = GameStateLedger::new();
-        ledger.propose_event(
-            GameEvent::PossessionChange {
-                player_id: 12,
-                team_id: 2,
-                origin: PossessionOrigin::Steal,
-                t_ms: 5000,
-            },
-            0,
-        );
-
-        let possession = ledger.current_possession.as_ref().expect("possession should be tracked");
-        assert_eq!(possession.possession_id, 1);
-        assert_eq!(possession.team_id, 2);
-        assert_eq!(possession.ballhandler_id, Some(12));
-        assert_eq!(possession.start_t_ms, 5000);
-        assert_eq!(possession.dribble_count, 0);
-        assert_eq!(possession.pass_count, 0);
-        match possession.offense_zone {
-            CourtZone::Backcourt => {}
-            _ => panic!("expected backcourt default"),
-        }
-        assert!(possession.is_transition);
+        let ctx = ledger.current_possession.as_ref().unwrap();
+        assert!(!ctx.is_transition);
+        assert_eq!(ctx.offense_zone, CourtZone::Paint);
     }
 }

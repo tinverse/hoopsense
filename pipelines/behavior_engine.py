@@ -1,7 +1,9 @@
 import numpy as np
 import yaml
 import os
+import json
 from enum import Enum
+from collections import deque
 
 class EntityState(Enum):
     IDLE = 0
@@ -15,9 +17,6 @@ class KinematicRule:
         raise NotImplementedError
 
 class DeclarativeRule(KinematicRule):
-    """
-    Evaluates kinematic rules defined in the HoopScript DSL.
-    """
     def __init__(self, spec):
         self.id = spec['id']
         self.spec = spec
@@ -27,115 +26,76 @@ class DeclarativeRule(KinematicRule):
         self.joint_map = {"hips": [11, 12], "wrists": [9, 10], "head": [0], "shoulders": [5, 6], "ankles": [15, 16]}
 
     def evaluate(self, kpts, context=None):
-        """kpts: (T, 17, 2) normalized to box."""
         if len(kpts) < 15: return False
-        
-        # 1. Evaluate Preconditions
         for pre in self.preconditions:
             if pre.get('actor') == 'self' and pre.get('state') == 'has_possession':
-                if not context or not context.get('has_possession'):
-                    return False
-
-        # 2. Evaluate Conditions
+                if not context or not context.get('has_possession'): return False
         for cond in self.conditions:
             if cond.get('ball_state') == 'controlled':
-                if not context or context.get('ball_state') != 'controlled':
-                    return False
-
-        # 3. Evaluate Predicates
+                if not context or context.get('ball_state') != 'controlled': return False
         for pred in self.predicates:
             joint_idx = self.joint_map.get(pred['joint'])
-            if not joint_idx:
-                return False
-            
+            if not joint_idx: continue
             joint_data = kpts[:, joint_idx, :]
             metric = pred['metric']
             op = pred['operator']
             threshold = pred.get('threshold', 0.0)
-            
-            if metric == "velocity_z":
+            if metric in ["velocity_z", "velocity_y"]:
                 y_coords = np.mean(joint_data[:, :, 1], axis=1)
                 velocity = y_coords[-1] - y_coords[0]
-                if op == ">" and not (-velocity > threshold):
-                    return False
-                if op == "<" and not (abs(velocity) < threshold):
-                    return False
-            elif metric == "velocity_y":
-                y_coords = np.mean(joint_data[:, :, 1], axis=1)
-                velocity = y_coords[-1] - y_coords[0]
-                if op == ">" and not (velocity > threshold):
-                    return False
-                if op == "<" and not (velocity < threshold):
-                    return False
-                
+                if op == ">" and not (velocity < -threshold): return False 
+                if op == "<" and not (velocity > threshold): return False
             elif metric == "velocity_x":
                 x_coords = np.mean(joint_data[:, :, 0], axis=1)
                 velocity = x_coords[-1] - x_coords[0]
                 if op == ">" and not (velocity > threshold): return False
                 if op == "<" and not (velocity < -threshold): return False
-
             elif metric == "pos_y":
                 ref_joint = pred.get('reference')
                 if ref_joint:
                     ref_idx = self.joint_map.get(ref_joint)
-                    if not ref_idx:
-                        return False
                     ref_y = np.mean(kpts[:, ref_idx, 1], axis=1)
                     curr_y = np.mean(joint_data[:, :, 1], axis=1)
-                    if op == "<" and not np.mean(curr_y < ref_y) > 0.6:
-                        return False
-                else:
-                    return False
-            else:
-                return False
-                    
+                    if op == "<" and not np.mean(curr_y < ref_y) > 0.6: return False
         return True
 
 class PossessionEngine:
-    """
-    Layer 3: Global Possession Management.
-    Tracks ballhandler and emits possession-related events.
-    """
     def __init__(self):
         self.current_handler = None
         self.last_handler = None
-        self.possession_id = 0
-        self.catch_threshold = 50.0 # cm in 3D
+        self.catch_threshold = 50.0 
 
     def update(self, player_tracks, ball_pos_3d, t_ms):
         """
-        player_tracks: dict of tid -> {'pos_3d': np.array([x,y,z]), 'tm': TrackManager}
-        ball_pos_3d: np.array([x,y,z])
+        player_tracks: dict of tid -> {'pos_3d': np.array([x,y,z]), 'team': int}
         """
         events = []
         if ball_pos_3d is None: return events
 
         best_tid = None
         min_dist = float('inf')
-
         for tid, data in player_tracks.items():
             dist = np.linalg.norm(data['pos_3d'] - ball_pos_3d)
             if dist < min_dist:
                 min_dist = dist
                 best_tid = tid
 
-        # Possession Logic
         if min_dist < self.catch_threshold:
             if self.current_handler != best_tid:
                 if self.current_handler is not None:
-                    # Potential Pass or Steal
                     if player_tracks[best_tid]['team'] == player_tracks[self.current_handler]['team']:
-                        events.append({"kind": "pass", "from": self.current_handler, "to": best_tid, "t_ms": t_ms})
+                        events.append({"kind": "pass", "from": self.current_handler, "to": best_tid, "t_ms": t_ms, "x": float(ball_pos_3d[0]), "y": float(ball_pos_3d[1])})
                     else:
-                        events.append({"kind": "steal", "actor": best_tid, "t_ms": t_ms})
+                        events.append({"kind": "steal", "player_id": best_tid, "t_ms": t_ms, "x": float(ball_pos_3d[0]), "y": float(ball_pos_3d[1])})
                 
                 self.last_handler = self.current_handler
                 self.current_handler = best_tid
-                events.append({"kind": "catch", "actor": best_tid, "t_ms": t_ms})
-        elif min_dist > 200.0: # Ball is far from everyone
-            if self.current_handler is not None:
-                # Potential shot or lost ball
-                self.current_handler = None
+                events.append({"kind": "catch", "player_id": best_tid, "t_ms": t_ms, "x": float(ball_pos_3d[0]), "y": float(ball_pos_3d[1])})
+            else:
+                # Same handler, potential dribble event could be emitted here based on motion
+                pass
+        elif min_dist > 200.0:
+            self.current_handler = None
 
         return events
 
@@ -154,13 +114,9 @@ class BehaviorStateMachine:
                 for r_spec in spec.get('rules', []):
                     rule = DeclarativeRule(r_spec)
                     rule_type = r_spec.get('type', 'kinematic')
-                    rule_id = r_spec.get('id', '')
-                    
                     target = EntityState.IDLE
-                    if rule_type == "kinematic":
-                        target = EntityState.IDLE if rule_id == "idle_bystander" else EntityState.SHOOTING
+                    if rule_type == "kinematic": target = EntityState.SHOOTING
                     if rule_type == "signal": target = EntityState.OFFICIAL_SIGNALING
-                    
                     if target not in engine: engine[target] = []
                     engine[target].append(rule)
         return engine
@@ -169,7 +125,6 @@ class BehaviorStateMachine:
         if learned_label and learned_label != "idle":
             self.custom_label = learned_label
             return self.state
-
         history_arr = np.array(kpts_history)
         for target_state, rules in self.rules_engine.items():
             for rule in rules:
@@ -177,7 +132,6 @@ class BehaviorStateMachine:
                     self.state = target_state
                     self.custom_label = rule.id
                     return self.state
-        
         self.state = EntityState.IDLE
         self.custom_label = "idle"
         return self.state

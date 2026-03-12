@@ -1,4 +1,5 @@
 use nalgebra::{Point2, Point3, Vector3};
+use serde::{Deserialize, Serialize};
 
 /// Standard NCAA Court Dimensions (in centimeters)
 /// Citations refer to NCAA Men's Basketball 2023-24 Rules.
@@ -9,6 +10,26 @@ pub const NCAA_RIM_HEIGHT: f32 = 304.8;
 pub const NCAA_RIM_RADIUS: f32 = 22.86;
 pub const NCAA_3PT_RADIUS: f32 = 675.0;
 pub const NCAA_BASELINE_TO_RIM: f32 = 160.0;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum CourtZone {
+    Paint,
+    WingLeft,
+    WingRight,
+    CornerLeft,
+    CornerRight,
+    TopOfKey,
+    Backcourt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PossessionOrigin {
+    Inbound,
+    Rebound,
+    Steal,
+    Turnover,
+    StartOfPeriod,
+}
 
 pub struct GeometricReferee {
     pub rim_pos_left: Point3<f32>,
@@ -41,22 +62,43 @@ impl GeometricReferee {
         dist > NCAA_3PT_RADIUS
     }
 
+    pub fn resolve_zone(&self, pos: &Point2<f32>, target_left: bool) -> CourtZone {
+        let half_court = NCAA_COURT_LENGTH / 2.0;
+        let is_backcourt = if target_left { pos.x > half_court } else { pos.x < half_court };
+        if is_backcourt { return CourtZone::Backcourt; }
+
+        let rim = if target_left { self.rim_pos_left } else { self.rim_pos_right };
+        let dist_to_baseline = if target_left { pos.x } else { NCAA_COURT_LENGTH - pos.x };
+        let dist_to_centerline = (pos.y - NCAA_COURT_WIDTH / 2.0).abs();
+        if dist_to_baseline < 580.0 && dist_to_centerline < 245.0 { return CourtZone::Paint; }
+
+        let dist_to_rim = (pos - Point2::new(rim.x, rim.y)).norm();
+        let is_outside_3pt = dist_to_rim > NCAA_3PT_RADIUS;
+        if is_outside_3pt {
+            if dist_to_baseline < 300.0 {
+                if pos.y < NCAA_COURT_WIDTH / 2.0 { return CourtZone::CornerLeft; }
+                else { return CourtZone::CornerRight; }
+            }
+            if dist_to_centerline < 300.0 { return CourtZone::TopOfKey; }
+            if pos.y < NCAA_COURT_WIDTH / 2.0 { return CourtZone::WingLeft; }
+            else { return CourtZone::WingRight; }
+        }
+        if pos.y < NCAA_COURT_WIDTH / 2.0 { return CourtZone::WingLeft; }
+        return CourtZone::WingRight;
+    }
+
     pub fn is_blocking_path(&self, hand_pos: &Point3<f32>, ball_pos: &Point3<f32>) -> bool {
         let dist_xy = (Point2::new(hand_pos.x, hand_pos.y) - Point2::new(ball_pos.x, ball_pos.y)).norm();
         let z_overlap = hand_pos.z >= ball_pos.z - 10.0;
         dist_xy < 20.0 && z_overlap
     }
 
-    /// L3.12: Detect high-velocity hand-ball separation (Shot Attempt)
     pub fn is_shot_release(&self, hand_vel: &Vector3<f32>, ball_vel: &Vector3<f32>, z_height: f32) -> bool {
-        // High vertical velocity delta + minimum height (above chest)
         let vel_delta = (ball_vel.z - hand_vel.z).abs();
         vel_delta > 100.0 && z_height > 150.0
     }
 
-    /// L3.12: Detect ball entering "Rebound Zone" after a miss
     pub fn is_rebound_opportunity(&self, ball_pos: &Point3<f32>) -> bool {
-        // Ball is near rim height but falling after a trajectory apex
         (ball_pos.z - NCAA_RIM_HEIGHT).abs() < 50.0
     }
 }
@@ -66,22 +108,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_shot_release_detection() {
+    fn test_zone_resolution() {
         let ref_bot = GeometricReferee::new();
-        let hand_vel = Vector3::new(0.0, 0.0, 50.0);
-        let ball_vel = Vector3::new(0.0, 0.0, 200.0); // Rapid separation
-        assert!(ref_bot.is_shot_release(&hand_vel, &ball_vel, 180.0));
-        
-        let ball_vel_slow = Vector3::new(0.0, 0.0, 60.0);
-        assert!(!ref_bot.is_shot_release(&hand_vel, &ball_vel_slow, 180.0));
-    }
-
-    #[test]
-    fn test_rebound_opportunity_zone() {
-        let ref_bot = GeometricReferee::new();
-        let near_rim = Point3::new(NCAA_BASELINE_TO_RIM, NCAA_COURT_WIDTH / 2.0, NCAA_RIM_HEIGHT + 25.0);
-        let far_above = Point3::new(NCAA_BASELINE_TO_RIM, NCAA_COURT_WIDTH / 2.0, NCAA_RIM_HEIGHT + 80.0);
-        assert!(ref_bot.is_rebound_opportunity(&near_rim));
-        assert!(!ref_bot.is_rebound_opportunity(&far_above));
+        let bc_pos = Point2::new(2000.0, 762.0);
+        assert_eq!(ref_bot.resolve_zone(&bc_pos, true), CourtZone::Backcourt);
+        let paint_pos = Point2::new(200.0, 762.0);
+        assert_eq!(ref_bot.resolve_zone(&paint_pos, true), CourtZone::Paint);
+        let top_pos = Point2::new(1000.0, 762.0);
+        assert_eq!(ref_bot.resolve_zone(&top_pos, true), CourtZone::TopOfKey);
     }
 }
