@@ -38,19 +38,19 @@ Standards: Design-first SDLC (Requirements -> Arch -> Code -> Tests).
 You are bootstrapping the project. Current focus:
 - detector/tracker internals
 - jersey OCR voting
-- event inference (The Shush Contract)
+- event inference (the HoopSense JSONL contract)
 """,
         "docs/plan/REQUIREMENTS.md": """# Requirements
 - R1: Track player/ball in 2D with unique track_id.
 - R2: Identify players via Jersey OCR voting and team color clustering.
-- R3: Emit JSONL 'Shush' contract rows for downstream event inference.
+- R3: Emit HoopSense JSONL contract rows for downstream event inference.
 - R4: Support deterministic re-entry and checkpointing for long video processing.
 """,
         "docs/architecture/ARCHITECTURE_BLUEPRINT.md": """# Architecture Blueprint
 - **Input**: Video (MP4) + Team Rosters (Optional)
 - **Perception Layer**: YOLOv8 (Detection) + BoT-SORT (Tracking)
 - **Identity Layer**: EasyOCR + HSV Color Clustering + Majority Voting
-- **Contract Layer**: Shush Protocol (JSONL)
+- **Contract Layer**: HoopSense JSONL Protocol
 - **Output**: Event DNA, Game Stats, and Review Visualization
 """,
         "docs/book/CHAPTER_01_IDENTITY_FUSION.md": "# Chapter 1: Identity Fusion\nExplaining the gap between Track IDs and Player IDs. We use a buffered voting mechanism to resolve identity.\n",
@@ -239,4 +239,3 @@ if __name__ == "__main__":
     os.makedirs(target, exist_ok=True)
     build_structure(target, project_structure["hoopsense"])
     print(f"\\n✅ HoopSense OS Initialized in {target}")
-

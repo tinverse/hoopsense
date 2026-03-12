@@ -1,7 +1,7 @@
 import json
 import os
 
-def validate_shush_contract(file_path):
+def validate_hoopsense_contract(file_path):
     required_keys = {
         "kind": str,
         "track_id": int,
@@ -33,6 +33,6 @@ def validate_shush_contract(file_path):
 if __name__ == "__main__":
     test_path = "data/intelligent_game_dna.jsonl"
     if os.path.exists(test_path):
-        validate_shush_contract(test_path)
+        validate_hoopsense_contract(test_path)
     else:
         print(f"No test file found at {test_path}")

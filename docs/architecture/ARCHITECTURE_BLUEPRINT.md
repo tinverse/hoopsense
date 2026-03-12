@@ -11,7 +11,7 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 ### Layer 1: The Perceiver (Python Prototype)
 - **Tech:** YOLOv8-pose + BoT-SORT.
 - **Responsibility:** Ingests raw video frames; identifies skeletons for players, the ball, and referees.
-- **Output:** `Shush-P` JSONL stream for raw perception observations.
+- **Output:** HoopSense Perception JSONL for raw observation records.
 
 ### Layer 2: Identity & Logic Heuristics (Python Prototype)
 - **Tech:** EasyOCR + HSV Clustering + Heuristic Rules.
@@ -29,7 +29,7 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 
 ### Layer 5: The Game State Ledger (Rust Core)
 - **Responsibility:** Consolidates possession context and events into an official, retroactive ledger with temporal reconciliation.
-- **Output:** `Shush-L` JSONL stream for validated ledger events + Player Statistics.
+- **Output:** HoopSense Ledger JSONL for validated events + Player Statistics.
 
 ### Layer 6: Physics & Trajectory (Rust Core)
 - **Tech:** Parabolic Least Squares Fitting.
@@ -91,16 +91,16 @@ In current repo reality, Docker is the explicit cloud-training path, while Guix 
 ### Infrastructure (Google Cloud Platform)
 - **Vertex AI (Colab Enterprise):** Used for interactive model development and fine-tuning with custom Docker images.
 - **Compute Engine (GCE) + GPU:** Headless batch processing of large video datasets using the HoopSense Docker image.
-- **Cloud Storage:** Standardized landing zone for raw video ingestion and JSONL "Shush" outputs.
+- **Cloud Storage:** Standardized landing zone for raw video ingestion and HoopSense JSONL artifacts.
 
-## 6. The Data Flow (The "Shush" Contract)
-HoopSense uses the name "Shush" for JSONL-based machine-readable interchange, but there are distinct contract stages:
-1. `Shush-P`
+## 6. The Data Flow (HoopSense JSONL Contracts)
+HoopSense uses staged JSONL contracts for machine-readable interchange:
+1. **HoopSense Perception JSONL**
    Raw perception output from detectors, trackers, pose, and referee sensing.
-2. `Shush-L`
+2. **HoopSense Ledger JSONL**
    Ledger-validated events and possession-aware outputs used for downstream stats and reporting.
 
-This naming split avoids conflating raw observations with validated basketball meaning.
+This split avoids conflating raw observations with validated basketball meaning.
 
 ## 7. The ML Artifact Flow
 
