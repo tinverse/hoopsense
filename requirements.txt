@@ -4,3 +4,5 @@ ultralytics
 easyocr
 numpy
 opencv-python-headless
+google-cloud-storage
+pyyaml

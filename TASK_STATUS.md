@@ -23,12 +23,11 @@
   - [x] Training pipeline for synthetic MoveLibrary
   - [x] Synchronized Taxonomy (DSL <-> Brain)
   - [x] Professional Training Loop (Stratified, GPU, Per-Class Metrics)
-  - [>] Bio-mechanical Synthetic Oracle (Anatomical Constraints) - **IN PROGRESS**
+  - [>] Bio-mechanical Synthetic Oracle (Anatomical Constraints) - **MVP RESTORED**
     - [x] ASF/AMC parser + FK MVP for one motion fixture
     - [x] 17-point adapter + `features_v2` compatibility
-    - [ ] Expand beyond single-fixture Oracle motion set
+    - [ ] Scale-out: Multi-subject integration (06, 102, 124)
   - [ ] Fine-tuning on Ref-API validated real data
-
 
 
 ## Part III: The Official Logic (Game Sense)

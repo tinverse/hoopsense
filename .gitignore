@@ -23,3 +23,11 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Local agent state
+.gemini/
+venv_temp/
+venv_hoops/
+
+# Media
+*.mp4

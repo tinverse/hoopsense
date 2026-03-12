@@ -1,48 +1,116 @@
-import sys
+#!/usr/bin/env python3
+"""Run a project-scoped Gemini review for the current git diff."""
+
+from __future__ import annotations
+
+import argparse
 import subprocess
+import sys
+from pathlib import Path
 
-def run_agent_review(diff):
-    """
-    Constructs the review prompt for the Gemini Generalist sub-agent.
-    """
-    prompt = f"""
-    You are a Senior Code Reviewer for the HoopSense project.
-    Review the following git diff for:
-    1. Compliance with the 'Teach-First' and 'Design-First' mandates in GEMINI.md.
-    2. Adherence to Rust Best Practices (clippy, ownership, zero-cost abstractions).
-    3. Adherence to Python Best Practices (PEP8, type-hinting, efficiency).
-    4. Logic bugs or regressions in the vision/spatial math.
-    5. Consistency with the NCAA rule hierarchy.
-    6. Completeness of tests for new functionality.
+CURRENT_DIR = Path(__file__).resolve().parent
+TOOLS_DIR = CURRENT_DIR.parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
-    DIFF:
-    {diff}
+from infra.gemini_project import GeminiProjectClient
+from infra.gemini_project import repo_root_from
 
-    Output your findings first, then a summary of 'Approved' or 'Changes Requested'.
-    """
-    
-    print("--- GENERATED AGENT REVIEW PROMPT ---")
-    print(prompt)
-    print("-------------------------------------")
-    return prompt
 
-if __name__ == "__main__":
+def build_bootstrap_prompt() -> str:
+    return """
+You are the persistent project collaborator for the HoopSense project.
+
+Retain project context across this session.
+Your standing roles are:
+- discuss requirements
+- discuss use cases
+- discuss architecture
+- discuss design
+- discuss implementation
+- review code changes made in this repository
+
+Use the repository's checked-in guidance, especially GEMINI.md, as the review policy.
+
+Collaboration style:
+- concise, technical, and grounded in checked-in repo artifacts
+- prefer design-first reasoning before code changes
+- call out drift between code and docs when relevant
+
+Review style:
+- Findings first.
+- Focus on bugs, regressions, contract drift, missing tests, and documentation drift.
+- Be concise and technical.
+- When there are no findings, say so explicitly.
+""".strip()
+
+
+def build_review_prompt(diff: str) -> str:
+    return f"""
+You are acting as reviewer for changes made in the HoopSense project.
+
+Review the following git diff for:
+1. Compliance with the Teach-First and Design-First mandates in GEMINI.md.
+2. Logic bugs, regressions, broken assumptions, or contract drift.
+3. Rust best practices where relevant.
+4. Python best practices where relevant.
+5. Missing or weak tests.
+6. Missing documentation or status updates when behavior or architecture changed.
+
+Return:
+- Findings first, ordered by severity.
+- Then a short summary with either Approved or Changes Requested.
+
+DIFF:
+{diff}
+""".strip()
+
+
+def get_diff(*, staged: bool, revision_range: str | None) -> str:
+    if revision_range:
+        return subprocess.check_output(
+            ["git", "diff", revision_range],
+            text=True,
+        )
+    command = ["git", "diff", "--cached"] if staged else ["git", "diff"]
+    return subprocess.check_output(command, text=True)
+
+
+def run_agent_review(diff: str, client: GeminiProjectClient, model: str | None = None) -> str:
+    client.ensure_session(build_bootstrap_prompt())
+    response = client.ask(build_review_prompt(diff), model=model)
+    return response["response"]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run a project-scoped Gemini review for current changes.")
+    parser.add_argument("--model")
+    parser.add_argument("--unstaged", action="store_true", help="Review unstaged changes instead of staged changes.")
+    parser.add_argument("--diff-range", help="Explicit git diff range, for example main...HEAD")
+    parser.add_argument("--print-prompt", action="store_true", help="Print the generated review prompt instead of calling Gemini.")
+    args = parser.parse_args(argv)
+
     try:
-        # Check if inside a git repository
-        subprocess.check_call(["git", "rev-parse", "--is-inside-work-tree"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Get staged changes
-        diff = subprocess.check_output(["git", "diff", "--cached"]).decode("utf-8")
-        
-        if not diff:
-            print("No staged changes to review. Use 'git add' to stage your changes first.")
-            sys.exit(0)
-        
-        run_agent_review(diff)
-        
+        project_root = repo_root_from(Path.cwd())
+        diff = get_diff(staged=not args.unstaged, revision_range=args.diff_range)
+        if not diff.strip():
+            print("No changes to review.")
+            return 0
+
+        if args.print_prompt:
+            print(build_review_prompt(diff))
+            return 0
+
+        client = GeminiProjectClient(project_root=project_root)
+        print(run_agent_review(diff, client=client, model=args.model))
+        return 0
     except subprocess.CalledProcessError:
         print("Error: This script must be run within a git repository.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        sys.exit(1)
+        return 1
+    except Exception as exc:
+        print(f"An unexpected error occurred: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

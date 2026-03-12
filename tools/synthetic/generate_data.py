@@ -1,6 +1,7 @@
 import numpy as np
 import json
 import os
+import sys
 
 class MoveLibrary:
     @staticmethod
@@ -110,25 +111,14 @@ class MoveLibrary:
         ball_pos = np.array([pos_x, pos_y + 20, 120])
         return skeleton, ball_pos
 
-    @staticmethod
-    def background_player(t, move_func, offset_x=2865):
-        """Simulates an active player on an adjacent court."""
-        skeleton, ball_pos = move_func(t)
-        skeleton[:, 0] += offset_x
-        if ball_pos is not None: ball_pos[0] += offset_x
-        return skeleton, ball_pos
-
 def compute_features_v2(skel_2d_norm, skel_3d_seq, ball_3d_seq):
     T = skel_2d_norm.shape[0]
     features = []
     for t in range(T):
         pose = skel_2d_norm[t].flatten()
         velocity = (skel_2d_norm[t] - skel_2d_norm[max(0, t-1)]).flatten() * 0.1
-        if ball_3d_seq[t] is not None:
-            dist_l = np.linalg.norm(skel_3d_seq[t, 9] - ball_3d_seq[t]) * 0.01
-            dist_r = np.linalg.norm(skel_3d_seq[t, 10] - ball_3d_seq[t]) * 0.01
-        else:
-            dist_l, dist_r = 10.0, 10.0 
+        dist_l = np.linalg.norm(skel_3d_seq[t, 9] - ball_3d_seq[t]) * 0.01
+        dist_r = np.linalg.norm(skel_3d_seq[t, 10] - ball_3d_seq[t]) * 0.01
         court_pos = np.mean(skel_3d_seq[t, [11, 12], :2], axis=0) * 0.001
         row = np.concatenate([pose, velocity, [dist_l, dist_r], court_pos])
         features.append(row.tolist())
@@ -158,8 +148,12 @@ def project_to_2d(skeleton_3d_seq, K, R, t_vec, noise_std=0.0):
 
 
 def run_oracle_generator(output_file, asf_path, amc_path, label="jump_shot"):
-    from tools.synthetic.amc_oracle import generate_oracle_sample
-    from tools.synthetic.amc_oracle import write_oracle_dataset
+    try:
+        from tools.synthetic.amc_oracle import generate_oracle_sample
+        from tools.synthetic.amc_oracle import write_oracle_dataset
+    except ModuleNotFoundError:
+        from amc_oracle import generate_oracle_sample
+        from amc_oracle import write_oracle_dataset
 
     sample = generate_oracle_sample(asf_path, amc_path, label)
     write_oracle_dataset(output_file, [sample])
@@ -167,6 +161,8 @@ def run_oracle_generator(output_file, asf_path, amc_path, label="jump_shot"):
 
 def run_generator(output_file, num_samples=20):
     K = np.array([[1000, 0, 960], [0, 1000, 540], [0, 0, 1]])
+    R = np.eye(3)
+    t_vec = np.array([0, -600, -250])
     
     moves = [
         ("jump_shot", MoveLibrary.jump_shot),
@@ -178,22 +174,13 @@ def run_generator(output_file, num_samples=20):
         ("block", MoveLibrary.block),
         ("steal", MoveLibrary.steal),
         ("euro_step_left", lambda t: MoveLibrary.euro_step(t, go_left=True)),
-        ("euro_step_right", lambda t: MoveLibrary.euro_step(t, go_left=False)),
-        ("idle_bystander", lambda t: MoveLibrary.background_player(t, MoveLibrary.jump_shot)) # Uses jump_shot kinematic but offset
+        ("euro_step_right", lambda t: MoveLibrary.euro_step(t, go_left=False))
     ]
     
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, 'w') as f:
         for name, func in moves:
             for _ in range(num_samples):
-                dist = np.random.uniform(400, 1200)
-                height = np.random.uniform(150, 500)
-                angle = np.random.uniform(-np.pi/4, np.pi/4)
-                cam_pos = np.array([dist * np.sin(angle), -dist * np.cos(angle), height])
-                target_pos = np.array([0.0, 0.0, 100.0])
-                R = get_look_at_matrix(cam_pos, target_pos)
-                t_vec = -R @ cam_pos
-                
                 data_3d = [func(t) for t in np.linspace(0, 1, 30)]
                 skel_3d = np.array([d[0] for d in data_3d])
                 ball_3d = np.array([d[1] for d in data_3d])
@@ -206,7 +193,19 @@ def run_generator(output_file, num_samples=20):
                     skel_2d_norm[t,:,1] = (skel_2d[t,:,1] - bbox[1]) / h
                 feat_v2 = compute_features_v2(skel_2d_norm, skel_3d, ball_3d)
                 f.write(json.dumps({"label": name, "schema_version": "2.0.0", "features_v2": feat_v2}) + "\n")
-    print(f"[INFO] Generated features with Background Player Noise to {output_file}")
+    print(f"[INFO] Generated ground-truth features to {output_file}")
 
 if __name__ == "__main__":
-    run_generator("data/training/synthetic_dataset_v2.jsonl")
+    if "--oracle" in sys.argv:
+        try:
+            oracle_idx = sys.argv.index("--oracle")
+            asf_path = sys.argv[oracle_idx + 1]
+            amc_path = sys.argv[oracle_idx + 2]
+        except IndexError as exc:
+            raise SystemExit("Usage: generate_data.py --oracle <asf_path> <amc_path> [label] [output_file]") from exc
+        label = sys.argv[oracle_idx + 3] if len(sys.argv) > oracle_idx + 3 else "jump_shot"
+        output_file = sys.argv[oracle_idx + 4] if len(sys.argv) > oracle_idx + 4 else "data/training/synthetic_dataset_v2.jsonl"
+        run_oracle_generator(output_file, asf_path, amc_path, label=label)
+    else:
+        output_file = sys.argv[1] if len(sys.argv) > 1 else "data/training/synthetic_dataset_v2.jsonl"
+        run_generator(output_file)

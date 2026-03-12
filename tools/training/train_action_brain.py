@@ -23,7 +23,6 @@ LABEL_MAP = {v: k for k, v in LABEL_MAP_INV.items()}
 class SyntheticDataset(Dataset):
     def __init__(self, file_path):
         self.X, self.y = [], []
-        self.label_names = []
         self.label_counts = Counter()
         print(f"[INFO] Loading synthetic training data (Schema V2) from {file_path}")
         with open(file_path, 'r') as f:
@@ -33,16 +32,21 @@ class SyntheticDataset(Dataset):
                 label_name = data["label"]
                 
                 if label_name not in LABEL_MAP:
-                    raise ValueError(f"CRITICAL: Unknown label '{label_name}' at line {line_idx}. "
-                                     f"Label map is synchronized with {len(LABEL_MAP)} classes.")
+                    raise ValueError(f"CRITICAL: Unknown label '{label_name}' at line {line_idx}.")
                 
                 self.X.append(features)
                 self.y.append(LABEL_MAP[label_name])
-                self.label_names.append(label_name)
                 self.label_counts[label_name] += 1
         
-        print(f"[INFO] Dataset Loaded. Total samples: {len(self.X)}")
-        print(f"[INFO] Active Taxonomy ({len(self.label_counts)}/{len(LABEL_MAP)} classes): {dict(self.label_counts)}")
+        self.active_labels = sorted(self.label_counts.keys())
+        self.passive_labels = sorted([l for l in LABEL_MAP.keys() if l not in self.label_counts])
+        
+        print("\n--- Taxonomy Audit ---")
+        print(f"Total Taxonomy Size: {len(LABEL_MAP)}")
+        print(f"Active Classes (Present in Data): {len(self.active_labels)}")
+        print(f"Passive Classes (Absent from Data): {len(self.passive_labels)}")
+        print(f"Active Labels: {self.active_labels}")
+        print("----------------------\n")
 
     def __len__(self):
         return len(self.X)
@@ -51,7 +55,6 @@ class SyntheticDataset(Dataset):
         return torch.FloatTensor(self.X[idx]), torch.LongTensor([self.y[idx]]).squeeze()
 
 def get_stratified_split(dataset, train_ratio=0.8):
-    """Manually implements stratified split for small datasets."""
     indices_per_class = defaultdict(list)
     for idx, label in enumerate(dataset.y):
         indices_per_class[label].append(idx)
@@ -59,28 +62,71 @@ def get_stratified_split(dataset, train_ratio=0.8):
     train_indices, val_indices = [], []
     for label, indices in indices_per_class.items():
         random.shuffle(indices)
-        split_point = int(len(indices) * train_ratio)
+        split_point = max(1, int(len(indices) * train_ratio))
         train_indices.extend(indices[:split_point])
         val_indices.extend(indices[split_point:])
     
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
 
-def train():
+def print_taxonomy_aware_summary(y_true, y_pred, dataset):
+    """Zero-dependency classification metrics using pure Python/NumPy."""
+    active_names = dataset.active_labels
+    active_ids = [LABEL_MAP[name] for name in active_names]
+    
+    # 1. Confusion Matrix
+    cm = np.zeros((len(active_ids), len(active_ids)), dtype=int)
+    id_to_idx = {id_: i for i, id_ in enumerate(active_ids)}
+    
+    for t, p in zip(y_true, y_pred):
+        if t in id_to_idx and p in id_to_idx:
+            cm[id_to_idx[t], id_to_idx[p]] += 1
+
+    print("\n--- TAXONOMY-AWARE VALIDATION REPORT (Active Classes Only) ---")
+    print(f"{'Class':20} | {'Prec':>6} | {'Rec':>6} | {'F1':>6} | {'Support'}")
+    print("-" * 55)
+    
+    for i, name in enumerate(active_names):
+        tp = cm[i, i]
+        fp = np.sum(cm[:, i]) - tp
+        fn = np.sum(cm[i, :]) - tp
+        support = np.sum(cm[i, :])
+        
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (prec * rec) / (prec + rec) if (prec + rec) > 0 else 0
+        
+        print(f"{name[:20]:20} | {prec:6.2f} | {rec:6.2f} | {f1:6.2f} | {support}")
+
+    print("\n--- CONFUSION MATRIX ---")
+    header = " " * 15 + " ".join([f"{n[:3]:>3}" for n in active_names])
+    print(header)
+    for i, row in enumerate(cm):
+        row_str = f"{active_names[i][:12]:>12} | " + " ".join([f"{val:>3}" for val in row])
+        print(row_str)
+    print("------------------------------------------------------\n")
+
+def train(epochs=150, force_cpu=False):
     set_seed(42)
-    data_path = "data/training/synthetic_dataset_v2.jsonl"
+    
+    # Prioritize MoCap Oracle (v3) over procedural (v2)
+    v3_path = "data/training/oracle_dataset_v3.jsonl"
+    v2_path = "data/training/synthetic_dataset_v2.jsonl"
+    
+    data_path = v3_path if os.path.exists(v3_path) else v2_path
     if not os.path.exists(data_path):
-        print("[ERROR] No training data found. Run generator first.")
+        print(f"[ERROR] No training data found at {v3_path} or {v2_path}.")
         return
 
-    # 1. Initialize Dataset & Stratified Split
     full_dataset = SyntheticDataset(data_path)
     train_dataset, val_dataset = get_stratified_split(full_dataset)
     
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     
-    # 2. Initialize Model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if force_cpu:
+        device = torch.device("cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Target Device: {device}")
     
     model = ActionBrain(num_classes=len(LABEL_MAP)).to(device)
@@ -92,7 +138,7 @@ def train():
     model_dir = "data/models"
     os.makedirs(model_dir, exist_ok=True)
 
-    for epoch in range(150):
+    for epoch in range(epochs):
         model.train()
         train_loss = 0
         for data, target in train_loader:
@@ -105,43 +151,44 @@ def train():
             optimizer.step()
             train_loss += loss.item()
         
-        # Validation Phase with Per-Class Reporting
         model.eval()
-        val_correct = 0
-        class_correct = defaultdict(int)
-        class_total = defaultdict(int)
-        
+        all_preds, all_trues = [], []
         with torch.no_grad():
             for data, target in val_loader:
                 data, target = data.to(device), target.to(device)
                 outputs = model(data)
                 preds = outputs.argmax(dim=1)
-                
-                for pred, t in zip(preds, target):
-                    label_name = LABEL_MAP_INV[t.item()]
-                    class_total[label_name] += 1
-                    if pred == t:
-                        val_correct += 1
-                        class_correct[label_name] += 1
+                all_preds.extend(preds.cpu().numpy())
+                all_trues.extend(target.cpu().numpy())
         
-        val_acc = val_correct / len(val_dataset)
+        val_acc = np.mean(np.array(all_preds) == np.array(all_trues))
         scheduler.step(val_acc)
         
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), os.path.join(model_dir, "action_brain.pt"))
-            if (epoch + 1) > 20:
-                print(f"\n[CHECKPOINT] Epoch {epoch+1}: New Best Val Acc: {val_acc:.4f}")
-                print("--- Per-Class Validation Report ---")
-                for label in sorted(full_dataset.label_counts.keys()):
-                    acc = class_correct[label] / class_total[label] if class_total[label] > 0 else 0
-                    print(f"  {label:20}: {acc:.2f} ({class_correct[label]}/{class_total[label]})")
+            if epoch > 20 and (epoch + 1) % 20 == 0:
+                print(f"[CHECKPOINT] Epoch {epoch+1}: Best Val Acc {val_acc:.4f}")
 
-        if (epoch + 1) % 50 == 0:
-            avg_train_loss = train_loss / len(train_loader)
-            print(f"\nEpoch [{epoch+1}/150] | Loss: {avg_train_loss:.4f} | Val Acc: {val_acc:.4f}")
-
-    print(f"\n[SUCCESS] Training complete. Best Validation Accuracy: {best_val_acc:.4f}")
+    # Final Summary Evaluation
+    model.load_state_dict(torch.load(os.path.join(model_dir, "action_brain.pt")))
+    model.eval()
+    all_preds, all_trues = [], []
+    with torch.no_grad():
+        for data, target in val_loader:
+            data, target = data.to(device), target.to(device)
+            outputs = model(data)
+            preds = outputs.argmax(dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_trues.extend(target.cpu().numpy())
+    
+    print_taxonomy_aware_summary(all_trues, all_preds, full_dataset)
+    print(f"[SUCCESS] Training complete. Best Val Accuracy: {best_val_acc:.4f}")
 
 if __name__ == "__main__":
-    train()
+    import sys
+    if "--smoke-test" in sys.argv:
+        print("[SMOKE TEST] Running 2 epochs on CPU...")
+        train(epochs=2, force_cpu=True)
+    else:
+        train()
