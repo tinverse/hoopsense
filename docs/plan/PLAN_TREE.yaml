@@ -9,8 +9,8 @@ meta:
   supporting_docs:
     - docs/architecture/components/LAYERED_FEATURE_SCHEMA.md
     - docs/architecture/components/FEATURE_SCHEMA_V2.md
-    - docs/architecture/ML_OPS_STRATEGY.md
-    - docs/architecture/DEV_OPS_STRATEGY.md
+    - docs/architecture/devops/MLOPS.md
+    - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
   last_updated: "2026-03-12"
 

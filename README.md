@@ -8,8 +8,8 @@ Practical game understanding from basketball video.
 - MLOps is part of the product architecture: datasets, manifests, evaluations, and promoted checkpoints are first-class artifacts.
 - DevOps is also part of the product architecture: Guix is the preferred reproducibility path, with Docker as the fallback packaging/runtime path.
 - See `docs/architecture/components/LAYERED_FEATURE_SCHEMA.md` for the current system feature model.
-- See `docs/architecture/ML_OPS_STRATEGY.md` for the current ML lifecycle strategy.
-- See `docs/architecture/DEV_OPS_STRATEGY.md` for the current build, CI, and deployment strategy.
+- See `docs/architecture/devops/MLOPS.md` for the current ML lifecycle strategy.
+- See `docs/architecture/devops/DEVOPS.md` for the current build, CI, and deployment strategy.
 
 ## Project Structure
 - `core/`: Native perception and logic internals.

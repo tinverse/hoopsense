@@ -90,12 +90,12 @@ The decision should be made subsystem by subsystem, not as an all-or-nothing rew
 ### MLOps Control Plane
 - **Responsibility:** Governs dataset manifests, feature-contract validation, training run lineage, evaluation reports, promotion state, and deployment compatibility.
 - **Key Rule:** No dataset or checkpoint should be treated as production-ready without explicit validation evidence.
-- **Scope:** Covers both cloud/x86 training and Jetson/ARM64 deployment targets.
+- **Scope:** Operates inside the broader DevOps layer and covers both cloud/x86 training and Jetson/ARM64 deployment targets.
 
 ### DevOps Control Plane
 - **Responsibility:** Governs reproducible developer environments, CI quality gates, build packaging, cloud job execution, and target-specific runtime guidance.
 - **Key Rule:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback runtime and packaging boundary.
-- **Scope:** Covers local development, cloud training images, and Jetson/Orin deployment paths.
+- **Scope:** Covers local development, Orin smoke tests and early training, then cloud training images and deployment paths.
 
 ## 4. The Capture Ecosystem (Satellites)
 
@@ -114,11 +114,11 @@ The decision should be made subsystem by subsystem, not as an all-or-nothing rew
 ## 5. Cloud Deployment Strategy (Scaling)
 
 ### Containerization (The Guix-Docker Bridge)
-- **Method:** `guix pack -f docker`
-- **Goal:** Create a deterministic, bit-identical image containing the Rust core, Python inference engine, and all CUDA/system dependencies.
-- **Value:** Eliminates "it works on my machine" bugs when moving from local development to the cloud.
+- **Method:** Prefer Guix for reproducible shells; use Docker for cloud packaging boundaries.
+- **Goal:** Keep local and Orin development reproducible where possible, then move stable workloads into cloud images.
+- **Value:** Reduces environment drift without pretending Jetson host libraries are under full Guix control.
 
-In current repo reality, Docker is the explicit cloud-training path, while Guix remains the preferred local reproducibility mechanism. Jetson/Orin requires an additional documented vendor-library bridge.
+In current repo reality, Orin is the first training target for smoke tests and initial runs. Docker is the explicit cloud-training path after that path is stable.
 
 ### Infrastructure (Google Cloud Platform)
 - **Vertex AI (Colab Enterprise):** Used for interactive model development and fine-tuning with custom Docker images.

@@ -7,11 +7,8 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.34` define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
-- `L3.35` add a perception-quality report artifact for representative clips
 - `L3.36` document candidate Python-versus-Rust ownership split for the perception layer
 - `L3.37` decide the first migration target, if any, based on performance, determinism, and implementation risk
-- `L3.17` align this status file with the plan tree and layered architecture
 - `L3.18` define Oracle dataset manifests and validation checks
 - `L3.19` record Action Brain training lineage beside checkpoints
 - `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
@@ -108,7 +105,6 @@ The current highest-priority frontier is:
 ### Active or Next
 - [ ] Document candidate Python-versus-Rust ownership split for ingestion, tracking, pose, geometry, and lifting
 - [ ] Decide the first migration target, if any, based on performance, determinism, and implementation risk
-- [ ] Bring `TASK_STATUS.md` into alignment with the layered feature plan
 - [ ] Define Oracle dataset manifest fields and validation checks
 - [ ] Record Action Brain training lineage beside each checkpoint
 - [ ] Make Docker docs explicitly cloud-oriented and not the native Orin story
@@ -137,6 +133,8 @@ What is currently true:
 - MLOps is now a first-class product concern in the requirements, architecture, and plan
 - DevOps is now a first-class product concern in the requirements, architecture, and plan
 - the geometry layer now has a shared pure-Python module and a readiness-report artifact
+- Orin is the current first target for smoke tests and initial training runs
+- cloud remains the scale-out path after the Orin path is stable
 
 What is not yet true:
 - perception and geometry are not yet explicitly gated as training-readiness inputs
@@ -148,7 +146,6 @@ What is not yet true:
 - the CI architecture is not yet split by functional core
 - no Terraform layer exists yet for shared GCP infrastructure
 - deployment guidance is not yet fully separated between Jetson/ARM64 and cloud/x86
-- `TASK_STATUS.md` was previously stale and is now being reset around the plan tree
 
 ## Quality Gates
 
