@@ -120,16 +120,18 @@ def compute_features_v2(skel_2d_norm, skel_3d_seq, ball_3d_seq):
         dist_l = np.linalg.norm(skel_3d_seq[t, 9] - ball_3d_seq[t]) * 0.01
         dist_r = np.linalg.norm(skel_3d_seq[t, 10] - ball_3d_seq[t]) * 0.01
         court_pos = np.mean(skel_3d_seq[t, [11, 12], :2], axis=0) * 0.001
-        row = np.concatenate([pose, velocity, [dist_l, dist_r], court_pos])
+        vel_t = (skel_2d_norm[t] - skel_2d_norm[max(0, t-1)]).flatten() * 0.1
+        court_pos_t = np.mean(skel_3d_seq[t, [11, 12], :2], axis=0) * 0.001
+        row = np.concatenate([pose, vel_t, [dist_l, dist_r], court_pos_t])
         features.append(row.tolist())
     return features
 
 def get_look_at_matrix(cam_pos, target_pos):
     forward = target_pos - cam_pos
-    forward /= np.linalg.norm(forward)
+    forward /= (np.linalg.norm(forward) + 1e-6)
     right = np.cross(np.array([0, 0, 1]), forward)
     if np.linalg.norm(right) < 1e-6: right = np.array([1, 0, 0])
-    right /= np.linalg.norm(right)
+    right /= (np.linalg.norm(right) + 1e-6)
     up = np.cross(forward, right)
     return np.vstack([right, up, forward])
 
@@ -141,7 +143,7 @@ def project_to_2d(skeleton_3d_seq, K, R, t_vec, noise_std=0.0):
             X_w = np.append(skeleton_3d_seq[i, j], 1.0)
             x_cam = extrinsic @ X_w
             x_pix_h = K @ x_cam
-            skeleton_2d[i, j] = x_pix_h[:2] / x_pix_h[2]
+            skeleton_2d[i, j] = x_pix_h[:2] / (x_pix_h[2] + 1e-6)
         if noise_std > 0.0:
             skeleton_2d[i] += np.random.normal(scale=noise_std, size=skeleton_2d[i].shape)
     return skeleton_2d
@@ -151,13 +153,38 @@ def run_oracle_generator(output_file, asf_path, amc_path, label="jump_shot"):
     try:
         from tools.synthetic.amc_oracle import generate_oracle_sample
         from tools.synthetic.amc_oracle import write_oracle_dataset
-    except ModuleNotFoundError:
+    except ImportError:
         from amc_oracle import generate_oracle_sample
         from amc_oracle import write_oracle_dataset
 
     sample = generate_oracle_sample(asf_path, amc_path, label)
-    write_oracle_dataset(output_file, [sample])
+    # Append to existing or create new
+    mode = 'a' if os.path.exists(output_file) else 'w'
+    with open(output_file, mode) as f:
+        f.write(json.dumps(sample) + "\n")
     print(f"[INFO] Generated Oracle-backed features to {output_file}")
+
+def run_multi_oracle_generator(output_file):
+    mocap_base = "data/training/cmu_oracle"
+    fixtures = [
+        ("06.asf", "06_15.amc", "jump_shot"),
+        ("06.asf", "06_11.amc", "crossover"),
+        ("124.asf", "124_01.amc", "idle_bystander"),
+        ("124.asf", "124_02.amc", "idle_bystander"),
+        ("102.asf", "102_01.amc", "walk"), # Mapping walk to idle_bystander or similar
+    ]
+    
+    for asf, amc, label in fixtures:
+        asf_path = os.path.join(mocap_base, asf)
+        amc_path = os.path.join(mocap_base, amc)
+        if os.path.exists(asf_path) and os.path.exists(amc_path):
+            # Mapping specific labels to ActionBrain categories
+            target_label = label
+            if label in ["walk", "idle"]:
+                target_label = "idle_bystander"
+            run_oracle_generator(output_file, asf_path, amc_path, label=target_label)
+        else:
+            print(f"[WARN] Skipping missing fixture: {asf}/{amc}")
 
 def run_generator(output_file, num_samples=20):
     K = np.array([[1000, 0, 960], [0, 1000, 540], [0, 0, 1]])
@@ -179,6 +206,7 @@ def run_generator(output_file, num_samples=20):
     
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, 'w') as f:
+        # 1. Procedural Baseline
         for name, func in moves:
             for _ in range(num_samples):
                 data_3d = [func(t) for t in np.linspace(0, 1, 30)]
@@ -193,19 +221,24 @@ def run_generator(output_file, num_samples=20):
                     skel_2d_norm[t,:,1] = (skel_2d[t,:,1] - bbox[1]) / h
                 feat_v2 = compute_features_v2(skel_2d_norm, skel_3d, ball_3d)
                 f.write(json.dumps({"label": name, "schema_version": "2.0.0", "features_v2": feat_v2}) + "\n")
-    print(f"[INFO] Generated ground-truth features to {output_file}")
+    
+    # 2. MoCap Oracle Augmentation
+    run_multi_oracle_generator(output_file)
+    
+    print(f"[INFO] Generated enriched features to {output_file}")
 
 if __name__ == "__main__":
-    if "--oracle" in sys.argv:
+    output_file = sys.argv[1] if len(sys.argv) > 1 else "data/training/synthetic_dataset_v2.jsonl"
+    if "--multi-oracle" in sys.argv:
+        run_multi_oracle_generator(output_file)
+    elif "--oracle" in sys.argv:
         try:
             oracle_idx = sys.argv.index("--oracle")
             asf_path = sys.argv[oracle_idx + 1]
             amc_path = sys.argv[oracle_idx + 2]
-        except IndexError as exc:
-            raise SystemExit("Usage: generate_data.py --oracle <asf_path> <amc_path> [label] [output_file]") from exc
-        label = sys.argv[oracle_idx + 3] if len(sys.argv) > oracle_idx + 3 else "jump_shot"
-        output_file = sys.argv[oracle_idx + 4] if len(sys.argv) > oracle_idx + 4 else "data/training/synthetic_dataset_v2.jsonl"
-        run_oracle_generator(output_file, asf_path, amc_path, label=label)
+            label = sys.argv[oracle_idx + 3] if len(sys.argv) > oracle_idx + 3 else "jump_shot"
+            run_oracle_generator(output_file, asf_path, amc_path, label=label)
+        except IndexError:
+            print("Usage: generate_data.py --oracle <asf> <amc> [label]")
     else:
-        output_file = sys.argv[1] if len(sys.argv) > 1 else "data/training/synthetic_dataset_v2.jsonl"
         run_generator(output_file)

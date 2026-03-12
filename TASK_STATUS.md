@@ -26,6 +26,7 @@ The current highest-priority frontier is:
 - `L3.20` add first slice-based evaluation outputs
 - `L3.27` define dataset version lineage and promotion rules across Oracle/synthetic training sets
 - `L3.28` define multi-arch or explicitly split cloud-vs-Orin container strategy
+- `L3.11` implement offense zone and transition flag derivation in the possession context
 
 ## L0 Product Goal
 
@@ -35,8 +36,8 @@ The current highest-priority frontier is:
 
 - [>] Perception and geometry foundation
 - [>] Action Brain and synthetic Oracle training loop
-- [ ] Possession context and game-state reasoning
-- [ ] Event attribution and stats generation
+- [>] Possession context and game-state reasoning
+- [>] Event attribution and stats generation
 - [>] Deployment, runtime, and operator workflow
 - [>] Collaboration, review, and project control
 - [>] MLOps governance and model lifecycle control
@@ -59,14 +60,14 @@ The current highest-priority frontier is:
 - [ ] Sim-to-real fine-tuning and validation loop
 
 ### Possession Context and Game-State Reasoning
-- [ ] Possession context contract in the ledger
-- [ ] Ball control, dribble count, and pass-chain tracking
+- [>] Possession context contract in the ledger
+- [>] Ball control, dribble count, and pass-chain tracking
 - [ ] Offense zone, transition, and drive semantics
 - [>] Referee-assisted rewind and correction logic
 
 ### Event Attribution and Stats Generation
-- [ ] Event attribution rules combining motion, ball, and possession state
-- [ ] Stat ledger and box-score generation
+- [>] Event attribution rules combining motion, ball, and possession state
+- [>] Stat ledger and box-score generation
 - [ ] Shot chart, defensive metrics, and report outputs
 
 ### Deployment, Runtime, and Operator Workflow
@@ -101,8 +102,6 @@ The current highest-priority frontier is:
 - [x] Require plan-tree updates before substantial architecture or implementation changes
 - [x] Define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
 - [x] Add a perception-quality report artifact for representative clips
-
-### Active or Next
 - [ ] Document candidate Python-versus-Rust ownership split for ingestion, tracking, pose, geometry, and lifting
 - [ ] Decide the first migration target, if any, based on performance, determinism, and implementation risk
 - [ ] Define Oracle dataset manifest fields and validation checks
@@ -121,26 +120,28 @@ The current highest-priority frontier is:
 - [ ] Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
 - [ ] Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
 - [ ] Add first slice reports for action class, camera/view, and pose quality
+- [ ] Implement offense zone and transition flag derivation in the possession context
 
 ## Product Reality Check
 
 What is currently true:
 - the Action Brain is a narrow local-motion classifier, not the full game-reasoning system
 - `features_v2` remains the current frozen neural contract
-- the Oracle MVP is restored and usable for one fixture motion
+- Oracle scale-out code exists locally but the repo-local generated dataset has not yet been re-materialized as verification evidence
 - a GPU training path has produced an initial checkpoint
 - the layered feature architecture is now documented
 - MLOps is now a first-class product concern in the requirements, architecture, and plan
 - DevOps is now a first-class product concern in the requirements, architecture, and plan
 - the geometry layer now has a shared pure-Python module and a readiness-report artifact
+- local possession and stats code exists in Rust and Python, but end-to-end verification is still incomplete
 - Orin is the current first target for smoke tests and initial training runs
 - cloud remains the scale-out path after the Orin path is stable
 
 What is not yet true:
 - perception and geometry are not yet explicitly gated as training-readiness inputs
 - the Python-versus-Rust boundary for this layer is not yet decided
-- possession context is not yet implemented as a durable ledger contract
-- event attribution and stats generation are not yet complete
+- possession and stats changes are not yet fully verified by repolocal tests in this shell
+- offense zone and transition flags are not yet derived in the possession context
 - dataset manifests and checkpoint lineage are not yet implemented
 - a checked-in CI workflow does not yet exist
 - the CI architecture is not yet split by functional core
@@ -149,8 +150,8 @@ What is not yet true:
 
 ## Quality Gates
 
-- [x] Rust core logic tests passing
-- [x] Python behavior-engine tests passing
+- [ ] Rust core logic re-verified in the current shell for PossessionContext and box-score changes
+- [ ] Python behavior-engine/perception gate tests re-verified in the current shell
 - [x] Synthetic Oracle tests passing
 - [x] Tooling review tests passing
 - [x] Documentation updated for layered feature architecture
