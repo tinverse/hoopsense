@@ -1,7 +1,9 @@
 import json
 from dataclasses import asdict
 from dataclasses import dataclass
+from typing import Dict
 from typing import Iterable
+from typing import Union
 
 import numpy as np
 
@@ -43,7 +45,7 @@ def lift_keypoints_to_3d(kpts_2d: np.ndarray, h_matrix: np.ndarray, *, z_scale: 
     return np.asarray(lifted, dtype=float)
 
 
-def homography_sanity(h_matrix: np.ndarray) -> dict[str, float | bool]:
+def homography_sanity(h_matrix: np.ndarray) -> Dict[str, Union[float, bool]]:
     h_matrix = np.asarray(h_matrix, dtype=float)
     if h_matrix.shape != (3, 3):
         raise ValueError(f"Expected (3, 3) homography matrix, got {h_matrix.shape}")
