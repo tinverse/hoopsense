@@ -154,6 +154,12 @@ Guix should define:
 
 Guix should be the default documented entrypoint for repo development.
 
+Canonical commands:
+```bash
+guix shell -m guix.scm
+guix shell -m guix.scm -- python3 -m unittest
+```
+
 ### 6.2 Docker Design
 
 Docker should be used for:
@@ -164,6 +170,12 @@ Docker should be used for:
 The Docker image should be described honestly:
 - cloud/x86 image for GPU training
 - not the authoritative Jetson runtime story
+
+Canonical cloud packaging commands:
+```bash
+docker build -t hoopsense-cloud:latest .
+docker run --rm -it hoopsense-cloud:latest python3 tools/training/train_action_brain.py
+```
 
 ### 6.3 CI Design
 
@@ -193,6 +205,15 @@ For Jetson/Orin:
 - document validation commands
 - document where Guix ends and JetPack begins
 
+Canonical Jetson-oriented commands:
+```bash
+bash scripts/setup_orin.sh
+./hoops-orin-shell python3 tools/training/train_action_brain.py
+```
+
+Current caveat:
+- `scripts/setup_orin.sh` depends on host JetPack/NVIDIA libraries and is not a pure Guix runtime.
+
 ## 7. Recommended Near-Term Implementation Order
 
 1. Write and maintain the DevOps strategy and target operating modes.
@@ -207,6 +228,7 @@ For Jetson/Orin:
 - no checked-in CI workflow
 - Dockerfile is cloud-oriented and should not be described as the native Orin image
 - Orin setup remains dependent on host-installed NVIDIA libraries
+- no multi-arch container strategy is defined yet; cloud/x86 and Orin are still separate stories
 - cloud and edge artifact compatibility is not yet formally recorded
 
 These gaps should remain visible in planning until implemented.

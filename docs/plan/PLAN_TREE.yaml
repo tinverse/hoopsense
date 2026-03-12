@@ -352,6 +352,16 @@ levels:
       title: Publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
       owner: A0
       status: pending
+    - id: L3.27
+      parent: L2.22
+      title: Define dataset lineage and promotion rules across `synthetic_dataset_v2` and `oracle_dataset_v3+`
+      owner: A0
+      status: pending
+    - id: L3.28
+      parent: L2.27
+      title: Define multi-arch container strategy or explicitly maintain separate cloud/x86 and Orin container paths
+      owner: A0
+      status: pending
 
 priorities:
   current_frontier:
@@ -361,6 +371,8 @@ priorities:
     - L3.24
     - L3.25
     - L3.26
+    - L3.27
+    - L3.28
     - L3.4
     - L3.9
     - L3.10
@@ -371,6 +383,7 @@ priorities:
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.
     - Make the build and delivery story explicit before environment drift deepens.
+    - Make dataset lineage and container-target boundaries explicit before additional platform complexity lands.
     - Expand the Oracle only after the MVP contract stays stable.
     - Introduce possession context before attempting stats generation.
     - Keep deployment guidance separated by platform to avoid environment drift.

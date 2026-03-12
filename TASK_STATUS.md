@@ -2,20 +2,24 @@
 
 This file is a human-readable execution snapshot derived from `docs/plan/PLAN_TREE.yaml`.
 
+The old chapter-style status model is retired. This file now tracks the current plan frontier and active L-level work only.
+
 ## Current Frontier
 
 The current highest-priority frontier is:
-- align this status file with the plan tree and layered architecture
-- define Oracle dataset manifests and validation checks
-- record Action Brain training lineage beside checkpoints
-- make Docker docs explicitly cloud-oriented and not the native Orin story
-- add a checked-in CI workflow for Python, Rust, docs, and contract checks
-- publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
-- scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
-- define the `PossessionContext` contract and the first ballhandler/dribble/pass tracking slice
-- define the first stat-ready event set
-- separate cloud/x86 and Jetson/ARM64 deployment guidance
-- add first slice-based evaluation outputs
+- `L3.17` align this status file with the plan tree and layered architecture
+- `L3.18` define Oracle dataset manifests and validation checks
+- `L3.19` record Action Brain training lineage beside checkpoints
+- `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
+- `L3.25` add a checked-in CI workflow for Python, Rust, docs, and contract checks
+- `L3.26` publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
+- `L3.4` scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
+- `L3.9` define the `PossessionContext` contract
+- `L3.10` implement the first ballhandler/dribble/pass tracking slice
+- `L3.12` define the first stat-ready event set
+- `L3.20` add first slice-based evaluation outputs
+- `L3.27` define dataset version lineage and promotion rules across Oracle/synthetic training sets
+- `L3.28` define multi-arch or explicitly split cloud-vs-Orin container strategy
 
 ## L0 Product Goal
 

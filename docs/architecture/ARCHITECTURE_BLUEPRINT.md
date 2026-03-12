@@ -11,7 +11,7 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 ### Layer 1: The Perceiver (Python Prototype)
 - **Tech:** YOLOv8-pose + BoT-SORT.
 - **Responsibility:** Ingests raw video frames; identifies skeletons for players, the ball, and referees.
-- **Output:** Shush Contract JSONL stream.
+- **Output:** `Shush-P` JSONL stream for raw perception observations.
 
 ### Layer 2: Identity & Logic Heuristics (Python Prototype)
 - **Tech:** EasyOCR + HSV Clustering + Heuristic Rules.
@@ -29,7 +29,7 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 
 ### Layer 5: The Game State Ledger (Rust Core)
 - **Responsibility:** Consolidates possession context and events into an official, retroactive ledger with temporal reconciliation.
-- **Output:** Shush Contract JSONL stream + Player Statistics.
+- **Output:** `Shush-L` JSONL stream for validated ledger events + Player Statistics.
 
 ### Layer 6: Physics & Trajectory (Rust Core)
 - **Tech:** Parabolic Least Squares Fitting.
@@ -94,7 +94,13 @@ In current repo reality, Docker is the explicit cloud-training path, while Guix 
 - **Cloud Storage:** Standardized landing zone for raw video ingestion and JSONL "Shush" outputs.
 
 ## 6. The Data Flow (The "Shush" Contract)
-All layers communicate via a standardized JSONL format, ensuring the "Brain" (Rust) can process data regardless of the "Eye" (Mobile/HoopBox/DSLR).
+HoopSense uses the name "Shush" for JSONL-based machine-readable interchange, but there are distinct contract stages:
+1. `Shush-P`
+   Raw perception output from detectors, trackers, pose, and referee sensing.
+2. `Shush-L`
+   Ledger-validated events and possession-aware outputs used for downstream stats and reporting.
+
+This naming split avoids conflating raw observations with validated basketball meaning.
 
 ## 7. The ML Artifact Flow
 

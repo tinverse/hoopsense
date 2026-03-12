@@ -32,6 +32,9 @@ It applies to:
 - **MLR-01: Dataset Manifests**
   Every training dataset must ship with a manifest containing source lineage, schema version, label distribution, generation recipe, and validation summary.
 
+- **MLR-01a: Dataset Version Lineage**
+  Training datasets such as `synthetic_dataset_v2.jsonl` and `oracle_dataset_v3.jsonl` must have explicit lineage and promotion relationships rather than being treated as ad hoc replacements.
+
 - **MLR-02: Contract Validation**
   Training and inference inputs must be validated against explicit schema and feature contracts before use.
 
@@ -133,6 +136,7 @@ For Oracle datasets, the manifest should also include:
 - parser/FK version
 - projection settings
 - feature generation version
+- predecessor dataset id when superseding an older dataset
 
 ### 5.2 Feature Governance
 
@@ -193,10 +197,11 @@ Monitoring should track:
 ## 6. Recommended Near-Term Implementation Order
 
 1. Create dataset manifest and validation conventions for Oracle data.
-2. Add training-run lineage recording for Action Brain checkpoints.
-3. Add slice-based evaluation output for current Oracle and real-pose experiments.
-4. Add explicit checkpoint lifecycle states and promotion metadata.
-5. Separate cloud/x86 and Jetson/ARM64 runtime compatibility reporting.
+2. Define explicit lineage between current synthetic and Oracle dataset generations.
+3. Add training-run lineage recording for Action Brain checkpoints.
+4. Add slice-based evaluation output for current Oracle and real-pose experiments.
+5. Add explicit checkpoint lifecycle states and promotion metadata.
+6. Separate cloud/x86 and Jetson/ARM64 runtime compatibility reporting.
 
 ## 7. Out of Scope for the First MLOps Slice
 
