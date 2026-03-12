@@ -11,14 +11,7 @@ fn main() -> anyhow::Result<()> {
     let mut ball_trajectory = Trajectory::new();
 
     // Calibration: Set camera to same position as integration_probe.py
-    // Cam at (160, -500, 304.8), looking at (160, 0, 304.8)
-    // For identity R and simple translation:
     resolver.set_intrinsics(1000.0, 1000.0, 960.0, 540.0, vec![0.0; 5]);
-    
-    // We mock the h_matrix to be a simple scale/translation for the probe
-    // H maps pixel (u,v,1) -> court (x,y,w)
-    // Point(160, 0) at height 304.8 maps to Pixel(960, 540)
-    // For the probe, let's just use identity H to verify coordinate flow
     resolver.h_matrix = nalgebra::Matrix3::identity();
 
     let input_path = "data/intelligent_game_dna.jsonl";
@@ -45,13 +38,13 @@ fn main() -> anyhow::Result<()> {
             row["court_z"] = json!(cp.z);
 
             if kind == "ball" {
-                // For the probe, we mock the ball height at the rim to trigger intersection
                 let ball_height = referee.rim_pos_left.z;
                 ball_trajectory.add_point(t_ms, Point3::new(cp.x, cp.y, ball_height));
                 if ball_trajectory.is_rim_intersect(&referee.rim_pos_left) || 
                    ball_trajectory.is_rim_intersect(&referee.rim_pos_right) {
                     ledger.propose_event(GameEvent::MadeBasket {
                         player_id: 0,
+                        team_id: 1, // Added missing team_id
                         points: 2,
                         t_ms,
                         is_official: false,
