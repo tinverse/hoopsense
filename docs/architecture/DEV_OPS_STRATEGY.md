@@ -2,6 +2,11 @@
 
 This document defines the practical DevOps strategy for HoopSense across local development, CI, cloud training, and Jetson deployment.
 
+In HoopSense, DevOps combines:
+- `Guix` for reproducible development environments where possible
+- `Docker` for fallback packaging and runtime boundaries
+- `Terraform` for stable shared cloud infrastructure once the platform surface stops changing rapidly
+
 ## 1. Scope
 
 The strategy covers:
@@ -41,6 +46,7 @@ Current repo artifacts:
 
 Important current gap:
 - no checked-in CI workflow yet
+- no checked-in Terraform layer yet
 
 ## 4. DevOps Requirements
 
@@ -69,6 +75,9 @@ Important current gap:
 
 - **DOR-08: Publication Discipline**
   Image, model, and dataset publication paths must be explicit and reviewable.
+
+- **DOR-09: Infrastructure-as-Code**
+  Stable shared cloud infrastructure should move into version-controlled IaC rather than remain ad hoc.
 
 ### Non-Functional Requirements
 
@@ -102,9 +111,34 @@ HoopSense DevOps uses four environment layers:
 4. **Cloud Job Definition**
    Use `vertex_job.yaml` or equivalent job runner configuration.
 
+5. **Infrastructure Definition**
+   Use Terraform for stable shared GCP resources once the resource model justifies it.
+
 ### 5.2 CI Layers
 
-The intended CI pipeline should have staged gates:
+The intended CI system should be multi-pipeline, not monolithic.
+
+#### Functional-Core Pipelines
+
+HoopSense should isolate CI by functional core:
+- `core-logic`
+  - Rust math, ledger logic, native contracts
+- `perception-inference`
+  - Python inference, feature construction, runtime checks
+- `ml-training`
+  - dataset validation, training code, evaluation/report generation
+- `tooling-review`
+  - review tooling, infra scripts, agent bridges
+- `docs-plan`
+  - requirements, architecture, plan tree, task snapshot
+- `packaging-runtime`
+  - Guix manifests, Docker build, cloud specs, Orin scripts
+
+These pipelines should be triggered primarily by path ownership.
+
+#### CI Tiers
+
+The intended CI pipeline stack should have staged gates:
 
 1. **Fast checks**
    - Python syntax/compilation
@@ -124,7 +158,28 @@ The intended CI pipeline should have staged gates:
    - cloud job spec validation
    - Jetson runtime docs/commands consistency check
 
+5. **Conditional heavy checks**
+   - training smoke runs
+   - heavier evaluation
+   - packaging publication checks
+
+Training should not be a default CI step. It should run only when:
+- training code changes
+- feature/schema contracts change
+- Oracle/data-generation code changes
+- training config changes
+- or a manual/label-based trigger requests it
+
 There is no checked-in GitHub Actions workflow yet, so this section is strategic design rather than current implementation.
+
+#### Integration Pipeline
+
+Above the functional cores, HoopSense should have an integration pipeline that:
+- depends on or triggers selected core pipelines
+- verifies cross-core contract compatibility
+- runs end-to-end smoke validation when warranted
+
+This keeps routine PR checks fast while still allowing a broader integration run.
 
 ### 5.3 Deployment Modes
 
@@ -136,6 +191,7 @@ There is no checked-in GitHub Actions workflow yet, so this section is strategic
 - primary path: Docker image build from `Dockerfile`
 - runtime entrypoint: `tools/infra/cloud_train_wrapper.sh`
 - orchestration target: Vertex AI or equivalent GCP GPU runner
+- infrastructure control: direct `gcloud` first, Terraform when shared resources stabilize
 
 #### Mode C: Jetson / Orin Runtime
 - primary path: host JetPack plus Guix-managed userland where possible
@@ -184,6 +240,49 @@ The target CI design should include:
 - matrix-aware checks where helpful
 - separation between fast gates and slower packaging gates
 - explicit failure on plan/doc drift for architecture-heavy changes
+- path-based triggering by functional core
+- optional/manual integration runs
+- conditional ML/training runs instead of always-on training
+
+Recommended first workflow split:
+1. `core-logic`
+2. `perception-inference`
+3. `docs-plan`
+4. `packaging-runtime`
+5. `integration`
+6. `ml-training` only on relevant changes or manual trigger
+
+## 6.6 CI Tooling Guidance
+
+Good CI tooling for HoopSense should be judged by:
+- cost
+- path-based triggering
+- artifact handling
+- secrets/GCP integration
+- support for manual and scheduled runs
+
+Practical options:
+
+### GitHub Actions
+- best default if the repo stays on GitHub
+- cheap and simple for CPU-heavy checks
+- easy path filters, matrices, artifacts, and manual triggers
+- not ideal for frequent GPU training in hosted runners
+
+### Buildkite / self-hosted runners
+- strong option if you want your own machines or Jetson/cloud runners
+- better when you want exact control over hardware and cost
+- more operational overhead than GitHub Actions
+
+### Google Cloud Build / Vertex-triggered workflows
+- good for cloud-native packaging and training orchestration
+- useful for image builds and heavy GCP-integrated jobs
+- weaker as the only general-purpose CI surface for docs/tests/plans
+
+Recommended stance:
+- use a normal CI system for code/docs/contracts
+- use GCP-native jobs for heavy build/train/integration steps when needed
+- do not run expensive GPU training on every PR
 
 ### 6.4 Cloud Design
 
@@ -196,7 +295,26 @@ Cloud training should be treated as a controlled path:
 
 The existing `cloud_train_wrapper.sh` and `vertex_job.yaml` are the seeds of that path.
 
-### 6.5 Edge Design
+### 6.5 Infrastructure-as-Code Design
+
+Terraform should own stable shared cloud resources such as:
+- GCS buckets
+- Artifact Registry repositories
+- service accounts and IAM bindings
+- long-lived build or training support resources
+
+Direct `gcloud` should remain acceptable for:
+- early prototyping
+- one-off jobs
+- rapidly changing experimental workflows
+
+Recommended operating split:
+- `Guix`: reproducible local and developer environments
+- `Docker`: portable cloud runtime/image boundary
+- `Terraform`: durable shared GCP resource management
+- `gcloud`: iterative cloud orchestration during early stages
+
+### 6.6 Edge Design
 
 Edge runtime should be treated as a documented compatibility target, not a copy of cloud runtime assumptions.
 
@@ -214,21 +332,49 @@ bash scripts/setup_orin.sh
 Current caveat:
 - `scripts/setup_orin.sh` depends on host JetPack/NVIDIA libraries and is not a pure Guix runtime.
 
+## 6.7 Infrastructure-as-Code Guidance
+
+Terraform is optional, not mandatory.
+
+Use Terraform when:
+- you are managing repeatable cloud infrastructure at non-trivial scope
+- you want stable GCS buckets, service accounts, artifact registries, and job definitions
+
+Use direct `gcloud` when:
+- the system is still evolving quickly
+- the infrastructure footprint is small
+- you are prototyping cloud workflows
+
+Recommended current stance for HoopSense:
+- direct `gcloud` is acceptable now
+- adopt Terraform once the cloud footprint stabilizes
+- keep job specs and environment definitions in repo even before Terraform
+
+Practical split:
+- `Guix` for environments
+- `Docker` for images
+- `Terraform` for shared infrastructure
+- `gcloud` for early orchestration and experiments
+
 ## 7. Recommended Near-Term Implementation Order
 
 1. Write and maintain the DevOps strategy and target operating modes.
 2. Separate cloud/x86 and Jetson/ARM64 guidance in docs and scripts.
 3. Add a checked-in CI workflow for Python, Rust, docs, and contract checks.
-4. Add Docker build validation in CI.
-5. Add Guix smoke validation where practical.
-6. Add compatibility records for cloud and Jetson targets.
+4. Split CI into functional-core workflows with a separate integration pipeline.
+5. Add Docker build validation in CI.
+6. Add Guix smoke validation where practical.
+7. Add compatibility records for cloud and Jetson targets.
+8. Add Terraform once the shared GCP surface is stable enough to justify IaC maintenance.
 
 ## 8. Explicit Current Gaps
 
 - no checked-in CI workflow
+- no functional-core CI split yet
 - Dockerfile is cloud-oriented and should not be described as the native Orin image
 - Orin setup remains dependent on host-installed NVIDIA libraries
 - no multi-arch container strategy is defined yet; cloud/x86 and Orin are still separate stories
 - cloud and edge artifact compatibility is not yet formally recorded
+- no Terraform layer exists yet for shared GCP infrastructure
 
 These gaps should remain visible in planning until implemented.

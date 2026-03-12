@@ -216,6 +216,16 @@ levels:
       title: Cloud and edge delivery guidance with explicit target boundaries
       owner: A0
       status: pending
+    - id: L2.30
+      parent: L1.8
+      title: Multi-pipeline CI architecture by functional core
+      owner: A0
+      status: pending
+    - id: L2.31
+      parent: L1.8
+      title: Terraform adoption for stable shared GCP infrastructure
+      owner: A0
+      status: pending
 
   L3:
     - id: L3.1
@@ -362,6 +372,31 @@ levels:
       title: Define multi-arch container strategy or explicitly maintain separate cloud/x86 and Orin container paths
       owner: A0
       status: pending
+    - id: L3.29
+      parent: L2.30
+      title: Define functional-core CI ownership and path triggers
+      owner: A0
+      status: pending
+    - id: L3.30
+      parent: L2.30
+      title: Add a lightweight integration pipeline that depends on selected core workflows
+      owner: A0
+      status: pending
+    - id: L3.31
+      parent: L2.28
+      title: Gate training smoke/evaluation workflows behind ML-specific path changes or manual triggers
+      owner: A0
+      status: pending
+    - id: L3.32
+      parent: L2.31
+      title: Define which GCP resources remain on direct `gcloud` versus move into Terraform
+      owner: A0
+      status: pending
+    - id: L3.33
+      parent: L2.31
+      title: Add initial Terraform layout for shared buckets, registry, and service accounts
+      owner: A0
+      status: pending
 
 priorities:
   current_frontier:
@@ -373,6 +408,11 @@ priorities:
     - L3.26
     - L3.27
     - L3.28
+    - L3.29
+    - L3.30
+    - L3.31
+    - L3.32
+    - L3.33
     - L3.4
     - L3.9
     - L3.10
@@ -384,6 +424,8 @@ priorities:
     - Put dataset and checkpoint governance in place before scaling training complexity.
     - Make the build and delivery story explicit before environment drift deepens.
     - Make dataset lineage and container-target boundaries explicit before additional platform complexity lands.
+    - Keep CI cost-effective by isolating cores and gating training-heavy workflows.
+    - Add Terraform only for the stable shared cloud layer, not for still-fluid experiments.
     - Expand the Oracle only after the MVP contract stays stable.
     - Introduce possession context before attempting stats generation.
     - Keep deployment guidance separated by platform to avoid environment drift.

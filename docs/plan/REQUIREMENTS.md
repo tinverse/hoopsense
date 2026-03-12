@@ -24,8 +24,12 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **FR-17: Deployment Compatibility Tracking:** Each model artifact must declare and validate compatible runtime targets such as cloud/x86 and Jetson/ARM64.
 - **FR-18: Reproducible Environment Definitions:** Development and target runtime environments must be defined in checked-in manifests or build specs.
 - **FR-19: CI Quality Gates:** The project must have automated checks for code quality, contracts, and documentation coherence.
+- **FR-19a: Functional-Core CI:** CI must be split into functional-core pipelines so changes trigger only the relevant checks.
+- **FR-19b: Conditional Training CI:** Training and heavy evaluation must run only when ML-related files or explicit triggers require it.
+- **FR-19c: Integration Orchestration:** A higher-level integration pipeline must be able to depend on or trigger lower-level functional pipelines.
 - **FR-20: Cloud Training Delivery:** The project must support reproducible cloud training packaging and job execution.
 - **FR-21: Edge Runtime Delivery:** The project must provide a documented and verifiable Jetson/Orin runtime path.
+- **FR-22: Infrastructure Definition:** Stable shared cloud infrastructure should be definable in code, with Terraform preferred once the GCP surface stabilizes.
 - FR-09: Action Taxonomy & Signal Decoding:
     - **Scoring Actions:** 1-pt, 2-pt, 3-pt attempts vs. makes.
     - **Dribble Actions:** Crossover, Between-the-legs, Behind-the-back, Hesitation.
@@ -45,6 +49,8 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **NFR-08: Operational Clarity:** Operators must be able to identify the active model, its promotion status, and its known limitations.
 - **NFR-09: Environment Reproducibility:** Developers should be able to recreate supported environments from checked-in definitions.
 - **NFR-10: Delivery Clarity:** The repo must distinguish local, cloud, and Jetson operating modes explicitly.
+- **NFR-11: Cost Discipline:** CI should avoid unnecessary GPU, training, and packaging runs by default.
+- **NFR-12: Infrastructure Repeatability:** Stable cloud resources should be recreatable without manual console drift.
 
 ## Technical Constraints
 - **Primary Languages:** Rust (Performance/IP), Python (AI Orchestration/Training).
@@ -54,3 +60,5 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **Feature Layering Constraint:** The Action Brain remains a narrow local classifier; possession logic and stats must remain separable and auditable.
 - **MLOps Constraint:** Dataset, feature, evaluation, and promotion artifacts must be versioned and reviewable as first-class project outputs.
 - **DevOps Constraint:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback packaging and runtime boundary where necessary.
+- **CI Constraint:** Fast path-based functional pipelines are preferred; integration and training pipelines should be gated and selective.
+- **IaC Constraint:** Use direct `gcloud` for early iteration and Terraform for stabilized shared GCP infrastructure.

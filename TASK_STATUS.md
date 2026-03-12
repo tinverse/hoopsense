@@ -13,6 +13,11 @@ The current highest-priority frontier is:
 - `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
 - `L3.25` add a checked-in CI workflow for Python, Rust, docs, and contract checks
 - `L3.26` publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
+- `L3.29` define functional-core CI ownership and path triggers
+- `L3.30` add a lightweight integration pipeline that depends on selected core workflows
+- `L3.31` gate training smoke/evaluation workflows behind ML-specific changes or manual triggers
+- `L3.32` define which GCP resources stay on direct `gcloud` versus move into Terraform
+- `L3.33` add initial Terraform layout for shared buckets, registry, and service accounts
 - `L3.4` scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
 - `L3.9` define the `PossessionContext` contract
 - `L3.10` implement the first ballhandler/dribble/pass tracking slice
@@ -82,6 +87,8 @@ The current highest-priority frontier is:
 - [>] Docker fallback packaging and cloud image discipline
 - [ ] CI quality gates for code, contracts, and docs
 - [ ] Cloud and edge delivery guidance with explicit target boundaries
+- [ ] Multi-pipeline CI architecture by functional core
+- [ ] Terraform adoption for stable shared GCP infrastructure
 
 ## Key L3 Execution Slices
 
@@ -97,6 +104,11 @@ The current highest-priority frontier is:
 - [ ] Make Docker docs explicitly cloud-oriented and not the native Orin story
 - [ ] Add a checked-in CI workflow for Python, Rust, docs, and contract checks
 - [ ] Publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
+- [ ] Define functional-core CI ownership and path triggers
+- [ ] Add a lightweight integration pipeline that depends on selected core workflows
+- [ ] Gate training smoke/evaluation workflows behind ML-specific changes or manual triggers
+- [ ] Define which GCP resources stay on direct `gcloud` versus move into Terraform
+- [ ] Add initial Terraform layout for shared buckets, registry, and service accounts
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
@@ -120,6 +132,8 @@ What is not yet true:
 - event attribution and stats generation are not yet complete
 - dataset manifests and checkpoint lineage are not yet implemented
 - a checked-in CI workflow does not yet exist
+- the CI architecture is not yet split by functional core
+- no Terraform layer exists yet for shared GCP infrastructure
 - deployment guidance is not yet fully separated between Jetson/ARM64 and cloud/x86
 - `TASK_STATUS.md` was previously stale and is now being reset around the plan tree
 
@@ -135,4 +149,7 @@ What is not yet true:
 - [ ] Checkpoint lineage recording implemented
 - [ ] Slice-based evaluation report implemented
 - [ ] CI workflow implemented
+- [ ] Functional-core CI split implemented
+- [ ] Conditional training workflow implemented
+- [ ] Terraform baseline implemented for stable shared GCP resources
 - [ ] Cloud/x86 and Jetson/ARM64 runbooks published
