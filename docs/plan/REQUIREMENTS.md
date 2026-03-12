@@ -22,6 +22,10 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **FR-15: Slice-Based Evaluation:** Evaluation must report class-level and slice-level quality, not just aggregate accuracy.
 - **FR-16: Drift Monitoring:** The system must detect drift in action distribution, pose quality, ball visibility, and environment characteristics over time.
 - **FR-17: Deployment Compatibility Tracking:** Each model artifact must declare and validate compatible runtime targets such as cloud/x86 and Jetson/ARM64.
+- **FR-18: Reproducible Environment Definitions:** Development and target runtime environments must be defined in checked-in manifests or build specs.
+- **FR-19: CI Quality Gates:** The project must have automated checks for code quality, contracts, and documentation coherence.
+- **FR-20: Cloud Training Delivery:** The project must support reproducible cloud training packaging and job execution.
+- **FR-21: Edge Runtime Delivery:** The project must provide a documented and verifiable Jetson/Orin runtime path.
 - FR-09: Action Taxonomy & Signal Decoding:
     - **Scoring Actions:** 1-pt, 2-pt, 3-pt attempts vs. makes.
     - **Dribble Actions:** Crossover, Between-the-legs, Behind-the-back, Hesitation.
@@ -39,6 +43,8 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **NFR-06: Auditability:** A promoted model must be traceable to the exact data, config, code revision, and evaluation evidence that produced it.
 - **NFR-07: Repeatability:** Re-running the same training configuration on the same dataset should yield materially similar outputs and metrics.
 - **NFR-08: Operational Clarity:** Operators must be able to identify the active model, its promotion status, and its known limitations.
+- **NFR-09: Environment Reproducibility:** Developers should be able to recreate supported environments from checked-in definitions.
+- **NFR-10: Delivery Clarity:** The repo must distinguish local, cloud, and Jetson operating modes explicitly.
 
 ## Technical Constraints
 - **Primary Languages:** Rust (Performance/IP), Python (AI Orchestration/Training).
@@ -47,3 +53,4 @@ HoopSense is a "Sports OS" designed to transform raw basketball footage into a p
 - **Environment:** Guix-managed toolchains for deterministic builds.
 - **Feature Layering Constraint:** The Action Brain remains a narrow local classifier; possession logic and stats must remain separable and auditable.
 - **MLOps Constraint:** Dataset, feature, evaluation, and promotion artifacts must be versioned and reviewable as first-class project outputs.
+- **DevOps Constraint:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback packaging and runtime boundary where necessary.

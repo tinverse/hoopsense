@@ -2,7 +2,7 @@
 
 HoopSense uses a **Core-and-Satellite** architecture to separate performance-critical vision logic from high-level application orchestration.
 
-The product architecture is also governed by a layered MLOps strategy. Data artifacts, feature contracts, evaluation reports, and model promotion records are first-class components of the system, not implementation byproducts.
+The product architecture is also governed by layered MLOps and DevOps strategies. Data artifacts, feature contracts, evaluation reports, model promotion records, environment definitions, and runtime compatibility records are first-class components of the system, not implementation byproducts.
 
 ## 1. The Prototyping Intelligence Stack (Python-First)
 
@@ -60,6 +60,11 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Key Rule:** No dataset or checkpoint should be treated as production-ready without explicit validation evidence.
 - **Scope:** Covers both cloud/x86 training and Jetson/ARM64 deployment targets.
 
+### DevOps Control Plane
+- **Responsibility:** Governs reproducible developer environments, CI quality gates, build packaging, cloud job execution, and target-specific runtime guidance.
+- **Key Rule:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback runtime and packaging boundary.
+- **Scope:** Covers local development, cloud training images, and Jetson/Orin deployment paths.
+
 ## 4. The Capture Ecosystem (Satellites)
 
 ### Mobile Lens (Thin Client)
@@ -80,6 +85,8 @@ Currently, HoopSense utilizes a Python-based perception pipeline for rapid itera
 - **Method:** `guix pack -f docker`
 - **Goal:** Create a deterministic, bit-identical image containing the Rust core, Python inference engine, and all CUDA/system dependencies.
 - **Value:** Eliminates "it works on my machine" bugs when moving from local development to the cloud.
+
+In current repo reality, Docker is the explicit cloud-training path, while Guix remains the preferred local reproducibility mechanism. Jetson/Orin requires an additional documented vendor-library bridge.
 
 ### Infrastructure (Google Cloud Platform)
 - **Vertex AI (Colab Enterprise):** Used for interactive model development and fine-tuning with custom Docker images.
@@ -102,3 +109,14 @@ HoopSense treats the ML lifecycle as an explicit artifact graph:
 8. deployment-target compatibility reports
 
 This ML artifact flow is part of the product architecture because bad lineage or silent contract drift can invalidate downstream basketball reasoning.
+
+## 8. The Build and Delivery Flow
+
+HoopSense treats build and delivery as an explicit control path:
+1. Guix manifests define reproducible development inputs where possible
+2. CI validates code, contracts, and documentation
+3. Docker images package cloud training or constrained runtime boundaries
+4. Vertex/GCP job specs execute cloud workloads
+5. Jetson/Orin runtime guidance documents the vendor boundary and validation steps
+
+This build-and-delivery flow is part of the product architecture because deployment ambiguity can invalidate reproducibility claims.

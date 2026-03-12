@@ -8,6 +8,9 @@ The current highest-priority frontier is:
 - align this status file with the plan tree and layered architecture
 - define Oracle dataset manifests and validation checks
 - record Action Brain training lineage beside checkpoints
+- make Docker docs explicitly cloud-oriented and not the native Orin story
+- add a checked-in CI workflow for Python, Rust, docs, and contract checks
+- publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
 - scale the Oracle from the MVP fixture to Subject 124 while preserving `features_v2`
 - define the `PossessionContext` contract and the first ballhandler/dribble/pass tracking slice
 - define the first stat-ready event set
@@ -27,6 +30,7 @@ The current highest-priority frontier is:
 - [>] Deployment, runtime, and operator workflow
 - [>] Collaboration, review, and project control
 - [>] MLOps governance and model lifecycle control
+- [>] DevOps reproducibility and delivery control
 
 ## L2 Status By Workstream
 
@@ -69,6 +73,12 @@ The current highest-priority frontier is:
 - [ ] Slice-based evaluation and drift monitoring
 - [ ] Deployment compatibility reporting across cloud and edge targets
 
+### DevOps Reproducibility and Delivery Control
+- [>] Guix-first development and environment reproducibility
+- [>] Docker fallback packaging and cloud image discipline
+- [ ] CI quality gates for code, contracts, and docs
+- [ ] Cloud and edge delivery guidance with explicit target boundaries
+
 ## Key L3 Execution Slices
 
 ### Completed
@@ -80,6 +90,9 @@ The current highest-priority frontier is:
 - [ ] Bring `TASK_STATUS.md` into alignment with the layered feature plan
 - [ ] Define Oracle dataset manifest fields and validation checks
 - [ ] Record Action Brain training lineage beside each checkpoint
+- [ ] Make Docker docs explicitly cloud-oriented and not the native Orin story
+- [ ] Add a checked-in CI workflow for Python, Rust, docs, and contract checks
+- [ ] Publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
@@ -96,11 +109,13 @@ What is currently true:
 - a GPU training path has produced an initial checkpoint
 - the layered feature architecture is now documented
 - MLOps is now a first-class product concern in the requirements, architecture, and plan
+- DevOps is now a first-class product concern in the requirements, architecture, and plan
 
 What is not yet true:
 - possession context is not yet implemented as a durable ledger contract
 - event attribution and stats generation are not yet complete
 - dataset manifests and checkpoint lineage are not yet implemented
+- a checked-in CI workflow does not yet exist
 - deployment guidance is not yet fully separated between Jetson/ARM64 and cloud/x86
 - `TASK_STATUS.md` was previously stale and is now being reset around the plan tree
 
@@ -115,3 +130,5 @@ What is not yet true:
 - [ ] Oracle dataset manifest validation implemented
 - [ ] Checkpoint lineage recording implemented
 - [ ] Slice-based evaluation report implemented
+- [ ] CI workflow implemented
+- [ ] Cloud/x86 and Jetson/ARM64 runbooks published

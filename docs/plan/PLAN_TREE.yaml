@@ -10,6 +10,7 @@ meta:
     - docs/architecture/components/LAYERED_FEATURE_SCHEMA.md
     - docs/architecture/components/FEATURE_SCHEMA_V2.md
     - docs/architecture/ML_OPS_STRATEGY.md
+    - docs/architecture/DEV_OPS_STRATEGY.md
     - TASK_STATUS.md
   last_updated: "2026-03-12"
 
@@ -54,6 +55,11 @@ levels:
     - id: L1.7
       parent: L0.1
       title: MLOps governance and model lifecycle control
+      owner: A0
+      status: in_progress
+    - id: L1.8
+      parent: L0.1
+      title: DevOps reproducibility and delivery control
       owner: A0
       status: in_progress
 
@@ -190,6 +196,27 @@ levels:
       owner: A0
       status: pending
 
+    - id: L2.26
+      parent: L1.8
+      title: Guix-first development and environment reproducibility
+      owner: A0
+      status: in_progress
+    - id: L2.27
+      parent: L1.8
+      title: Docker fallback packaging and cloud image discipline
+      owner: A0
+      status: in_progress
+    - id: L2.28
+      parent: L1.8
+      title: CI quality gates for code, contracts, and docs
+      owner: A0
+      status: pending
+    - id: L2.29
+      parent: L1.8
+      title: Cloud and edge delivery guidance with explicit target boundaries
+      owner: A0
+      status: pending
+
   L3:
     - id: L3.1
       parent: L2.4
@@ -305,12 +332,35 @@ levels:
       title: Publish explicit compatibility records for cloud/x86 and Jetson/ARM64 artifacts
       owner: A0
       status: pending
+    - id: L3.23
+      parent: L2.26
+      title: Keep `guix.scm` and `guix_orin.scm` aligned with documented development workflows
+      owner: A0
+      status: pending
+    - id: L3.24
+      parent: L2.27
+      title: Make Docker docs explicitly cloud-oriented and not the native Orin story
+      owner: A0
+      status: pending
+    - id: L3.25
+      parent: L2.28
+      title: Add a checked-in CI workflow for Python, Rust, docs, and contract checks
+      owner: A0
+      status: pending
+    - id: L3.26
+      parent: L2.29
+      title: Publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
+      owner: A0
+      status: pending
 
 priorities:
   current_frontier:
     - L3.17
     - L3.18
     - L3.19
+    - L3.24
+    - L3.25
+    - L3.26
     - L3.4
     - L3.9
     - L3.10
@@ -320,6 +370,7 @@ priorities:
   rationale:
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.
+    - Make the build and delivery story explicit before environment drift deepens.
     - Expand the Oracle only after the MVP contract stays stable.
     - Introduce possession context before attempting stats generation.
     - Keep deployment guidance separated by platform to avoid environment drift.
