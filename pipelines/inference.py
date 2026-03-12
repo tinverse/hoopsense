@@ -1,4 +1,3 @@
-import cv2
 import json
 import numpy as np
 import re
@@ -101,6 +100,7 @@ def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos, kpts_3
     return torch.FloatTensor(np.array(features)).unsqueeze(0).to(device)
 
 def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
+    import cv2
     import torch
     from ultralytics import YOLO
     import easyocr

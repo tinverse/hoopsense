@@ -21,6 +21,7 @@ export PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH"
 cat <<EOF > hoops-orin-shell
 #!/bin/bash
 # HoopSense Orin GPU-Enabled Shell
+set -e
 guix shell -m guix_orin.scm --pure \
   --preserve=LD_LIBRARY_PATH \
   --preserve=PATH \
@@ -29,7 +30,7 @@ guix shell -m guix_orin.scm --pure \
   --share=/usr/local/cuda \
   --share=/usr/lib/python3/dist-packages \
   --share=/etc/nv_tegra_release \
-  -- bash -lc "\$@"
+  -- "\$@"
 EOF
 
 chmod +x hoops-orin-shell

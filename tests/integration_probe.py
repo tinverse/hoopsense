@@ -1,8 +1,28 @@
-import json
 import os
+import sys
+
+if not sys.flags.no_user_site:
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    os.execvpe(sys.executable, [sys.executable, "-s", *sys.argv], env)
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+import json
 import subprocess
+import shutil
 import numpy as np
 from pipelines.behavior_engine import BehaviorStateMachine
+
+
+def run_guix_command(packages, argv):
+    if shutil.which("guix"):
+        cmd = ["guix", "shell", "--pure", *packages, "--", *argv]
+    else:
+        cmd = argv
+    return subprocess.check_output(cmd, text=True)
 
 def local_match_pose_to_box(box, poses, frame_w, frame_h):
     """Local implementation for test verification."""
@@ -48,7 +68,7 @@ def run_rigorous_probe():
         k[0] = [0.5, y_val - 0.1]
         k[9:11] = [0.5, y_val - 0.2]
         jump_sequence.append(k)
-    fsm.update(jump_sequence)
+    fsm.update(jump_sequence, context={"has_possession": True})
     assert fsm.get_label() == "jump_shot", f"DSL failed. Got '{fsm.get_label()}'"
     print("[SUCCESS] DSL Rule 'jump_shot' verified.")
 
@@ -97,8 +117,10 @@ def run_rigorous_probe():
         f.write(json.dumps({"kind": "referee", "t_ms": 2000, "x": 500, "y": 500, "signal": "ref_3pt_success", "confidence_bps": 9900}) + "\n")
 
     try:
-        cmd = "guix shell -m guix.scm -- bash -lc 'cargo run --quiet --manifest-path core/Cargo.toml --bin spatial_processor'"
-        output = subprocess.check_output(cmd, shell=True).decode("utf-8")
+        output = run_guix_command(
+            ["bash", "rust", "rust:cargo", "pkg-config", "openssl", "gcc-toolchain", "coreutils", "nss-certs", "python", "python-numpy", "python-pyyaml", "zlib"],
+            ["bash", "--noprofile", "--norc", "-c", "cargo run --quiet --manifest-path core/Cargo.toml --bin spatial_processor"],
+        )
         if "[SCORE] Final Score: (3, 0)" in output:
             print("[SUCCESS] End-to-End Logic Bridge Verified (Score: 3-0).")
         else:
