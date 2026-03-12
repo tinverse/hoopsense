@@ -1,13 +1,18 @@
 import unittest
 from unittest.mock import patch
 
-from tools.infra.gemini_mcp_server import GeminiBridgeConfig
-from tools.infra.gemini_mcp_server import GeminiBridgeServer
+from tools.infra.gemini_collab_mcp import GeminiCollabConfig
+from tools.infra.gemini_collab_mcp import GeminiCollabServer
 
 
-class TestGeminiMcpServer(unittest.TestCase):
+class TestGeminiCollabMcp(unittest.TestCase):
     def setUp(self):
-        self.server = GeminiBridgeServer(GeminiBridgeConfig(gemini_command="gemini"))
+        self.server = GeminiCollabServer(
+            GeminiCollabConfig(
+                gemini_command="gemini",
+                default_cwd="/data/projects/hoopsense",
+            )
+        )
 
     def test_initialize_reports_tool_capability(self):
         response = self.server.handle_message(
@@ -16,7 +21,7 @@ class TestGeminiMcpServer(unittest.TestCase):
 
         self.assertEqual(response["result"]["protocolVersion"], "2025-03-26")
         self.assertIn("tools", response["result"]["capabilities"])
-        self.assertEqual(response["result"]["serverInfo"]["name"], "hoopsense-gemini-bridge")
+        self.assertEqual(response["result"]["serverInfo"]["name"], "hoopsense-gemini-collab")
 
     def test_tools_list_exposes_ask_gemini(self):
         response = self.server.handle_message(
@@ -27,11 +32,13 @@ class TestGeminiMcpServer(unittest.TestCase):
         self.assertEqual(tool["name"], "ask_gemini")
         self.assertIn("prompt", tool["inputSchema"]["properties"])
 
-    @patch("tools.infra.gemini_mcp_server.subprocess.run")
-    def test_tools_call_shells_out_to_gemini(self, mock_run):
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = '{"answer":"ok"}'
-        mock_run.return_value.stderr = ""
+    @patch("tools.infra.gemini_collab_mcp.GeminiProjectClient.ask")
+    def test_tools_call_uses_project_session_with_collaboration_prompt(self, mock_ask):
+        mock_ask.return_value = {
+            "session_id": "session-1",
+            "response": "ok",
+            "stats": {"tokens": 123},
+        }
 
         response = self.server.handle_message(
             {
@@ -41,32 +48,22 @@ class TestGeminiMcpServer(unittest.TestCase):
                 "params": {
                     "name": "ask_gemini",
                     "arguments": {
+                        "topic": "architecture",
                         "prompt": "Summarize the repo",
                         "model": "gemini-2.5-pro",
-                        "approval_mode": "plan",
                         "output_format": "json",
                     },
                 },
             }
         )
 
-        mock_run.assert_called_once()
-        command = mock_run.call_args.kwargs["args"] if "args" in mock_run.call_args.kwargs else mock_run.call_args.args[0]
-        self.assertEqual(
-            command,
-            [
-                "gemini",
-                "--model",
-                "gemini-2.5-pro",
-                "--approval-mode",
-                "plan",
-                "--output-format",
-                "json",
-                "--prompt",
-                "Summarize the repo",
-            ],
-        )
-        self.assertEqual(response["result"]["structuredContent"]["stdout"], '{"answer":"ok"}')
+        mock_ask.assert_called_once()
+        prompt_arg = mock_ask.call_args.args[0]
+        self.assertIn("Senior Software Architect", prompt_arg)
+        self.assertIn("Topic: architecture", prompt_arg)
+        self.assertIn("Summarize the repo", prompt_arg)
+        self.assertEqual(response["result"]["structuredContent"]["response"], "ok")
+        self.assertEqual(response["result"]["structuredContent"]["session_id"], "session-1")
         self.assertNotIn("isError", response["result"])
 
     def test_tools_call_requires_prompt(self):
