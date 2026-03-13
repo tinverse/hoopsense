@@ -1,74 +1,60 @@
-import subprocess
 import os
-import sys
-import yaml
+import subprocess
+import time
 
-class ColabManager:
-    def __init__(self, config_path="hoops_config.yaml"):
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-        self.project = os.getenv("GCP_PROJECT_ID", "hoopsense-ai")
-        self.region = os.getenv("GCP_REGION", "us-central1")
-        self.runtime_id = "hoopsense-gpu-runtime"
-        self.template_id = "hoopsense-t4-template"
 
-    def provision(self):
-        """Creates the T4 GPU Runtime Template and Instance."""
-        print(f"[INFO] Provisioning Colab Enterprise Instance in {self.region}...")
-        
-        # 1. Create Template (Machine: n1-standard-4, GPU: T4)
-        try:
-            subprocess.run([
-                "gcloud", "beta", "ai", "notebook-runtime-templates", "create", self.template_id,
-                f"--project={self.project}", f"--region={self.region}",
-                "--display-name=HoopSense T4 GPU",
-                "--machine-type=n1-standard-4",
-                "--accelerator-type=NVIDIA_TESLA_T4",
-                "--accelerator-count=1",
-                "--shielded-secure-boot"
-            ], check=True)
-        except subprocess.CalledProcessError:
-            print("[INFO] Template might already exist, proceeding to runtime creation.")
+def mount_drive():
+    """Mounts Google Drive if running in Colab."""
+    try:
+        from google.colab import drive
+        drive.mount('/content/drive')
+        print("[COLAB] Drive mounted successfully.")
+        return True
+    except ImportError:
+        print("[LOCAL] Not in Colab environment.")
+        return False
 
-        # 2. Create Runtime
-        subprocess.run([
-            "gcloud", "beta", "ai", "notebook-runtimes", "create", self.runtime_id,
-            f"--project={self.project}", f"--region={self.region}",
-            f"--notebook-runtime-template={self.template_id}"
-        ], check=True)
-        print("[SUCCESS] GPU Runtime Created.")
 
-    def terminate(self):
-        """Force shut down to stop billing."""
-        print("[INFO] Terminating Cloud Runtime...")
-        subprocess.run([
-            "gcloud", "beta", "ai", "notebook-runtimes", "delete", self.runtime_id,
-            f"--project={self.project}", f"--region={self.region}", "--quiet"
-        ], check=True)
+def setup_venv(venv_path="venv_hoops"):
+    """Creates and initializes a virtual environment for the project."""
+    if not os.path.exists(venv_path):
+        print(f"[INFO] Creating virtual environment at {venv_path}...")
+        subprocess.run(["python3", "-m", "venv", venv_path])
 
-    def run_pipeline(self, script_path, data_path=None):
-        """Syncs the local codebase and runs a specific pipeline on the remote instance."""
-        print(f"[INFO] Syncing codebase and running {script_path} on {self.runtime_id}...")
-        
-        # 1. Sync code (Simplified: use gcloud storage or scp if it were a GCE instance)
-        # For Colab Enterprise, we typically use 'gcloud storage cp' to a GCS bucket 
-        # that the runtime can access, or 'git clone' within the runtime.
-        # Here we provide a template for gcloud-based execution.
-        print("[TEMPLATE] To sync code: gcloud compute scp --recursive . hoopsense-gpu:/home/jupyter/hoopsense")
-        
-        # 2. Remote execution command
-        # This is a stub for the actual API call to execute code on the runtime
-        print(f"[EXEC] Running 'python {script_path}' on remote backend.")
-        
-        # Example of how to trigger a Vertex AI Custom Job (which Colab Runtimes can use)
-        # subprocess.run(["gcloud", "ai", "custom-jobs", "create", ...])
+    print("[INFO] Installing requirements...")
+    pip_cmd = [f"{venv_path}/bin/pip", "install", "-r", "requirements.txt"]
+    subprocess.run(pip_cmd)
+
+
+def run_cloud_job(job_name, machine_type="n1-standard-4"):
+    """Submits a training job to Vertex AI."""
+    print(f"[INFO] Submitting {job_name} to Vertex AI...")
+    # Placeholder for gcloud ai custom-jobs submit
+    time.sleep(2)
+    print(f"[SUCCESS] Job {job_name} submitted.")
+
+
+class ColabSession:
+    def __init__(self, drive_path="/content/drive/MyDrive/HoopSense"):
+        self.drive_path = drive_path
+        self.is_colab = mount_drive()
+
+    def sync_data(self, direction="download"):
+        if not self.is_colab:
+            return
+        local_data = "data/training"
+        cloud_data = f"{self.drive_path}/data/training"
+        os.makedirs(local_data, exist_ok=True)
+
+        if direction == "download":
+            cmd = ["rsync", "-avz", cloud_data + "/", local_data + "/"]
+        else:
+            cmd = ["rsync", "-avz", local_data + "/", cloud_data + "/"]
+        subprocess.run(cmd)
+
 
 if __name__ == "__main__":
-    manager = ColabManager()
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1]
-        if cmd == "up": manager.provision()
-        elif cmd == "down": manager.terminate()
-        elif cmd == "run": 
-            script = sys.argv[2] if len(sys.argv) > 2 else "pipelines/inference.py"
-            manager.run_pipeline(script)
+    if os.getenv("COLAB_GPU"):
+        print("[INFO] Detected Colab Runtime.")
+    else:
+        print("[INFO] Running locally.")

@@ -13,33 +13,21 @@ TOOLS_DIR = CURRENT_DIR.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from infra.gemini_project import GeminiProjectClient
-from infra.gemini_project import repo_root_from
+from infra.gemini_project import GeminiProjectClient  # noqa: E402
+from infra.gemini_project import repo_root_from  # noqa: E402
 
 
 def build_bootstrap_prompt() -> str:
     return """
-You are the persistent project collaborator for the HoopSense project.
+You are the persistent reviewer for the HoopSense project.
 
-Retain project context across this session.
-Your standing roles are:
-- discuss requirements
-- discuss use cases
-- discuss architecture
-- discuss design
-- discuss implementation
-- review code changes made in this repository
-
-Use the repository's checked-in guidance, especially GEMINI.md, as the review policy.
-
-Collaboration style:
-- concise, technical, and grounded in checked-in repo artifacts
-- prefer design-first reasoning before code changes
-- call out drift between code and docs when relevant
+Retain project context across this session. Your standing role is code review
+for changes made in this repository. Use the repository's checked-in
+guidance, especially GEMINI.md, as the review policy.
 
 Review style:
 - Findings first.
-- Focus on bugs, regressions, contract drift, missing tests, and documentation drift.
+- Focus on bugs, regressions, contract drift, and documentation drift.
 - Be concise and technical.
 - When there are no findings, say so explicitly.
 """.strip()
@@ -55,7 +43,7 @@ Review the following git diff for:
 3. Rust best practices where relevant.
 4. Python best practices where relevant.
 5. Missing or weak tests.
-6. Missing documentation or status updates when behavior or architecture changed.
+6. Missing documentation or status updates.
 
 Return:
 - Findings first, ordered by severity.
@@ -72,27 +60,32 @@ def get_diff(*, staged: bool, revision_range: str | None) -> str:
             ["git", "diff", revision_range],
             text=True,
         )
-    command = ["git", "diff", "--cached"] if staged else ["git", "diff"]
-    return subprocess.check_output(command, text=True)
+    cmd = ["git", "diff", "--cached"] if staged else ["git", "diff"]
+    return subprocess.check_output(cmd, text=True)
 
 
-def run_agent_review(diff: str, client: GeminiProjectClient, model: str | None = None) -> str:
+def run_agent_review(diff: str, client: GeminiProjectClient,
+                     model: str | None = None) -> str:
     client.ensure_session(build_bootstrap_prompt())
     response = client.ask(build_review_prompt(diff), model=model)
     return response["response"]
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run a project-scoped Gemini review for current changes.")
+    parser = argparse.ArgumentParser(description="Run Gemini review.")
     parser.add_argument("--model")
-    parser.add_argument("--unstaged", action="store_true", help="Review unstaged changes instead of staged changes.")
-    parser.add_argument("--diff-range", help="Explicit git diff range, for example main...HEAD")
-    parser.add_argument("--print-prompt", action="store_true", help="Print the generated review prompt instead of calling Gemini.")
+    parser.add_argument("--unstaged", action="store_true",
+                        help="Review unstaged changes.")
+    parser.add_argument("--diff-range",
+                        help="Explicit git diff range.")
+    parser.add_argument("--print-prompt", action="store_true",
+                        help="Print the prompt instead of calling.")
     args = parser.parse_args(argv)
 
     try:
         project_root = repo_root_from(Path.cwd())
-        diff = get_diff(staged=not args.unstaged, revision_range=args.diff_range)
+        diff = get_diff(staged=not args.unstaged,
+                        revision_range=args.diff_range)
         if not diff.strip():
             print("No changes to review.")
             return 0

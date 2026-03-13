@@ -1,6 +1,7 @@
 import json
 import os
 
+
 def validate_hoopsense_contract(file_path):
     required_keys = {
         "kind": str,
@@ -12,7 +13,7 @@ def validate_hoopsense_contract(file_path):
         "h": float,
         "confidence_bps": int
     }
-    
+
     with open(file_path, 'r') as f:
         for i, line in enumerate(f):
             try:
@@ -27,8 +28,9 @@ def validate_hoopsense_contract(file_path):
                         raise TypeError(f"Line {i+1}: Key '{key}' expected {expected_type}, got {type(row[key])}")
             except json.JSONDecodeError:
                 raise ValueError(f"Line {i+1}: Invalid JSON")
-                
+
     print(f"Validation successful: {file_path}")
+
 
 if __name__ == "__main__":
     test_path = "data/intelligent_game_dna.jsonl"

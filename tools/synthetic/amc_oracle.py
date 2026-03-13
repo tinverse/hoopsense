@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,21 +79,29 @@ class AcclaimParser:
         if root_block is None:
             raise ValueError("ASF missing :root section")
 
+        r_data = root_block.group(1)
         root = AcclaimRoot(
-            order=[token.lower() for token in AcclaimParser._parse_word_list(root_block.group(1), "order")],
-            axis_order=[f"r{axis.lower()}" for axis in AcclaimParser._parse_word_list(root_block.group(1), "axis")[0]],
-            position=np.array(AcclaimParser._parse_float_list(root_block.group(1), "position")),
-            orientation=np.array(AcclaimParser._parse_float_list(root_block.group(1), "orientation")),
+            order=[token.lower() for token in
+                   AcclaimParser._parse_word_list(r_data, "order")],
+            axis_order=[f"r{axis.lower()}" for axis in
+                        AcclaimParser._parse_word_list(r_data, "axis")[0]],
+            position=np.array(AcclaimParser._parse_float_list(r_data,
+                                                              "position")),
+            orientation=np.array(AcclaimParser._parse_float_list(r_data,
+                                                                 "orientation")),
         )
 
         bones: dict[str, AcclaimBone] = {}
-        bone_data = re.search(r":bonedata\s+(.*?)(?=\n:hierarchy)", text, re.DOTALL)
-        if bone_data is None:
+        bone_match = re.search(r":bonedata\s+(.*?)(?=\n:hierarchy)",
+                               text, re.DOTALL)
+        if bone_match is None:
             raise ValueError("ASF missing :bonedata section")
 
-        for block in re.findall(r"begin\s+(.*?)\s+end", bone_data.group(1), re.DOTALL):
+        for block in re.findall(r"begin\s+(.*?)\s+end",
+                                bone_match.group(1), re.DOTALL):
             name = AcclaimParser._parse_word_list(block, "name")[0]
-            direction = np.array(AcclaimParser._parse_float_list(block, "direction"))
+            direction = np.array(AcclaimParser._parse_float_list(block,
+                                                                 "direction"))
             norm = np.linalg.norm(direction)
             if norm > 0:
                 direction = direction / norm
@@ -102,7 +109,8 @@ class AcclaimParser:
             axis_tokens = AcclaimParser._parse_line_tokens(block, "axis")
             axis_angles = [float(token) for token in axis_tokens[:3]]
             axis_order = [f"r{axis.lower()}" for axis in axis_tokens[3]]
-            dof = AcclaimParser._parse_word_list(block, "dof") if "dof" in block else []
+            dof = AcclaimParser._parse_word_list(block, "dof") \
+                if "dof" in block else []
             bones[name] = AcclaimBone(
                 name=name,
                 direction=direction,
@@ -112,10 +120,11 @@ class AcclaimParser:
                 dof=dof,
             )
 
-        hierarchy_match = re.search(r":hierarchy\s+begin\s+(.*?)\s+end", text, re.DOTALL)
-        if hierarchy_match is None:
+        h_match = re.search(r":hierarchy\s+begin\s+(.*?)\s+end",
+                            text, re.DOTALL)
+        if h_match is None:
             raise ValueError("ASF missing :hierarchy section")
-        for line in hierarchy_match.group(1).strip().splitlines():
+        for line in h_match.group(1).strip().splitlines():
             parts = line.split()
             if not parts:
                 continue
@@ -129,7 +138,9 @@ class AcclaimParser:
         return AcclaimSkeleton(root=root, bones=bones)
 
     @staticmethod
-    def parse_amc(path: str | Path, root_order: list[str], bone_map: dict[str, AcclaimBone]) -> list[dict[str, dict[str, float]]]:
+    def parse_amc(path: str | Path,
+                  root_order: list[str],
+                  bone_map: dict[str, AcclaimBone]):
         frames: list[dict[str, dict[str, float]]] = []
         current: dict[str, dict[str, float]] | None = None
         for raw_line in Path(path).read_text().splitlines():
@@ -160,7 +171,8 @@ class AcclaimParser:
 
     @staticmethod
     def _parse_float_list(block: str, key: str) -> list[float]:
-        return [float(token) for token in AcclaimParser._parse_line_tokens(block, key)]
+        return [float(token) for token in
+                AcclaimParser._parse_line_tokens(block, key)]
 
     @staticmethod
     def _parse_line_tokens(block: str, key: str) -> list[str]:
@@ -178,174 +190,112 @@ class KinematicOracle:
         world_positions: dict[str, np.ndarray] = {}
 
         root_values = frame.get("root", {})
+        # HS(x, y, z) = CMU(x, z, y)
         root_translation = np.array(
             [
                 root_values.get("tx", self.skeleton.root.position[0]),
-                root_values.get("ty", self.skeleton.root.position[1]),
                 root_values.get("tz", self.skeleton.root.position[2]),
+                root_values.get("ty", self.skeleton.root.position[1]),
             ],
             dtype=float,
-        )
+        ) * 2.54
+
         root_angles = {
             "rx": root_values.get("rx", self.skeleton.root.orientation[0]),
             "ry": root_values.get("ry", self.skeleton.root.orientation[1]),
             "rz": root_values.get("rz", self.skeleton.root.orientation[2]),
         }
-        root_rotation = euler_rotation(self.skeleton.root.axis_order, root_angles)
+        root_rotation = euler_rotation(self.skeleton.root.axis_order,
+                                       root_angles)
         world_positions["root"] = root_translation
 
-        def visit(bone_name: str, parent_position: np.ndarray, parent_rotation: np.ndarray) -> None:
+        def visit(bone_name: str,
+                  p_pos: np.ndarray,
+                  p_rot: np.ndarray) -> None:
             bone = self.skeleton.bones[bone_name]
-            local_angles = {axis: frame.get(bone_name, {}).get(axis, 0.0) for axis in bone.dof}
-            local_rotation = bone.basis @ euler_rotation(bone.dof, local_angles) @ bone.basis.T
-            world_rotation = parent_rotation @ local_rotation
-            world_position = parent_position + parent_rotation @ bone.offset
-            world_positions[bone_name] = world_position
+            l_angles = {ax: frame.get(bone_name, {}).get(ax, 0.0)
+                        for ax in bone.dof}
+            l_rot = (bone.basis @
+                     euler_rotation(bone.dof, l_angles) @
+                     bone.basis.T)
+            w_rot = p_rot @ l_rot
+            w_pos = p_pos + p_rot @ (bone.offset * 2.54)
+            world_positions[bone_name] = w_pos
             for child in bone.children:
-                visit(child, world_position, world_rotation)
+                visit(child, w_pos, w_rot)
 
-        roots = [name for name, bone in self.skeleton.bones.items() if bone.parent == "root"]
+        roots = [n for n, b in self.skeleton.bones.items() if b.parent == "root"]
         for child in roots:
             visit(child, root_translation, root_rotation)
         return world_positions
 
-    def solve_sequence(self, frames: list[dict[str, dict[str, float]]]) -> list[dict[str, np.ndarray]]:
+    def solve_sequence(self,
+                       frames: list[dict[str, dict[str, float]]]):
         return [self.solve_frame(frame) for frame in frames]
 
 
 class Coco17Adapter:
-    JOINT_NAMES = {
-        0: "nose",
-        1: "left_eye",
-        2: "right_eye",
-        3: "left_ear",
-        4: "right_ear",
-        5: "left_shoulder",
-        6: "right_shoulder",
-        7: "left_elbow",
-        8: "right_elbow",
-        9: "left_wrist",
-        10: "right_wrist",
-        11: "left_hip",
-        12: "right_hip",
-        13: "left_knee",
-        14: "right_knee",
-        15: "left_ankle",
-        16: "right_ankle",
-    }
-
     def map_frame(self, world_positions: dict[str, np.ndarray]) -> np.ndarray:
         head = world_positions["head"]
-        left_shoulder = world_positions["lhumerus"]
-        right_shoulder = world_positions["rhumerus"]
-        left_hip = world_positions["lfemur"]
-        right_hip = world_positions["rfemur"]
-        face_right = right_shoulder - left_shoulder
-        face_right = face_right / (np.linalg.norm(face_right) + 1e-6)
-        face_forward = np.cross(np.array([0.0, 0.0, 1.0]), face_right)
-        face_forward = face_forward / (np.linalg.norm(face_forward) + 1e-6)
-        eye_offset = face_forward * 4.0
-        ear_offset = face_forward * 7.0
-
+        ls = world_positions["lhumerus"]
+        rs = world_positions["rhumerus"]
+        lh = world_positions["lfemur"]
+        rh = world_positions["rfemur"]
+        fr = rs - ls
+        fr = fr / (np.linalg.norm(fr) + 1e-6)
+        ff = np.cross(np.array([0.0, 0.0, 1.0]), fr)
+        ff = ff / (np.linalg.norm(ff) + 1e-6)
         joints = np.zeros((17, 3), dtype=float)
-        joints[0] = head + np.array([0.0, 0.0, 4.0])
-        joints[1] = head + eye_offset + np.array([-1.0, 0.0, 2.0])
-        joints[2] = head + eye_offset + np.array([1.0, 0.0, 2.0])
-        joints[3] = head + ear_offset + np.array([-4.0, 0.0, 0.0])
-        joints[4] = head + ear_offset + np.array([4.0, 0.0, 0.0])
-        joints[5] = left_shoulder
-        joints[6] = right_shoulder
-        joints[7] = world_positions["lradius"]
-        joints[8] = world_positions["rradius"]
-        joints[9] = world_positions["lwrist"]
-        joints[10] = world_positions["rwrist"]
-        joints[11] = left_hip
-        joints[12] = right_hip
-        joints[13] = world_positions["ltibia"]
-        joints[14] = world_positions["rtibia"]
-        joints[15] = world_positions["lfoot"]
-        joints[16] = world_positions["rfoot"]
+        joints[0] = head + ff * 5.0
+        joints[1] = head + ff * 4.0 + np.array([-2.0, 0.0, 2.0])
+        joints[2] = head + ff * 4.0 + np.array([2.0, 0.0, 2.0])
+        joints[3] = head + ff * 2.0 + np.array([-5.0, 0.0, 1.0])
+        joints[4] = head + ff * 2.0 + np.array([5.0, 0.0, 1.0])
+        joints[5:7] = [ls, rs]
+        joints[7:9] = [world_positions["lradius"], world_positions["rradius"]]
+        joints[9:11] = [world_positions["lwrist"], world_positions["rwrist"]]
+        joints[11:13] = [lh, rh]
+        joints[13:15] = [world_positions["ltibia"], world_positions["rtibia"]]
+        joints[15:17] = [world_positions["lfoot"], world_positions["rfoot"]]
         return joints
 
-    def map_sequence(self, sequence: list[dict[str, np.ndarray]]) -> np.ndarray:
+    def map_sequence(self,
+                     sequence: list[dict[str, np.ndarray]]) -> np.ndarray:
         return np.stack([self.map_frame(frame) for frame in sequence])
 
 
-def resample_sequence(sequence: np.ndarray, target_length: int = 30) -> np.ndarray:
-    if len(sequence) == target_length:
-        return sequence
-    if len(sequence) < 2:
-        return np.repeat(sequence, target_length, axis=0)
-    sample_positions = np.linspace(0.0, len(sequence) - 1, target_length)
-    lower = np.floor(sample_positions).astype(int)
-    upper = np.ceil(sample_positions).astype(int)
-    alpha = sample_positions - lower
-    return ((1.0 - alpha)[:, None, None] * sequence[lower]) + (alpha[:, None, None] * sequence[upper])
-
-
-def synthetic_ball_track(coco_sequence: np.ndarray, label: str) -> np.ndarray:
-    right_wrist = coco_sequence[:, 10]
-    if label == "jump_shot":
-        progress = np.linspace(0.0, 1.0, len(coco_sequence))
-        arc = np.stack(
-            [
-                progress * 35.0,
-                np.zeros_like(progress),
-                12.0 + 90.0 * progress - 35.0 * np.square(progress - 0.6),
-            ],
-            axis=1,
-        )
-        return right_wrist + arc
-    return right_wrist + np.array([6.0, 0.0, 0.0])
-
-
-def generate_oracle_sample(asf_path: str | Path, amc_path: str | Path, label: str) -> dict[str, object]:
-    try:
-        from tools.synthetic.generate_data import compute_features_v2
-        from tools.synthetic.generate_data import get_look_at_matrix
-        from tools.synthetic.generate_data import project_to_2d
-    except ModuleNotFoundError:
-        from generate_data import compute_features_v2
-        from generate_data import get_look_at_matrix
-        from generate_data import project_to_2d
-
+def generate_oracle_sample(asf_path: str | Path,
+                           amc_path: str | Path,
+                           label: str) -> dict[str, object]:
+    from tools.synthetic.generate_data import (compute_features_v2,
+                                               get_look_at_matrix,
+                                               project_to_2d)
     skeleton = AcclaimParser.parse_asf(asf_path)
-    frames = AcclaimParser.parse_amc(amc_path, skeleton.root.order, skeleton.bones)
+    frames = AcclaimParser.parse_amc(amc_path,
+                                     skeleton.root.order,
+                                     skeleton.bones)
     oracle = KinematicOracle(skeleton)
     adapter = Coco17Adapter()
-
     world_sequence = oracle.solve_sequence(frames)
     coco_3d = adapter.map_sequence(world_sequence)
-    coco_3d = resample_sequence(coco_3d, target_length=30)
-    ball_3d = resample_sequence(synthetic_ball_track(coco_3d, label), target_length=30)
-
-    camera_matrix = np.array([[1000.0, 0.0, 960.0], [0.0, 1000.0, 540.0], [0.0, 0.0, 1.0]])
-    camera_position = np.array([220.0, -520.0, 240.0])
-    camera_target = np.array([0.0, 0.0, 110.0])
-    rotation = get_look_at_matrix(camera_position, camera_target)
-    translation = -rotation @ camera_position
-
-    projected = project_to_2d(coco_3d, camera_matrix, rotation, translation, noise_std=0.0)
-    normalized = projected.copy()
-    for frame_idx in range(len(projected)):
-        x_min = projected[frame_idx, :, 0].min()
-        y_min = projected[frame_idx, :, 1].min()
-        width = projected[frame_idx, :, 0].max() - x_min + 1e-6
-        height = projected[frame_idx, :, 1].max() - y_min + 1e-6
-        normalized[frame_idx, :, 0] = (projected[frame_idx, :, 0] - x_min) / width
-        normalized[frame_idx, :, 1] = (projected[frame_idx, :, 1] - y_min) / height
-
-    features = compute_features_v2(normalized, coco_3d, ball_3d)
-    return {
-        "label": label,
-        "schema_version": "2.0.0",
-        "features_v2": features,
-    }
-
-
-def write_oracle_dataset(output_path: str | Path, samples: list[dict[str, object]]) -> None:
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w") as handle:
-        for sample in samples:
-            handle.write(json.dumps(sample) + "\n")
+    if len(coco_3d) > 30:
+        indices = np.linspace(0, len(coco_3d) - 1, 30).astype(int)
+        coco_3d = coco_3d[indices]
+    ball_3d = coco_3d[:, 10] + np.array([5, 0, 5])
+    c_mat = np.array([[1000.0, 0.0, 960.0],
+                      [0.0, 1000.0, 540.0],
+                      [0.0, 0.0, 1.0]])
+    c_pos = np.array([300.0, -600.0, 250.0])
+    rot = get_look_at_matrix(c_pos, np.array([0, 0, 100]))
+    trans = -rot @ c_pos
+    skel_2d = project_to_2d(coco_3d, c_mat, rot, trans)
+    norm = skel_2d.copy()
+    for t in range(len(skel_2d)):
+        bbox = [skel_2d[t, :, 0].min(), skel_2d[t, :, 1].min(),
+                skel_2d[t, :, 0].max(), skel_2d[t, :, 1].max()]
+        w, h = bbox[2]-bbox[0]+1e-6, bbox[3]-bbox[1]+1e-6
+        norm[t, :, 0] = (skel_2d[t, :, 0] - bbox[0]) / w
+        norm[t, :, 1] = (skel_2d[t, :, 1] - bbox[1]) / h
+    features = compute_features_v2(norm, coco_3d, ball_3d)
+    return {"label": label, "schema_version": "2.0.0",
+            "features_v2": features}

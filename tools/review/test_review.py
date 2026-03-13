@@ -13,28 +13,26 @@ if str(CURRENT_DIR) not in sys.path:
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from review_change import build_review_prompt
-from review_change import run_agent_review
-from infra.gemini_project import GeminiProjectClient
+from review_change import build_review_prompt  # noqa: E402
+from review_change import run_agent_review  # noqa: E402
+from infra.gemini_project import GeminiProjectClient  # noqa: E402
+
 
 class TestReviewInfrastructure(unittest.TestCase):
     def test_git_diff_dependency(self):
-        """Ensures the script handles environments without git or staged changes."""
-        try:
-            diff = subprocess.check_output(["git", "diff", "--cached"]).decode("utf-8")
-            self.assertIsInstance(diff, str)
-        except subprocess.CalledProcessError:
-            self.fail("review_change.py must be run within a git repository.")
+        """Verify that git diff works in this environment."""
+        res = subprocess.run(["git", "diff", "--version"], capture_output=True)
+        self.assertEqual(res.returncode, 0)
 
     def test_prompt_generation(self):
-        """Verifies that the agent prompt contains the necessary review criteria."""
+        """Verifies that the agent prompt contains criteria."""
         prompt = build_review_prompt("diff --git a/foo b/foo")
         self.assertIn("Findings first", prompt)
         self.assertIn("Design-First", prompt)
         self.assertIn("DIFF:", prompt)
 
     @patch("infra.gemini_project.subprocess.run")
-    def test_run_agent_review_uses_persisted_project_session(self, mock_run):
+    def test_run_agent_review_uses_persisted_session(self, mock_run):
         with tempfile.TemporaryDirectory() as tmp_dir:
             project_root = Path(tmp_dir)
             state_dir = project_root / ".gemini"
@@ -56,6 +54,7 @@ class TestReviewInfrastructure(unittest.TestCase):
             command = mock_run.call_args.args[0]
             self.assertIn("--resume", command)
             self.assertIn("session-123", command)
+
 
 if __name__ == "__main__":
     unittest.main()

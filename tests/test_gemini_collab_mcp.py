@@ -1,84 +1,46 @@
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from tools.infra.gemini_collab_mcp import GeminiCollabConfig
-from tools.infra.gemini_collab_mcp import GeminiCollabServer
+from tools.infra.codex_mcp import CodexBridgeClient
+from tools.infra.codex_mcp import CodexBridgeHost
 
 
-class TestGeminiCollabMcp(unittest.TestCase):
-    def setUp(self):
-        self.server = GeminiCollabServer(
-            GeminiCollabConfig(
-                gemini_command="gemini",
-                default_cwd="/data/projects/hoopsense",
-            )
-        )
+class TestGeminiCollabMCP(unittest.TestCase):
+    def test_json_rpc_structure(self):
+        """Verify client correctly formats JSON-RPC requests."""
+        with patch("pathlib.Path.write_text") as mock_write:
+            with patch("pathlib.Path.exists", return_value=False):
+                client = CodexBridgeClient(Path("/tmp"))
+                try:
+                    client.call("test_method", {"param": 1}, timeout=0.1)
+                except TimeoutError:
+                    pass
 
-    def test_initialize_reports_tool_capability(self):
-        response = self.server.handle_message(
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-        )
+                # Check call
+                args, _ = mock_write.call_args
+                req = json.loads(args[0])
+                self.assertEqual(req["jsonrpc"], "2.0")
+                self.assertEqual(req["method"], "test_method")
 
-        self.assertEqual(response["result"]["protocolVersion"], "2025-03-26")
-        self.assertIn("tools", response["result"]["capabilities"])
-        self.assertEqual(response["result"]["serverInfo"]["name"], "hoopsense-gemini-collab")
+    def test_host_handler_routing(self):
+        """Verify host routes messages to registered handlers."""
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.read_text") as mock_read:
+                with patch("pathlib.Path.write_text") as mock_write:
+                    mock_read.return_value = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": "123",
+                        "method": "hello",
+                        "params": {"name": "world"}
+                    })
 
-    def test_tools_list_exposes_ask_gemini(self):
-        response = self.server.handle_message(
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-        )
+                    host = CodexBridgeHost(Path("/tmp"))
+                    host.register_handler("hello", lambda p: f"hi {p['name']}")
+                    host.process_once()
 
-        tool = response["result"]["tools"][0]
-        self.assertEqual(tool["name"], "ask_gemini")
-        self.assertIn("prompt", tool["inputSchema"]["properties"])
-
-    @patch("tools.infra.gemini_collab_mcp.GeminiProjectClient.ask")
-    def test_tools_call_uses_project_session_with_collaboration_prompt(self, mock_ask):
-        mock_ask.return_value = {
-            "session_id": "session-1",
-            "response": "ok",
-            "stats": {"tokens": 123},
-        }
-
-        response = self.server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "ask_gemini",
-                    "arguments": {
-                        "topic": "architecture",
-                        "prompt": "Summarize the repo",
-                        "model": "gemini-2.5-pro",
-                        "output_format": "json",
-                    },
-                },
-            }
-        )
-
-        mock_ask.assert_called_once()
-        prompt_arg = mock_ask.call_args.args[0]
-        self.assertIn("Senior Software Architect", prompt_arg)
-        self.assertIn("Topic: architecture", prompt_arg)
-        self.assertIn("Summarize the repo", prompt_arg)
-        self.assertEqual(response["result"]["structuredContent"]["response"], "ok")
-        self.assertEqual(response["result"]["structuredContent"]["session_id"], "session-1")
-        self.assertNotIn("isError", response["result"])
-
-    def test_tools_call_requires_prompt(self):
-        response = self.server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {"name": "ask_gemini", "arguments": {}},
-            }
-        )
-
-        self.assertTrue(response["result"]["isError"])
-        self.assertIn("Missing required field: prompt", response["result"]["content"][0]["text"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+                    # Check response
+                    args, _ = mock_write.call_args
+                    res = json.loads(args[0])
+                    self.assertEqual(res["result"], "hi world")

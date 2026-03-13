@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HoopSense Labeller Satellite</title>
+    <style>
+        body { font-family: monospace; background: #121212; color: #00ff00; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        header { padding: 10px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+        main { display: flex; flex: 1; overflow: hidden; }
+        #video-container { flex: 3; position: relative; background: #000; display: flex; align-items: center; justify-content: center; }
+        video { max-width: 100%; max-height: 100%; }
+        canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+        #sidebar { flex: 1; padding: 20px; border-left: 1px solid #333; overflow-y: auto; }
+        .btn { display: block; width: 100%; padding: 15px; margin-bottom: 10px; background: #222; border: 1px solid #444; color: #00ff00; cursor: pointer; text-align: left; }
+        .btn:hover { background: #333; }
+        .btn span { float: right; opacity: 0.5; }
+        .active { border-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+        #clip-list { width: 100%; background: #111; color: #00ff00; border: 1px solid #444; padding: 10px; margin-bottom: 20px; }
+        .calibration-msg { background: #ffaa00; color: #000; padding: 5px; font-weight: bold; margin-bottom: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>HoopSense // Labeller Satellite [v1.0]</div>
+        <div id="stats">Samples: 0 // Progress: 0%</div>
+    </header>
+    <main>
+        <div id="video-container">
+            <video id="player" preload="auto"></video>
+            <canvas id="overlay"></canvas>
+            <div id="calibration-hint" class="calibration-msg">CALIBRATION MODE: Click 4 corners of the court</div>
+        </div>
+        <div id="sidebar">
+            <h3>SELECT CLIP</h3>
+            <select id="clip-list">
+                <option value="">-- Select a clip --</option>
+            </select>
+
+            <div id="domain-info">Domain: <span id="current-domain">-</span></div>
+            <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
+
+            <h3>CALIBRATION</h3>
+            <select id="landmark-list" style="width: 100%; background: #111; color: #ffaa00; border: 1px solid #444; padding: 10px; margin-bottom: 10px;">
+                <option value="corner_tl">Top-Left Corner (0,0)</option>
+                <option value="corner_bl">Bottom-Left Corner (0,1524)</option>
+                <option value="rim_l">Left Rim (160, 762, 305)</option>
+                <option value="ft_l_top">FT Line Top (L) (580, 517)</option>
+                <option value="ft_l_bot">FT Line Bottom (L) (580, 1007)</option>
+                <option value="mid_top">Midcourt Sideline (Top)</option>
+                <option value="mid_bot">Midcourt Sideline (Bottom)</option>
+                <option value="corner_tr">Top-Right Corner</option>
+                <option value="corner_br">Bottom-Right Corner</option>
+            </select>
+            <div id="calibration-stats">Points: 0/4</div>
+            <button class="btn" id="btn-reset-cal" style="background: #442200; border-color: #ffaa00; font-size: 0.8em; padding: 5px;">RESET CALIBRATION</button>
+
+            <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
+            <button class="btn" id="btn-id-yes">ID IS CORRECT <span>[SPACE]</span></button>
+            <button class="btn" id="btn-id-no">ID SWITCHED <span>[X]</span></button>
+
+            <h3>ACTION LABELS</h3>
+            <button class="btn" id="btn-shot">JUMP SHOT <span>[1]</span></button>
+            <button class="btn" id="btn-pass">PASS <span>[2]</span></button>
+            <button class="btn" id="btn-dribble">DRIBBLE <span>[3]</span></button>
+            <button class="btn" id="btn-idle">IDLE / OTHER <span>[4]</span></button>
+
+            <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
+            <h3>CONTROLS</h3>
+            <div>Step: Arrows L/R</div>
+            <div>Play/Pause: P</div>
+        </div>
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>

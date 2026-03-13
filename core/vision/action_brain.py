@@ -1,42 +1,50 @@
 import torch
 import torch.nn as nn
-import os
+
 
 class ActionBrain(nn.Module):
     """
-    A Temporal Transformer for Basketball Action Recognition.
-    Capacity is tuned for current synthetic dataset scale.
+    Temporal Transformer for local action recognition.
+    Input: (Batch, Frames=30, Dims=72)
+    Output: Action probabilities.
     """
-    def __init__(self, input_dim=72, model_dim=128, num_heads=4, num_layers=2, num_classes=64):
-        super(ActionBrain, self).__init__()
-        self.input_projection = nn.Linear(input_dim, model_dim)
-        self.pos_encoding = nn.Parameter(torch.randn(1, 30, model_dim))
-        
+
+    def __init__(self, num_classes=5, input_dim=72, embed_dim=128, nhead=4):
+        super().__init__()
+        # Input Projection: Map Schema V2 (72 dims) to Transformer embedding space
+        self.input_projection = nn.Linear(input_dim, embed_dim)
+
+        # Positional Encoding (Learnable for MVP simplicity)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, 30, embed_dim))
+
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=model_dim, 
-            nhead=num_heads, 
-            dim_feedforward=model_dim * 2,
-            batch_first=True,
-            dropout=0.3 # Increased dropout for regularization
+            d_model=embed_dim, nhead=nhead, batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+
         self.classifier = nn.Sequential(
-            nn.LayerNorm(model_dim),
-            nn.Dropout(0.3),
-            nn.Linear(model_dim, 128),
+            nn.Linear(embed_dim, 64),
             nn.ReLU(),
-            nn.Linear(128, num_classes)
+            nn.Linear(64, num_classes)
         )
 
     def forward(self, x):
-        x = self.input_projection(x)
-        x = x + self.pos_encoding
+        # x shape: (Batch, 30, 72)
+        x = self.input_projection(x) + self.pos_embedding
         x = self.transformer(x)
+
+        # Aggregate over time (Mean pooling)
         x = x.mean(dim=1)
         return self.classifier(x)
 
-def save_model(model, path="data/models/action_brain.pt"):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save(model.state_dict(), path)
-    print(f"[INFO] Action Brain saved to {path}")
+
+def main():
+    # Smoke test initialization
+    model = ActionBrain()
+    dummy_input = torch.randn(1, 30, 72)
+    output = model(dummy_input)
+    print(f"[INFO] ActionBrain Initialized. Output shape: {output.shape}")
+
+
+if __name__ == "__main__":
+    main()

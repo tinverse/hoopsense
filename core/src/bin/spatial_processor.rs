@@ -1,8 +1,10 @@
-use std::io::{self, BufRead, Write};
-use std::fs::File;
-use serde_json::{Value, json};
-use hoopsense_core::{SpatialResolver, GeometricReferee, GameStateLedger, Trajectory, ledger::GameEvent};
+use hoopsense_core::{
+    ledger::GameEvent, GameStateLedger, GeometricReferee, SpatialResolver, Trajectory,
+};
 use nalgebra::{Point2, Point3};
+use serde_json::{json, Value};
+use std::fs::File;
+use std::io::{self, BufRead, Write};
 
 fn main() -> anyhow::Result<()> {
     let mut resolver = SpatialResolver::new(1524.0, 2865.0);
@@ -16,7 +18,7 @@ fn main() -> anyhow::Result<()> {
 
     let input_path = "data/intelligent_game_dna.jsonl";
     let output_path = "data/validated_game_dna.jsonl";
-    
+
     if !std::path::Path::new(input_path).exists() {
         return Ok(());
     }
@@ -40,15 +42,19 @@ fn main() -> anyhow::Result<()> {
             if kind == "ball" {
                 let ball_height = referee.rim_pos_left.z;
                 ball_trajectory.add_point(t_ms, Point3::new(cp.x, cp.y, ball_height));
-                if ball_trajectory.is_rim_intersect(&referee.rim_pos_left) || 
-                   ball_trajectory.is_rim_intersect(&referee.rim_pos_right) {
-                    ledger.propose_event(GameEvent::MadeBasket {
-                        player_id: 0,
-                        team_id: 1, // Added missing team_id
-                        points: 2,
-                        t_ms,
-                        is_official: false,
-                    }, 2000);
+                if ball_trajectory.is_rim_intersect(&referee.rim_pos_left)
+                    || ball_trajectory.is_rim_intersect(&referee.rim_pos_right)
+                {
+                    ledger.propose_event(
+                        GameEvent::MadeBasket {
+                            player_id: 0,
+                            team_id: 1, // Added missing team_id
+                            points: 2,
+                            t_ms,
+                            is_official: false,
+                        },
+                        2000,
+                    );
                 }
             }
         }
@@ -58,7 +64,7 @@ fn main() -> anyhow::Result<()> {
                 if let Some("ref_3pt_success") = row["signal"].as_str() {
                     ledger.validate_event(t_ms, 3);
                 }
-            },
+            }
             _ => (),
         }
 

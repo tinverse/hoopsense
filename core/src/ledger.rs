@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::collections::{VecDeque, HashMap};
-use crate::rules::{CourtZone, PossessionOrigin, GeometricReferee};
+use crate::rules::{CourtZone, GeometricReferee, PossessionOrigin};
 use nalgebra::Point2;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 
 /// Represents a validated basketball event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -113,7 +113,7 @@ impl GameStateLedger {
             GameEvent::MadeBasket { t_ms, .. } => t_ms + window_ms,
             _ => 0,
         };
-        
+
         if expiration == 0 {
             self.update_score(&event);
             self.history.push(event);
@@ -127,10 +127,17 @@ impl GameStateLedger {
 
     fn update_possession(&mut self, event: &GameEvent) {
         match event {
-            GameEvent::PossessionChange { player_id, team_id, origin, t_ms } => {
+            GameEvent::PossessionChange {
+                player_id,
+                team_id,
+                origin,
+                t_ms,
+            } => {
                 self.possession_counter += 1;
                 let is_transition = match origin {
-                    PossessionOrigin::Steal | PossessionOrigin::Rebound | PossessionOrigin::Turnover => true,
+                    PossessionOrigin::Steal
+                    | PossessionOrigin::Rebound
+                    | PossessionOrigin::Turnover => true,
                     _ => false,
                 };
                 self.current_possession = Some(PossessionContext {
@@ -143,19 +150,22 @@ impl GameStateLedger {
                     offense_zone: CourtZone::Backcourt,
                     is_transition,
                 });
-            },
-            GameEvent::Dribble { player_id, x, y, .. } => {
+            }
+            GameEvent::Dribble {
+                player_id, x, y, ..
+            } => {
                 if let Some(ref mut ctx) = self.current_possession {
                     if ctx.ballhandler_id == Some(*player_id) {
                         ctx.dribble_count += 1;
                         let target_left = ctx.team_id == 1; // Simplification: Team 1 attacks Left
-                        ctx.offense_zone = self.referee.resolve_zone(&Point2::new(*x, *y), target_left);
+                        ctx.offense_zone =
+                            self.referee.resolve_zone(&Point2::new(*x, *y), target_left);
                         if ctx.offense_zone == CourtZone::Paint {
                             ctx.is_transition = false;
                         }
                     }
                 }
-            },
+            }
             GameEvent::Pass { to_id, x, y, .. } => {
                 if let Some(ref mut ctx) = self.current_possession {
                     ctx.pass_count += 1;
@@ -163,7 +173,7 @@ impl GameStateLedger {
                     let target_left = ctx.team_id == 1;
                     ctx.offense_zone = self.referee.resolve_zone(&Point2::new(*x, *y), target_left);
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -177,7 +187,12 @@ impl GameStateLedger {
             }
         }) {
             let mut pending = self.pending_buffer.remove(pos).unwrap();
-            if let GameEvent::MadeBasket { ref mut points, ref mut is_official, .. } = pending.event {
+            if let GameEvent::MadeBasket {
+                ref mut points,
+                ref mut is_official,
+                ..
+            } = pending.event
+            {
                 *points = points_hint;
                 *is_official = true;
             }
@@ -187,7 +202,10 @@ impl GameStateLedger {
     }
 
     fn update_score(&mut self, event: &GameEvent) {
-        if let GameEvent::MadeBasket { points, team_id, .. } = event {
+        if let GameEvent::MadeBasket {
+            points, team_id, ..
+        } = event
+        {
             if *team_id == 1 {
                 self.official_score.0 += *points as u16;
             } else {
@@ -200,23 +218,26 @@ impl GameStateLedger {
         let mut stats: HashMap<u32, PlayerStats> = HashMap::new();
         for event in &self.history {
             match event {
-                GameEvent::MadeBasket { player_id, points, .. } => {
+                GameEvent::MadeBasket {
+                    player_id, points, ..
+                } => {
                     let s = stats.entry(*player_id).or_default();
                     s.points += *points as u32;
-                    s.fgm += 1; s.fga += 1;
-                },
+                    s.fgm += 1;
+                    s.fga += 1;
+                }
                 GameEvent::MissedBasket { player_id, .. } => {
                     stats.entry(*player_id).or_default().fga += 1;
-                },
+                }
                 GameEvent::Rebound { player_id, .. } => {
                     stats.entry(*player_id).or_default().rebounds += 1;
-                },
+                }
                 GameEvent::Steal { player_id, .. } => {
                     stats.entry(*player_id).or_default().steals += 1;
-                },
+                }
                 GameEvent::Foul { player_id, .. } => {
                     stats.entry(*player_id).or_default().fouls += 1;
-                },
+                }
                 _ => {}
             }
         }
@@ -231,22 +252,35 @@ mod tests {
     #[test]
     fn test_transition_and_zone() {
         let mut ledger = GameStateLedger::new();
-        
+
         // 1. Live ball turnover (Steal) -> Transition = True
-        ledger.propose_event(GameEvent::PossessionChange {
-            player_id: 10, team_id: 1, origin: PossessionOrigin::Steal, t_ms: 1000,
-        }, 0);
-        
+        ledger.propose_event(
+            GameEvent::PossessionChange {
+                player_id: 10,
+                team_id: 1,
+                origin: PossessionOrigin::Steal,
+                t_ms: 1000,
+            },
+            0,
+        );
+
         let ctx = ledger.current_possession.as_ref().unwrap();
         assert!(ctx.is_transition);
         assert_eq!(ctx.offense_zone, CourtZone::Backcourt);
-        
+
         // 2. Dribble in Paint -> Transition = False, Zone = Paint
         // Target Left (Team 1), Paint is near x=0
-        ledger.propose_event(GameEvent::Dribble {
-            player_id: 10, team_id: 1, t_ms: 2000, x: 100.0, y: 762.0,
-        }, 0);
-        
+        ledger.propose_event(
+            GameEvent::Dribble {
+                player_id: 10,
+                team_id: 1,
+                t_ms: 2000,
+                x: 100.0,
+                y: 762.0,
+            },
+            0,
+        );
+
         let ctx = ledger.current_possession.as_ref().unwrap();
         assert!(!ctx.is_transition);
         assert_eq!(ctx.offense_zone, CourtZone::Paint);

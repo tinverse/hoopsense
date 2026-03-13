@@ -1,40 +1,22 @@
-import os
-import wave
-import json
-import subprocess
-
 class AudioHead:
     """
-    Lightweight Keyword Spotter for localized vocal cues.
-    Focuses on: 'Sub', 'Substitution', 'Time-out'.
+    Placeholder for high-frequency audio analysis (e.g. whistle detection).
     """
-    def __init__(self, sample_rate=16000):
-        self.sample_rate = sample_rate
-        # Vosk is ideal for offline, high-speed keyword spotting
-        # For the prototype, we use a simple pattern matcher on extracted text
-        # or mock the detection if the library is not present.
-        print("[INFO] Audio Head Initialized.")
 
-    def extract_audio(self, video_path):
-        """Extracts mono audio from video for processing."""
-        audio_path = "data/temp_audio.wav"
-        subprocess.run([
-            "ffmpeg", "-i", video_path,
-            "-ar", str(self.sample_rate),
-            "-ac", "1",
-            "-vn", audio_path, "-y"
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return audio_path
+    def __init__(self):
+        self.whistle_detected = False
 
-    def spot_keywords(self, audio_path):
+    def process_frame(self, audio_chunk):
         """
-        Spots keywords and returns a list of (t_ms, keyword).
-        This is a placeholder for the VLM/CNN-based spotter.
+        Processes a small window of PCM audio.
         """
-        # Mock detection for the current video slice
-        # In production, this runs a sliding window FFT/CNN
-        return []
+        # Placeholder for spectral peak detection at ~3-4kHz
+        return False
+
+
+def main():
+    print("[INFO] AudioHead ready.")
+
 
 if __name__ == "__main__":
-    head = AudioHead()
-    print("Audio Head module ready.")
+    main()

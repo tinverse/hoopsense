@@ -1,9 +1,9 @@
-pub mod spatial;
 pub mod ledger;
-pub mod rules;
 pub mod physics;
+pub mod rules;
+pub mod spatial;
 
-pub use spatial::SpatialResolver;
 pub use ledger::GameStateLedger;
-pub use rules::GeometricReferee;
 pub use physics::Trajectory;
+pub use rules::GeometricReferee;
+pub use spatial::SpatialResolver;

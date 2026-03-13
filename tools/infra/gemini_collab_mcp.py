@@ -10,12 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Add repo logic to path
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-from gemini_project import GeminiProjectClient
-from gemini_project import repo_root_from
+from gemini_project import GeminiProjectClient  # noqa: E402
+from gemini_project import repo_root_from  # noqa: E402
 
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "hoopsense-gemini-collab", "version": "0.2.0"}
@@ -30,9 +31,15 @@ class GeminiCollabConfig:
 class GeminiCollabServer:
     def __init__(self, config: GeminiCollabConfig | None = None) -> None:
         self.config = config or GeminiCollabConfig()
-        default_root = Path(self.config.default_cwd).resolve() if self.config.default_cwd else repo_root_from(Path.cwd())
+        if self.config.default_cwd:
+            default_root = Path(self.config.default_cwd).resolve()
+        else:
+            default_root = repo_root_from(Path.cwd())
         self.project_root = default_root
-        self.client = GeminiProjectClient(project_root=self.project_root, gemini_command=self.config.gemini_command)
+        self.client = GeminiProjectClient(
+            project_root=self.project_root,
+            gemini_command=self.config.gemini_command
+        )
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         method = message.get("method")
@@ -50,11 +57,13 @@ class GeminiCollabServer:
         if method == "ping":
             return self._success(message["id"], {})
         if method == "tools/list":
-            return self._success(message["id"], {"tools": [self._tool_schema()]})
+            return self._success(message["id"],
+                                 {"tools": [self._tool_schema()]})
         if method == "tools/call":
             return self._handle_tool_call(message)
         if "id" in message:
-            return self._error(message["id"], -32601, f"Method not found: {method}")
+            return self._error(message["id"], -32601,
+                               f"Method not found: {method}")
         return None
 
     def _handle_tool_call(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -64,7 +73,8 @@ class GeminiCollabServer:
             return self._success(
                 message["id"],
                 {
-                    "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
+                    "content": [{"type": "text",
+                                 "text": f"Unknown tool: {name}"}],
                     "isError": True,
                 },
             )
@@ -75,14 +85,17 @@ class GeminiCollabServer:
             return self._success(
                 message["id"],
                 {
-                    "content": [{"type": "text", "text": "Missing required field: prompt"}],
+                    "content": [{"type": "text",
+                                 "text": "Missing required field: prompt"}],
                     "isError": True,
                 },
             )
 
         result = self._invoke_gemini(arguments)
         payload = {
-            "content": [{"type": "text", "text": json.dumps(result, indent=2, sort_keys=True)}],
+            "content": [{"type": "text",
+                         "text": json.dumps(result, indent=2,
+                                            sort_keys=True)}],
             "structuredContent": result,
         }
         if result["returncode"] != 0:
@@ -129,18 +142,20 @@ Request from your collaborator:
         return {
             "name": "ask_gemini",
             "title": "Ask Gemini Collaborator",
-            "description": "Consult the project-scoped Gemini collaborator through a high-signal MCP bridge.",
+            "description": "Consult the project-scoped Gemini collaborator.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "enum": ["requirements", "usecases", "architecture", "design", "implementation", "review", "general"],
+                        "enum": ["requirements", "usecases", "architecture",
+                                 "design", "implementation", "review",
+                                 "general"],
                         "description": "The domain of the inquiry.",
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "The specific request for the Gemini collaborator.",
+                        "description": "The specific request.",
                     },
                     "model": {
                         "type": "string",
@@ -199,7 +214,7 @@ def _write_message(stream: Any, message: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Expose the Gemini collaborator through a project-scoped MCP bridge.")
+    parser = argparse.ArgumentParser(description="Expose the Gemini collaborator.")
     parser.add_argument("--gemini-command", default="gemini")
     parser.add_argument("--default-cwd")
     args = parser.parse_args(argv)

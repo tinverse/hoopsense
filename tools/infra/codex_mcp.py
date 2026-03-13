@@ -1,110 +1,116 @@
 #!/usr/bin/env python3
-"""Local line-based MCP-like bridge to the project session."""
+"""Reciprocal bridge for Gemini-to-Codex communication using file-backed transport."""
 
 from __future__ import annotations
 
 import json
 import sys
+import time
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-# Ensure project infra is in path
+# Add infra to path for imports
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-from gemini_project import GeminiProjectClient, repo_root_from
+BRIDGE_DIRNAME = ".codex_bridge"
+REQUEST_FILENAME = "request.json"
+RESPONSE_FILENAME = "response.json"
 
-PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "hoopsense-codex-mcp", "version": "0.1.0"}
 
-class CodexMCPServer:
-    def __init__(self):
-        self.project_root = repo_root_from(Path.cwd())
-        self.client = GeminiProjectClient(project_root=self.project_root)
+class CodexBridgeClient:
+    """Client for Gemini to send requests to Codex."""
 
-    def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
-        method = message.get("method")
-        if method == "initialize":
-            return self._success(message["id"], {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": SERVER_INFO,
-            })
-        if method == "tools/list":
-            return self._success(message["id"], {"tools": [self._tool_schema()]})
-        if method == "tools/call":
-            return self._handle_tool_call(message)
-        return None
+    def __init__(self, project_root: Path) -> None:
+        self.bridge_dir = project_root / BRIDGE_DIRNAME
+        self.request_path = self.bridge_dir / REQUEST_FILENAME
+        self.response_path = self.bridge_dir / RESPONSE_FILENAME
 
-    def _tool_schema(self):
-        return {
-            "name": "ask_codex",
-            "description": "Consult the project-scoped engineering session about architecture, design, or implementation.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "enum": ["requirements", "usecases", "architecture", "design", "implementation", "review", "general"],
-                        "description": "The domain of the inquiry."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "The specific question or request for Codex."
-                    }
-                },
-                "required": ["topic", "prompt"]
-            }
+    def call(self, method: str, params: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+        """
+        Send a request and wait for a response.
+        This uses a simple file-based polling mechanism for local collaboration.
+        """
+        self.bridge_dir.mkdir(parents=True, exist_ok=True)
+
+        request_id = str(uuid.uuid4())
+        request = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params
         }
 
-    def _handle_tool_call(self, message: dict[str, Any]) -> dict[str, Any]:
-        params = message.get("params", {})
-        args = params.get("arguments", {})
-        topic = args.get("topic", "general")
-        prompt = args.get("prompt")
-        
-        # Establishing Expert Peer Context
-        collaboration_prompt = f"""
-Act as a Senior Software Architect and Expert Engineer. 
-We are collaborating on the HoopSense project. 
-Topic: {topic}
+        # Clear any stale response
+        if self.response_path.exists():
+            self.response_path.unlink()
 
-Provide an expert-level critique or design guidance. 
-Focus on:
-- Architectural integrity and component boundaries.
-- Performance implications for edge AI (Orin).
-- Technical debt and future-proofing.
-- Rigorous verification strategies.
+        # Write the request
+        self.request_path.write_text(json.dumps(request, indent=2))
 
-Request from your colleague:
-{prompt}
-""".strip()
-        
-        response = self.client.ask(collaboration_prompt)
-        
-        return self._success(message["id"], {
-            "content": [{"type": "text", "text": response["response"]}]
-        })
+        # Poll for response
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.response_path.exists():
+                try:
+                    response = json.loads(self.response_path.read_text())
+                    if response.get("id") == request_id:
+                        self.request_path.unlink()  # Clean up request
+                        return response
+                except json.JSONDecodeError:
+                    pass  # Wait for file to be fully written
+            time.sleep(0.5)
 
-    def _success(self, id, result):
-        return {"jsonrpc": "2.0", "id": id, "result": result}
+        raise TimeoutError(f"Codex bridge timeout after {timeout}s waiting for {request_id}")
 
-def main():
-    server = CodexMCPServer()
-    for line in sys.stdin:
+
+class CodexBridgeHost:
+    """Host for Codex to receive and respond to Gemini requests."""
+
+    def __init__(self, project_root: Path) -> None:
+        self.bridge_dir = project_root / BRIDGE_DIRNAME
+        self.request_path = self.bridge_dir / REQUEST_FILENAME
+        self.response_path = self.bridge_dir / RESPONSE_FILENAME
+        self.handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+
+    def register_handler(self, method: str, handler: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self.handlers[method] = handler
+
+    def process_once(self) -> bool:
+        """Process a single request if it exists."""
+        if not self.request_path.exists():
+            return False
+
         try:
-            message = json.loads(line)
-            response = server.handle_message(message)
-            if response:
-                print(json.dumps(response), flush=True)
-        except Exception as exc:
-            error = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32000, "message": str(exc)},
-            }
-            print(json.dumps(error), flush=True)
+            request = json.loads(self.request_path.read_text())
+            method = request.get("method")
+            params = request.get("params", {})
+            request_id = request.get("id")
 
-if __name__ == "__main__":
-    main()
+            if method in self.handlers:
+                try:
+                    result = self.handlers[method](params)
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": result
+                    }
+                except Exception as e:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32603, "message": str(e)}
+                    }
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32601, "message": f"Method not found: {method}"}
+                }
+
+            self.response_path.write_text(json.dumps(response, indent=2))
+            return True
+        except (json.JSONDecodeError, PermissionError):
+            return False  # Wait for valid file access
