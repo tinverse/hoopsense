@@ -4,7 +4,7 @@ from unittest.mock import Mock
 from tools.infra.gemini_mcp import GeminiMCPServer
 
 
-class TestGeminiCollabMCP(unittest.TestCase):
+class TestGeminiMCP(unittest.TestCase):
     def test_tools_list_exposes_ask_gemini(self):
         server = object.__new__(GeminiMCPServer)
         response = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
