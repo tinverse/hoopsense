@@ -11,6 +11,7 @@ core/target/
 /data/
 *.jsonl
 *.pt
+yolov8*.pt
 
 # Environment
 .env
