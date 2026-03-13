@@ -1,5 +1,7 @@
 import json
 import os
+import sys
+import tempfile
 
 
 def validate_hoopsense_contract(file_path):
@@ -33,8 +35,23 @@ def validate_hoopsense_contract(file_path):
 
 
 if __name__ == "__main__":
-    test_path = "data/intelligent_game_dna.jsonl"
-    if os.path.exists(test_path):
-        validate_hoopsense_contract(test_path)
+    if len(sys.argv) > 1:
+        validate_hoopsense_contract(sys.argv[1])
     else:
-        print(f"No test file found at {test_path}")
+        sample_row = {
+            "kind": "player",
+            "track_id": 1,
+            "t_ms": 1000,
+            "x": 10.0,
+            "y": 20.0,
+            "w": 30.0,
+            "h": 40.0,
+            "confidence_bps": 9000,
+        }
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".jsonl") as handle:
+            handle.write(json.dumps(sample_row) + "\n")
+            temp_path = handle.name
+        try:
+            validate_hoopsense_contract(temp_path)
+        finally:
+            os.unlink(temp_path)

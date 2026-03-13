@@ -2,18 +2,19 @@
 # scripts/run_perception_audit.sh
 # Validation script for Layer 1 Quality Gate.
 
+export PYTHONNOUSERSITE=1
 set +e # Allow tests to fail so we can capture status
 
 echo "--- HoopSense Perception Audit ---"
 
 # 1. Unit Tests
 echo "[STEP 1/3] Running Layer 1 quality gate tests..."
-python3 -m unittest tests/test_perception_gate.py
+python3 -s -m unittest discover -s tests -p 'test_perception_gate.py'
 UNIT_TEST_STATUS=$?
 
 # 2. Smoke Test
 echo "[STEP 2/3] Running inference pipeline smoke test..."
-python3 pipelines/inference.py --smoke-test
+python3 -s pipelines/inference.py --smoke-test
 SMOKE_TEST_STATUS=$?
 
 # 3. Report Generation
