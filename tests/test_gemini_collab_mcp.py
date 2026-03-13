@@ -1,17 +1,17 @@
 import unittest
 from unittest.mock import Mock
 
-from tools.infra.gemini_collab_mcp import GeminiCollabServer
+from tools.infra.gemini_mcp import GeminiMCPServer
 
 
 class TestGeminiCollabMCP(unittest.TestCase):
     def test_tools_list_exposes_ask_gemini(self):
-        server = object.__new__(GeminiCollabServer)
+        server = object.__new__(GeminiMCPServer)
         response = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         self.assertEqual(response["result"]["tools"][0]["name"], "ask_gemini")
 
     def test_tool_call_returns_structured_response(self):
-        server = object.__new__(GeminiCollabServer)
+        server = object.__new__(GeminiMCPServer)
         server.client = Mock()
         server.project_root = "."
         server.client.ask.return_value = {

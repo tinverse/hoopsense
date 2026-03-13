@@ -26,7 +26,7 @@ class TestChatWithGemini(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         args = mock_popen.call_args.args[0]
-        self.assertIn("tools/infra/gemini_collab_mcp.py", args)
+        self.assertIn("tools/infra/gemini_mcp.py", args)
 
 
 if __name__ == "__main__":

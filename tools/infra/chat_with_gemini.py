@@ -10,7 +10,7 @@ import sys
 
 def chat(topic: str, prompt: str) -> int:
     proc = subprocess.Popen(
-        [sys.executable, "tools/infra/gemini_collab_mcp.py", "--default-cwd", "."],
+        [sys.executable, "tools/infra/gemini_mcp.py", "--default-cwd", "."],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

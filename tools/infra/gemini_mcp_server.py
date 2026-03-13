@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from gemini_collab_mcp import main
+from gemini_mcp import main
 
 
 if __name__ == "__main__":
