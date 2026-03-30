@@ -31,6 +31,7 @@ venv/
 venv_temp/
 venv_hoops/
 venv_scan/
+.secrets
 *.log
 
 # Media
@@ -38,3 +39,4 @@ venv_scan/
 
 # Generated local runtime wrappers
 hoops-orin-shell
+PERCEPTION_READINESS.md
