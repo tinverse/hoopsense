@@ -23,24 +23,101 @@ VALID_FEEDBACK_ISSUES = {
     "pose_error",
 }
 
+
+def _landmark_spec(label, family, kind, xyz):
+    return {
+        "label": label,
+        "family": family,
+        "kind": kind,
+        "court_xyz": [float(xyz[0]), float(xyz[1]), float(xyz[2])],
+    }
+
 # Ensure directories exist
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_DIR.mkdir(parents=True, exist_ok=True)
 PERCEPTION_DIR.mkdir(parents=True, exist_ok=True)
 
-# Landmark data (NCAA cm)
+# Landmark data (NCAA cm). These are intentionally easier-to-click partial-court
+# correspondences so calibration does not depend on visible corners or center line.
 LANDMARKS = {
-    "rim_l": [160, 762, 305],
-    "rim_r": [2705, 762, 305],
-    "ft_l_top": [580, 517, 0],
-    "ft_l_bot": [580, 1007, 0],
-    "mid_top": [1432, 0, 0],
-    "mid_bot": [1432, 1524, 0],
-    "corner_tl": [0, 0, 0],
-    "corner_bl": [0, 1524, 0],
-    "corner_tr": [2865, 0, 0],
-    "corner_br": [2865, 1524, 0]
+    "rim_l": _landmark_spec("Left Rim", "rim", "point", [160, 762, 305]),
+    "rim_r": _landmark_spec("Right Rim", "rim", "point", [2705, 762, 305]),
+    "sideline_top_left_third": _landmark_spec("Far Sideline Left Third", "sideline", "line_point", [720, 0, 0]),
+    "sideline_top_mid": _landmark_spec("Far Sideline Midcourt", "sideline", "line_point", [1432, 0, 0]),
+    "sideline_top_right_third": _landmark_spec("Far Sideline Right Third", "sideline", "line_point", [2145, 0, 0]),
+    "sideline_bottom_left_third": _landmark_spec("Near Sideline Left Third", "sideline", "line_point", [720, 1524, 0]),
+    "sideline_bottom_mid": _landmark_spec("Near Sideline Midcourt", "sideline", "line_point", [1432, 1524, 0]),
+    "sideline_bottom_right_third": _landmark_spec("Near Sideline Right Third", "sideline", "line_point", [2145, 1524, 0]),
+    "baseline_left_top": _landmark_spec("Left Baseline Upper", "baseline", "line_point", [0, 280, 0]),
+    "baseline_left_mid": _landmark_spec("Left Baseline Mid", "baseline", "line_point", [0, 762, 0]),
+    "baseline_left_bottom": _landmark_spec("Left Baseline Lower", "baseline", "line_point", [0, 1244, 0]),
+    "baseline_right_top": _landmark_spec("Right Baseline Upper", "baseline", "line_point", [2865, 280, 0]),
+    "baseline_right_mid": _landmark_spec("Right Baseline Mid", "baseline", "line_point", [2865, 762, 0]),
+    "baseline_right_bottom": _landmark_spec("Right Baseline Lower", "baseline", "line_point", [2865, 1244, 0]),
+    "lane_left_top": _landmark_spec("Left Lane Upper Corner", "lane", "paint_corner", [580, 517, 0]),
+    "lane_left_bottom": _landmark_spec("Left Lane Lower Corner", "lane", "paint_corner", [580, 1007, 0]),
+    "lane_right_top": _landmark_spec("Right Lane Upper Corner", "lane", "paint_corner", [2285, 517, 0]),
+    "lane_right_bottom": _landmark_spec("Right Lane Lower Corner", "lane", "paint_corner", [2285, 1007, 0]),
+    "arc_left_upper": _landmark_spec("Left 3PT Arc Upper", "three_point_arc", "arc_point", [735.0, 409.0, 0]),
+    "arc_left_center": _landmark_spec("Left 3PT Arc Center", "three_point_arc", "arc_point", [835.0, 762.0, 0]),
+    "arc_left_lower": _landmark_spec("Left 3PT Arc Lower", "three_point_arc", "arc_point", [735.0, 1115.0, 0]),
+    "arc_right_upper": _landmark_spec("Right 3PT Arc Upper", "three_point_arc", "arc_point", [2130.0, 409.0, 0]),
+    "arc_right_center": _landmark_spec("Right 3PT Arc Center", "three_point_arc", "arc_point", [2030.0, 762.0, 0]),
+    "arc_right_lower": _landmark_spec("Right 3PT Arc Lower", "three_point_arc", "arc_point", [2130.0, 1115.0, 0]),
+    "corner_tl": _landmark_spec("Top-Left Corner", "corner", "point", [0, 0, 0]),
+    "corner_bl": _landmark_spec("Bottom-Left Corner", "corner", "point", [0, 1524, 0]),
+    "corner_tr": _landmark_spec("Top-Right Corner", "corner", "point", [2865, 0, 0]),
+    "corner_br": _landmark_spec("Bottom-Right Corner", "corner", "point", [2865, 1524, 0]),
 }
+
+
+def get_landmark_world_xy(landmark_id):
+    spec = LANDMARKS.get(landmark_id)
+    if spec is None:
+        return None
+    return spec["court_xyz"][:2]
+
+
+def summarize_calibration_points(points_data):
+    families = {}
+    unique_landmark_ids = set()
+    for point in points_data:
+        landmark_id = point.get("landmark_id")
+        spec = LANDMARKS.get(landmark_id)
+        if spec is None:
+            continue
+        unique_landmark_ids.add(landmark_id)
+        family = spec["family"]
+        families[family] = families.get(family, 0) + 1
+    return {
+        "point_count": len(points_data),
+        "unique_landmark_count": len(unique_landmark_ids),
+        "family_counts": families,
+    }
+
+
+def validate_calibration_points(points_data):
+    unknown = []
+    unique_landmark_ids = set()
+    families = set()
+    for point in points_data:
+        landmark_id = point.get("landmark_id")
+        spec = LANDMARKS.get(landmark_id)
+        if spec is None:
+            unknown.append(landmark_id)
+            continue
+        unique_landmark_ids.add(landmark_id)
+        families.add(spec["family"])
+
+    if unknown:
+        return {"ok": False, "reason": "unknown_landmarks", "unknown_landmarks": sorted(set(unknown))}
+    if len(points_data) < 4:
+        return {"ok": False, "reason": "too_few_points", "required_points": 4}
+    if len(unique_landmark_ids) < 4:
+        return {"ok": False, "reason": "too_few_unique_landmarks", "required_landmarks": 4}
+    if len(families) < 2:
+        return {"ok": False, "reason": "too_few_landmark_families", "required_families": 2}
+    return {"ok": True}
 
 def get_perception_artifact_path(clip_id):
     return PERCEPTION_DIR / f"{clip_id}.perception.json"
@@ -83,6 +160,8 @@ def list_clips():
         domain_path = CLIPS_DIR / domain
         if domain_path.exists():
             for video in domain_path.glob("*.mp4"):
+                if not get_perception_artifact_path(video.stem).exists():
+                    continue
                 clips.append({
                     "id": video.stem,
                     "domain": domain,
@@ -217,6 +296,12 @@ def solve_panning_calibration():
     clip_id = data["id"]
     clip_path = CLIPS_DIR / data["path"]
     points_data = data["points"]
+    validation = validate_calibration_points(points_data)
+    if not validation["ok"]:
+        return jsonify({
+            "status": "error",
+            **validation,
+        }), 400
     
     cap = cv2.VideoCapture(str(clip_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -235,28 +320,32 @@ def solve_panning_calibration():
     # to solve for a "canonical" Homography that we then adjust per frame.
     # For now, let's track all points across the whole clip.
     
-    all_tracked = {} # landmark_id -> { frame_idx: (x, y) }
+    all_tracked = {} # sample_key -> { frame_idx: (x, y), landmark_id: str }
     for f_idx, pts in frame_to_pts.items():
         initial_pts = [[p["x"], p["y"]] for p in pts]
         tracked = track_landmarks(clip_path, f_idx, initial_pts)
         for i, p in enumerate(pts):
-            lid = p["landmark_id"]
-            if lid not in all_tracked:
-                all_tracked[lid] = {}
+            sample_key = p.get("point_key") or f'{p["landmark_id"]}@{f_idx}:{i}'
+            if sample_key not in all_tracked:
+                all_tracked[sample_key] = {"landmark_id": p["landmark_id"], "frames": {}}
             for res_f_idx, res_pts in tracked.items():
-                all_tracked[lid][res_f_idx] = res_pts[i]
+                all_tracked[sample_key]["frames"][res_f_idx] = res_pts[i]
 
     # Solve H for every frame where we have at least 4 landmarks tracked
     h_matrices = {}
     for f_idx in range(total_frames):
         img_pts = []
         world_pts = []
-        for lid, frames in all_tracked.items():
+        frame_families = set()
+        for tracked_sample in all_tracked.values():
+            landmark_id = tracked_sample["landmark_id"]
+            frames = tracked_sample["frames"]
             if f_idx in frames:
                 img_pts.append(frames[f_idx])
-                world_pts.append(LANDMARKS[lid][:2])
-        
-        if len(img_pts) >= 4:
+                world_pts.append(get_landmark_world_xy(landmark_id))
+                frame_families.add(LANDMARKS[landmark_id]["family"])
+
+        if len(img_pts) >= 4 and len(frame_families) >= 2:
             H, _ = cv2.findHomography(np.array(img_pts, dtype=np.float32),
                                       np.array(world_pts, dtype=np.float32))
             if H is not None:
@@ -267,10 +356,16 @@ def solve_panning_calibration():
         with open(CALIBRATION_FILE, 'r') as f:
             calibrations = json.load(f)
     
+    point_summary = summarize_calibration_points(points_data)
     calibrations[clip_id] = {
-        "type": "temporal_aggregation",
+        "type": "temporal_aggregation_partial_court",
+        "solver": "point_correspondence_partial_court_v1",
         "h_sequence": h_matrices,
-        "landmark_count": len(all_tracked)
+        "landmark_count": len({sample["landmark_id"] for sample in all_tracked.values()}),
+        "point_sample_count": len(all_tracked),
+        "landmark_ids": sorted({sample["landmark_id"] for sample in all_tracked.values()}),
+        "landmark_families": sorted(point_summary["family_counts"]),
+        "point_summary": point_summary,
     }
     
     with open(CALIBRATION_FILE, 'w') as f:
@@ -278,9 +373,11 @@ def solve_panning_calibration():
 
     return jsonify({
         "status": "success",
-        "mode": "temporal_aggregation",
-        "landmarks": list(all_tracked.keys()),
-        "frames_calibrated": len(h_matrices)
+        "mode": "temporal_aggregation_partial_court",
+        "landmarks": sorted({sample["landmark_id"] for sample in all_tracked.values()}),
+        "landmark_families": sorted(point_summary["family_counts"]),
+        "frames_calibrated": len(h_matrices),
+        "point_summary": point_summary,
     })
 
 

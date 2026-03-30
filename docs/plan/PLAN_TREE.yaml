@@ -508,6 +508,11 @@ levels:
       title: Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
       owner: A0
       status: pending
+    - id: L3.54
+      parent: L2.2
+      title: Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
+      owner: A0
+      status: completed
 
 priorities:
   current_frontier:
@@ -545,6 +550,7 @@ priorities:
     - Make the MVP headers, formulas, and validation rules explicit repo artifacts instead of leaving them implicit in external files.
     - Require event and possession coverage to be justified against the sellable scorebook, not against generic basketball labels.
     - Reuse the declarative rules-engine idea from the sibling project only as architecture guidance, not as shared implementation.
+    - Make calibration workable on real youth-gym footage where corners, center line, and near sideline visibility are often missing.
     - Improve player-track quality at the Layer 1 artifact stage before expanding downstream possession and stats logic.
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.

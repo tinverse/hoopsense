@@ -17,6 +17,7 @@ const feedbackStatus = document.getElementById('feedback-status');
 let clips = [];
 let activeClip = null;
 let calibrationPoints = [];
+let landmarkSpecs = {};
 let isCalibrating = false;
 let perceptionData = null;
 let perceptionFrames = [];
@@ -34,6 +35,14 @@ fetch('/api/clips')
             opt.textContent = `[${clip.domain}] ${clip.id}`;
             clipList.appendChild(opt);
         });
+    });
+
+fetch('/api/landmarks')
+    .then(res => res.json())
+    .then(data => {
+        landmarkSpecs = data || {};
+        populateLandmarkList();
+        updateCalibrationStats();
     });
 
 // 2. Handle Clip Selection
@@ -100,7 +109,7 @@ window.addEventListener('resize', syncCanvasSize);
 
 function resetUI() {
     isCalibrating = true;
-    calStats.textContent = `Points: ${calibrationPoints.length}`;
+    updateCalibrationStats();
     document.getElementById('calibration-hint').style.display = 'block';
     
     player.onloadedmetadata = () => {
@@ -118,11 +127,47 @@ document.getElementById('btn-reset-cal').addEventListener('click', () => {
 
 document.getElementById('btn-run-cal').addEventListener('click', () => {
     if (calibrationPoints.length < 4) {
-        alert("Need at least 4 points across the clip for calibration.");
+        alert("Need at least 4 clicked points for calibration. Corners are optional.");
         return;
     }
     finishCalibration();
 });
+
+function populateLandmarkList() {
+    landmarkList.innerHTML = '';
+    const familyLabels = {
+        sideline: 'Sidelines',
+        baseline: 'Baselines',
+        lane: 'Lane / Paint',
+        three_point_arc: '3-Point Arc',
+        rim: 'Rims',
+        corner: 'Corners'
+    };
+    const grouped = {};
+    Object.entries(landmarkSpecs).forEach(([landmarkId, spec]) => {
+        const family = spec.family || 'other';
+        if (!grouped[family]) grouped[family] = [];
+        grouped[family].push([landmarkId, spec]);
+    });
+    Object.entries(grouped).forEach(([family, entries]) => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = familyLabels[family] || family;
+        entries.sort((a, b) => a[1].label.localeCompare(b[1].label));
+        entries.forEach(([landmarkId, spec]) => {
+            const opt = document.createElement('option');
+            opt.value = landmarkId;
+            opt.textContent = spec.label;
+            optgroup.appendChild(opt);
+        });
+        landmarkList.appendChild(optgroup);
+    });
+}
+
+function updateCalibrationStats() {
+    const uniqueLandmarks = new Set(calibrationPoints.map(p => p.landmark_id));
+    const uniqueFamilies = new Set(calibrationPoints.map(p => p.landmark_family).filter(Boolean));
+    calStats.textContent = `Points: ${calibrationPoints.length} // landmarks: ${uniqueLandmarks.size} // families: ${uniqueFamilies.size}`;
+}
 
 // 3. Labelling Actions
 function saveLabel(label, type="action") {
@@ -210,12 +255,21 @@ player.addEventListener('mousedown', (e) => {
     const y = clickY * box.ratio;
     
     const landmark_id = landmarkList.value;
+    const landmarkSpec = landmarkSpecs[landmark_id] || null;
     const t_ms = Math.floor(player.currentTime * 1000);
 
-    if (clickX >= 0 && clickX <= box.width && clickY >= 0 && clickY <= box.height) {
-        calibrationPoints.push({x, y, landmark_id, t_ms});
-        drawPoint(x, y, landmark_id);
-        calStats.textContent = `Points: ${calibrationPoints.length}`;
+    if (clickX >= 0 && clickX <= box.width && clickY >= 0 && clickY <= box.height && landmark_id) {
+        calibrationPoints.push({
+            point_key: `${landmark_id}_${t_ms}_${calibrationPoints.length}`,
+            x,
+            y,
+            landmark_id,
+            landmark_family: landmarkSpec ? landmarkSpec.family : null,
+            landmark_kind: landmarkSpec ? landmarkSpec.kind : null,
+            t_ms
+        });
+        drawPoint(x, y, landmarkSpec ? landmarkSpec.label : landmark_id);
+        updateCalibrationStats();
     }
 });
 
@@ -335,7 +389,8 @@ function redrawOverlay() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     calibrationPoints.forEach(p => {
         if (Math.abs(p.t_ms - player.currentTime * 1000) < 100) {
-            drawPoint(p.x, p.y, p.landmark_id);
+            const spec = landmarkSpecs[p.landmark_id];
+            drawPoint(p.x, p.y, spec ? spec.label : p.landmark_id);
         }
     });
 
@@ -505,10 +560,22 @@ function finishCalibration() {
             t_ms: Math.floor(player.currentTime * 1000),
             points: calibrationPoints
         })
-    }).then(res => res.json())
+    }).then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.reason || data.status || 'calibration_failed');
+        }
+        return data;
+    })
       .then(data => {
           console.log("Panning Calibration Complete. Frames:", data.frames_calibrated);
-          alert(`Panning Calibration Saved! Tracked ${data.frames_calibrated} frames.`);
+          const families = (data.landmark_families || []).join(', ') || 'unknown';
+          alert(`Calibration saved. Frames: ${data.frames_calibrated}. Families: ${families}.`);
+      })
+      .catch((error) => {
+          isCalibrating = true;
+          document.getElementById('calibration-hint').style.display = 'block';
+          alert(`Calibration failed: ${error.message}`);
       });
     setTimeout(() => ctx.clearRect(0, 0, overlay.width, overlay.height), 2000);
 }

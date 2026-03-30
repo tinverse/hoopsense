@@ -109,6 +109,7 @@ The current highest-priority frontier is:
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
+- [x] Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
 - [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt

@@ -25,6 +25,35 @@ def load_labeller_module():
 
 
 class LabellerOverlayTest(unittest.TestCase):
+    def test_clip_list_only_returns_clips_with_perception_artifacts(self):
+        module = load_labeller_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            module.CLIPS_DIR = tmp / "clips"
+            module.PERCEPTION_DIR = tmp / "artifacts"
+            (module.CLIPS_DIR / "youth").mkdir(parents=True)
+            module.PERCEPTION_DIR.mkdir(parents=True)
+            (module.CLIPS_DIR / "youth" / "with_overlay.mp4").write_bytes(b"")
+            (module.CLIPS_DIR / "youth" / "without_overlay.mp4").write_bytes(b"")
+            (module.PERCEPTION_DIR / "with_overlay.perception.json").write_text(json.dumps({
+                "clip_id": "with_overlay",
+                "frames": [],
+            }))
+            client = module.app.test_client()
+            response = client.get("/api/clips")
+            payload = response.get_json()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([clip["id"] for clip in payload], ["with_overlay"])
+
+    def test_landmarks_payload_exposes_partial_court_families(self):
+        module = load_labeller_module()
+        client = module.app.test_client()
+        response = client.get("/api/landmarks")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["baseline_left_mid"]["family"], "baseline")
+        self.assertEqual(payload["arc_left_center"]["kind"], "arc_point")
+
     def test_missing_overlay_returns_disabled_payload(self):
         module = load_labeller_module()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -163,6 +192,57 @@ class LabellerOverlayTest(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.get_json()["reason"], "track_id_missing")
+
+    def test_partial_court_calibration_is_saved_without_corners(self):
+        module = load_labeller_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            module.CLIPS_DIR = tmp / "clips"
+            module.CALIBRATION_FILE = tmp / "camera_calibration.json"
+            clip_dir = module.CLIPS_DIR / "youth"
+            clip_dir.mkdir(parents=True)
+            (clip_dir / "demo_clip.mp4").write_bytes(b"")
+
+            class FakeCapture:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+                def get(self, prop):
+                    if prop == module.cv2.CAP_PROP_FPS:
+                        return 30.0
+                    if prop == module.cv2.CAP_PROP_FRAME_COUNT:
+                        return 3
+                    return 0
+                def release(self):
+                    return None
+
+            module.cv2.VideoCapture = FakeCapture
+            module.cv2.CAP_PROP_FPS = 5
+            module.cv2.CAP_PROP_FRAME_COUNT = 7
+            module.cv2.findHomography = lambda img, world: (module.np.eye(3), None)
+            module.track_landmarks = lambda _path, start_idx, initial_pts: {start_idx: initial_pts}
+
+            client = module.app.test_client()
+            response = client.post(
+                "/api/calibrate",
+                json={
+                    "id": "demo_clip",
+                    "path": "youth/demo_clip.mp4",
+                    "points": [
+                        {"point_key": "a", "landmark_id": "sideline_top_left_third", "x": 10, "y": 20, "t_ms": 0},
+                        {"point_key": "b", "landmark_id": "sideline_top_right_third", "x": 20, "y": 20, "t_ms": 0},
+                        {"point_key": "c", "landmark_id": "baseline_left_mid", "x": 10, "y": 40, "t_ms": 0},
+                        {"point_key": "d", "landmark_id": "arc_left_center", "x": 40, "y": 30, "t_ms": 0},
+                    ],
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["status"], "success")
+            self.assertIn("sideline", payload["landmark_families"])
+            self.assertIn("baseline", payload["landmark_families"])
+            saved = json.loads(module.CALIBRATION_FILE.read_text())
+            self.assertEqual(saved["demo_clip"]["type"], "temporal_aggregation_partial_court")
+            self.assertIn("three_point_arc", saved["demo_clip"]["landmark_families"])
 
 
 if __name__ == "__main__":

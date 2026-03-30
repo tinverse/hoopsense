@@ -39,7 +39,7 @@
         <div id="video-container">
             <video id="player" preload="auto"></video>
             <canvas id="overlay"></canvas>
-            <div id="calibration-hint" class="calibration-msg">CALIBRATION MODE: Click points across frames</div>
+            <div id="calibration-hint" class="calibration-msg">CALIBRATION MODE: corners optional; click any visible sideline, baseline, lane, or 3PT arc landmarks across frames</div>
         </div>
         <div id="sidebar">
             <h3>SELECT CLIP</h3>
@@ -76,17 +76,9 @@
 
             <h3>CALIBRATION</h3>
             <select id="landmark-list" style="width: 100%; background: #111; color: #ffaa00; border: 1px solid #444; padding: 10px; margin-bottom: 10px;">
-                <option value="corner_tl">Top-Left Corner (0,0)</option>
-                <option value="corner_bl">Bottom-Left Corner (0,1524)</option>
-                <option value="rim_l">Left Rim (160, 762, 305)</option>
-                <option value="ft_l_top">FT Line Top (L) (580, 517)</option>
-                <option value="ft_l_bot">FT Line Bottom (L) (580, 1007)</option>
-                <option value="mid_top">Midcourt Sideline (Top)</option>
-                <option value="mid_bot">Midcourt Sideline (Bottom)</option>
-                <option value="corner_tr">Top-Right Corner</option>
-                <option value="corner_br">Bottom-Right Corner</option>
+                <option value="">-- Loading landmarks --</option>
             </select>
-            <div id="calibration-stats">Points: 0</div>
+            <div id="calibration-stats">Points: 0 // landmarks: 0 // families: 0</div>
             <button class="btn" id="btn-run-cal" style="background: #004400; border-color: #00ff00; font-weight: bold; margin-bottom: 5px;">RUN CALIBRATION</button>
             <button class="btn" id="btn-reset-cal" style="background: #442200; border-color: #ffaa00; font-size: 0.8em; padding: 5px;">RESET ALL POINTS</button>
 
