@@ -513,6 +513,11 @@ levels:
       title: Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
       owner: A0
       status: completed
+    - id: L3.55
+      parent: L2.32
+      title: Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
+      owner: A0
+      status: completed
 
 priorities:
   current_frontier:
@@ -551,6 +556,7 @@ priorities:
     - Require event and possession coverage to be justified against the sellable scorebook, not against generic basketball labels.
     - Reuse the declarative rules-engine idea from the sibling project only as architecture guidance, not as shared implementation.
     - Make calibration workable on real youth-gym footage where corners, center line, and near sideline visibility are often missing.
+    - Make review feedback robust enough that multi-frame reviewer observations are not lost when they do not map cleanly to a single error button.
     - Improve player-track quality at the Layer 1 artifact stage before expanding downstream possession and stats logic.
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.

@@ -546,6 +546,7 @@ document.getElementById('feedback-fn').addEventListener('click', () => savePerce
 document.getElementById('feedback-merge').addEventListener('click', () => savePerceptionFeedback('merge_error'));
 document.getElementById('feedback-track').addEventListener('click', () => savePerceptionFeedback('track_error'));
 document.getElementById('feedback-pose').addEventListener('click', () => savePerceptionFeedback('pose_error'));
+document.getElementById('feedback-note-save').addEventListener('click', () => savePerceptionFeedback('general_note'));
 
 function finishCalibration() {
     isCalibrating = false;

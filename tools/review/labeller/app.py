@@ -21,6 +21,7 @@ VALID_FEEDBACK_ISSUES = {
     "merge_error",
     "track_error",
     "pose_error",
+    "general_note",
 }
 
 
