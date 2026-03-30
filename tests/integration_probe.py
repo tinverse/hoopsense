@@ -1,71 +1,26 @@
-import subprocess
-import numpy as np
-import torch
-from pipelines.behavior_engine import BehaviorStateMachine
-from pipelines.inference import match_pose_to_box
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.infra.orin_validation import run_rigorous_probe
 
 
-def run_rigorous_probe():
+def main():
+    result = run_rigorous_probe()
     print("[PROBE] Starting Hardware and Logical Verification...")
-
-    # 1. Hardware Awareness Check (The actual Orin Proof)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[PROBE] Target Device: {device}")
-
-    if device.type != 'cuda':
-        print("[WARN] CUDA not detected. This probe is running on CPU.")
+    print(f"[PROBE] Target Device: {result['device_type']}")
+    if result["cuda_tensor_ok"]:
+        print("[SUCCESS] CUDA acceleration verified or CPU fallback acknowledged.")
     else:
-        # Verify tensor movement
-        x = torch.randn(1, 30, 72).to(device)
-        if x.is_cuda:
-            print("[SUCCESS] CUDA acceleration verified: Tensors moved to GPU.")
-        else:
-            print("[FAILURE] CUDA detected but tensor movement failed.")
-
-    # 2. Testing Multi-Player Pose Association
-    print("[PROBE] Testing Multi-Player Pose Association...")
-    mock_box = [100, 100, 50, 100]  # cx, cy, w, h
-    mock_poses = [
-        [[0.1, 0.1]] * 17,  # Correct match (normalized)
-        [[0.8, 0.8]] * 17   # Incorrect match
-    ]
-    matched = match_pose_to_box(mock_box, mock_poses, 1000, 1000)
-    if matched and matched[0][0] == 0.1:
-        print("[SUCCESS] Multi-player pose matching verified.")
-    else:
-        print("[FAILURE] Pose association logic failed.")
-
-    # 3. DSL Declarative Rule Execution
-    print("[PROBE] Testing DSL Declarative Rule Execution...")
-    fsm = BehaviorStateMachine(spec_path="specs/basketball_ncaa.yaml")
-    # Mock a jump (Rising Y in normalized coords is negative delta)
-    jump_history = []
-    for i in range(20):
-        kpts = np.zeros((17, 2))
-        kpts[:, 1] = 0.5 - (i * 0.01)  # Moving UP in image space
-        jump_history.append(kpts)
-
-    state = fsm.update(jump_history)
-    if fsm.get_label() == "jump_shot" or state is not None:
-        print(f"[SUCCESS] DSL Rule verified. Result: {fsm.get_label()}")
-    else:
-        print("[FAILURE] DSL Rule 'jump_shot' not triggered.")
-
-    # 4. Testing Rust Scoring Logic (Bridge)
-    print("[PROBE] Testing Rust Scoring Logic...")
-    try:
-        # Proposed integration test clip (JSONL)
-        res = subprocess.run([
-            "cargo", "run", "--quiet", "--manifest-path", "core/Cargo.toml",
-            "--bin", "spatial_processor"
-        ], capture_output=True, text=True)
-        if res.returncode == 0:
-            print("[SUCCESS] Rust Logic Bridge Verified.")
-        else:
-            print(f"[ERROR] Rust Bridge failed: {res.stderr}")
-    except Exception as e:
-        print(f"[ERROR] Rust Bridge execution failed: {e}")
+        print("[FAILURE] CUDA tensor verification failed.")
+    print("[SUCCESS] Multi-player pose matching verified." if result["pose_association_ok"] else "[FAILURE] Pose association logic failed.")
+    print("[SUCCESS] DSL rule verified." if result["dsl_rule_ok"] else "[FAILURE] DSL rule verification failed.")
+    print("[SUCCESS] Rust logic bridge verified." if result["rust_bridge_ok"] else f"[FAILURE] Rust bridge failed: {result['rust_bridge_stderr']}")
+    raise SystemExit(0 if result["status"] == "pass" else 1)
 
 
 if __name__ == "__main__":
-    run_rigorous_probe()
+    main()

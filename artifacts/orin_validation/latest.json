@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-03-30T06:09:01.720916+00:00",
+  "status": "pass",
+  "environment": {
+    "python_executable": "/data/projects/hoopsense/.venv_orin310/bin/python",
+    "python_version": "3.10.12 (main, Mar  3 2026, 11:56:32) [GCC 11.4.0]",
+    "platform": "Linux-5.15.185-tegra-aarch64-with-glibc2.35",
+    "machine": "aarch64",
+    "numpy_ok": true,
+    "torch_version": "2.10.0",
+    "torch_file": "/data/projects/hoopsense/.venv_orin310/lib/python3.10/site-packages/torch/__init__.py",
+    "torch_ok": true,
+    "cuda_available": true,
+    "cuda_device_name": "Orin",
+    "cuda_tensor_ok": true,
+    "status": "pass",
+    "errors": []
+  },
+  "probe": {
+    "device_type": "cuda",
+    "cuda_tensor_ok": true,
+    "action_brain_ok": true,
+    "action_brain_device": "cuda",
+    "action_brain_latency_ms": 5.331652006134391,
+    "action_brain_error": null,
+    "pose_association_ok": null,
+    "dsl_rule_ok": null,
+    "rust_bridge_ok": true,
+    "rust_bridge_returncode": 0,
+    "rust_bridge_stderr": "warning: unused import: `NCAA_RIM_HEIGHT`\n --> src/physics.rs:1:20\n  |\n1 | use crate::rules::{NCAA_RIM_HEIGHT, NCAA_RIM_RADIUS};\n  |                    ^^^^^^^^^^^^^^^\n  |\n  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default\n\nwarning: unused import: `Vector3`\n --> src/physics.rs:2:24\n  |\n2 | use nalgebra::{Point3, Vector3};\n  |                        ^^^^^^^\n\nwarning: unused variable: `u`\n   --> src/spatial.rs:198:18\n    |\n198 |             for (u, v) in kpts_2d {\n    |                  ^ help: if this is intentional, prefix it with an underscore: `_u`\n    |\n    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: unused import: `Point2`\n --> src/bin/spatial_processor.rs:4:16\n  |\n4 | use nalgebra::{Point2, Point3};\n  |                ^^^^^^\n  |\n  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default",
+    "status": "pass"
+  },
+  "checks": [
+    {
+      "name": "torch",
+      "passed": true,
+      "required": true
+    },
+    {
+      "name": "numpy",
+      "passed": true,
+      "required": false
+    },
+    {
+      "name": "cuda_available",
+      "passed": true,
+      "required": true
+    },
+    {
+      "name": "cuda_tensor",
+      "passed": true,
+      "required": true
+    },
+    {
+      "name": "action_brain",
+      "passed": true,
+      "required": true
+    },
+    {
+      "name": "pose_association",
+      "passed": null,
+      "required": false
+    },
+    {
+      "name": "dsl_rule",
+      "passed": null,
+      "required": false
+    },
+    {
+      "name": "rust_bridge",
+      "passed": true,
+      "required": false
+    }
+  ]
+}

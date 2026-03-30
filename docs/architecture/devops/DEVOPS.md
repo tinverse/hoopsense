@@ -62,11 +62,13 @@ Preferred path:
 guix shell -m guix_orin.scm
 ./scripts/setup_orin.sh
 python3 tests/validate_orin_env.py
+./scripts/run_orin_cuda_probe.sh
 python3 tools/training/train_action_brain.py --smoke-test
 ```
 
 Use this for:
 - GPU smoke validation
+- repeatable CUDA/runtime probe artifacts
 - first training runs
 - confirming model checkpoints progress correctly on target hardware
 - catching Jetson-specific ABI or driver issues before cloud spend
@@ -74,6 +76,9 @@ Use this for:
 Constraint:
 - Jetson depends on host-installed NVIDIA libraries and JetPack components
 - this path is reproducible only up to that vendor boundary
+- `guix_orin.scm` pins the shell to Python 3.10 so `scripts/setup_orin.sh` can create the validated `.venv_orin310`
+- that venv uses the Jetson `jp6/cu126` torch wheel and `nvidia-cudss-cu12`
+- `scripts/run_orin_cuda_probe.sh` intentionally exposes only `libcudss` from the venv and uses JetPack system CUDA/cuDNN libs for the rest
 
 ### Mode C: Cloud Training
 

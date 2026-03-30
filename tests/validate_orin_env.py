@@ -1,37 +1,30 @@
+import platform
 import sys
-import numpy as np
-import torch
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.infra.orin_validation import validate_environment
 
 
 def validate():
-    print(f"[INFO] Python Version: {sys.version}")
+    result = validate_environment()
+    print(f"[INFO] Python Version: {result['python_version']}")
+    print(f"[INFO] Platform: {result['platform']}")
+    print(f"[SUCCESS] NumPy initialized." if result["numpy_ok"] else "[FAILURE] NumPy failed.")
+    print(f"[INFO] PyTorch Version: {result['torch_version']}")
+    print(f"[INFO] CUDA Available: {result['cuda_available']}")
 
-    # 1. Test NumPy C-Extensions
-    try:
-        _ = np.array([1, 2, 3])
-        print("[SUCCESS] NumPy initialized.")
-    except Exception as e:
-        print(f"[FAILURE] NumPy error: {e}")
-        sys.exit(1)
+    if result["cuda_device_name"]:
+        print(f"[SUCCESS] GPU Detected: {result['cuda_device_name']}")
+    if result["cuda_tensor_ok"]:
+        print("[SUCCESS] CUDA tensor allocation verified.")
 
-    # 2. Test PyTorch and CUDA (The Orin Hardware Gate)
-    try:
-        print(f"[INFO] PyTorch Version: {torch.__version__}")
-        has_cuda = torch.cuda.is_available()
-        print(f"[INFO] CUDA Available: {has_cuda}")
-
-        if has_cuda:
-            device_name = torch.cuda.get_device_name(0)
-            print(f"[SUCCESS] GPU Detected: {device_name}")
-            _ = torch.randn(1, 3, 224, 224).cuda()
-            print("[SUCCESS] CUDA tensor allocation verified.")
-        else:
-            if sys.platform == "linux" and "aarch64" in sys.version:
-                print("[FAILURE] CUDA not detected. Hardware bridge is missing.")
-                sys.exit(1)
-
-    except Exception as e:
-        print(f"[FAILURE] PyTorch/CUDA check failed: {e}")
+    if result["status"] != "pass":
+        for error in result["errors"]:
+            print(f"[FAILURE] {error}")
         sys.exit(1)
 
 

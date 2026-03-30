@@ -16,6 +16,7 @@ yolov8*.pt
 # Environment
 .env
 .venv
+.venv*/
 env/
 venv/
 .envrc
@@ -34,3 +35,6 @@ venv_scan/
 
 # Media
 *.mp4
+
+# Generated local runtime wrappers
+hoops-orin-shell
