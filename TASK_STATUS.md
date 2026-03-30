@@ -7,7 +7,15 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.43` publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
+- `L3.46` check in canonical MVP stats header and formula templates with provenance rules
+- `L3.51` define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
+- `L3.47` map each MVP stat to required event primitives and possession fields
+- `L3.9` define `PossessionContext` fields and ledger serialization contract
+- `L3.10` track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
+- `L3.12` define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+- `L3.48` materialize auditable box-score rows that match the core scorebook columns and formulas
+- `L3.49` add scorebook-backed validation fixtures that compare generated stats to trusted totals
+- `L3.50` defer shot-profile and advanced report outputs until the core box score is reliable
 - `L3.37` decide the first migration target, if any, based on performance, determinism, and implementation risk
 - `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
 - `L3.26` publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
@@ -100,11 +108,19 @@ The current highest-priority frontier is:
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
+- [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
+- [x] Publish a normalized MVP stats contract for a sellable scorebook-style output
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
 - [ ] Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
 - [ ] Generate MVP box-score rows from attributed events
+- [ ] Check in canonical MVP stats header and formula templates with provenance rules
+- [ ] Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
+- [ ] Map each MVP stat to required event primitives and possession fields
+- [ ] Materialize auditable box-score rows that match the core scorebook columns and formulas
+- [ ] Add scorebook-backed validation fixtures that compare generated stats to trusted totals
+- [ ] Defer shot-profile and advanced report outputs until the core box score is reliable
 - [ ] Implement offense zone and transition flag derivation in the possession context
 - [ ] Document candidate Python-versus-Rust ownership split for the perception layer
 - [ ] Implement first-pass dataset manifests with SHA-256 hashing
@@ -113,7 +129,14 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
-- [ ] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
+- [ ] Check in canonical MVP stats header and formula templates with provenance rules
+- [ ] Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
+- [ ] Map each MVP stat to required event primitives and possession fields
+- [ ] Define `PossessionContext` fields and ledger serialization contract
+- [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
+- [ ] Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+- [ ] Materialize auditable box-score rows that match the core scorebook columns and formulas
+- [ ] Add scorebook-backed validation fixtures that compare generated stats to trusted totals
 - [ ] Decide the first migration target based on performance and risk (TrackManager identified)
 - [ ] Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
 - [ ] Add first slice reports for action class, camera/view, and pose quality
@@ -128,11 +151,12 @@ What is currently true:
 - an Orin container logic probe exists
 - basic manifest hashing, training lineage scaffolding, and initial CI plumbing now exist locally
 - possession and stat primitives exist locally in Rust and Python, but need tighter end-to-end verification
+- the MVP product contract is now explicitly captured as a normalized scorebook-style output spec
 
 What is not yet true:
 - Oracle scale-out has not yet been re-materialized and verified as an on-disk dataset artifact
 - the possession context contract is not yet proven end to end in inference output
-- CUDA acceleration is not yet proven in every runtime path
+- the scorebook-style box-score contract is not yet materialized as headers, formulas, and fixture-backed validation
 - dataset promotion rules are not yet defined
 - the CI architecture is not yet split by functional core
 - no Terraform layer exists yet for shared GCP infrastructure
@@ -146,6 +170,7 @@ What is not yet true:
 - [x] Documentation updated for layered feature architecture
 - [x] Planning invariant checked into `AGENTS.md`
 - [>] Orin hardware validation (CUDA/PyTorch)
+- [ ] Scorebook-style stat contract materialized as checked-in templates and validation fixtures
 - [ ] Oracle dataset manifest validation implemented
 - [ ] Checkpoint lineage recording implemented
 - [ ] Slice-based evaluation report implemented

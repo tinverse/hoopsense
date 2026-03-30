@@ -9,6 +9,7 @@ meta:
   supporting_docs:
     - docs/architecture/components/LAYERED_FEATURE_SCHEMA.md
     - docs/architecture/components/FEATURE_SCHEMA_V2.md
+    - docs/plan/MVP_STATS_CONTRACT.md
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
@@ -41,7 +42,7 @@ levels:
       parent: L0.1
       title: Event attribution and stats generation
       owner: A0
-      status: pending
+      status: in_progress
     - id: L1.5
       parent: L0.1
       title: Deployment, runtime, and operator workflow
@@ -141,12 +142,12 @@ levels:
       parent: L1.4
       title: Event attribution rules combining motion, ball, and possession state
       owner: A0
-      status: pending
+      status: in_progress
     - id: L2.14
       parent: L1.4
       title: Stat ledger and box-score generation
       owner: A0
-      status: pending
+      status: in_progress
     - id: L2.15
       parent: L1.4
       title: Shot chart, defensive metrics, and report outputs
@@ -456,22 +457,65 @@ levels:
       parent: L2.21
       title: Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
       owner: A0
-      status: in_progress
+      status: completed
     - id: L3.44
       parent: L2.16
       title: Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
       owner: A0
       status: completed
+    - id: L3.45
+      parent: L2.21
+      title: Publish a normalized MVP stats contract for a sellable scorebook-style output
+      owner: A0
+      status: completed
+    - id: L3.46
+      parent: L2.14
+      title: Check in canonical MVP stats header and formula templates with provenance rules
+      owner: A0
+      status: pending
+    - id: L3.47
+      parent: L2.13
+      title: Map each MVP stat to required event primitives and possession fields
+      owner: A0
+      status: pending
+    - id: L3.48
+      parent: L2.14
+      title: Materialize auditable box-score rows that match the core scorebook columns and formulas
+      owner: A0
+      status: pending
+    - id: L3.49
+      parent: L2.14
+      title: Add scorebook-backed validation fixtures that compare generated stats to trusted totals
+      owner: A0
+      status: pending
+    - id: L3.50
+      parent: L2.15
+      title: Defer shot-profile and advanced report outputs until the core box score is reliable
+      owner: A0
+      status: pending
+    - id: L3.51
+      parent: L2.13
+      title: Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
+      owner: A0
+      status: pending
 
 priorities:
   current_frontier:
-    - L3.43
-    - L3.44
+    - L3.46
+    - L3.51
+    - L3.47
+    - L3.9
+    - L3.10
+    - L3.12
+    - L3.48
+    - L3.49
+    - L3.50
     - L3.36
     - L3.37
     - L3.17
     - L3.18
     - L3.19
+    - L3.20
     - L3.24
     - L3.25
     - L3.26
@@ -483,12 +527,12 @@ priorities:
     - L3.32
     - L3.33
     - L3.4
-    - L3.9
-    - L3.10
-    - L3.12
     - L3.15
-    - L3.20
   rationale:
+    - Anchor the near-term product scope to a normalized customer-facing scorebook contract before deeper model expansion.
+    - Make the MVP headers, formulas, and validation rules explicit repo artifacts instead of leaving them implicit in external files.
+    - Require event and possession coverage to be justified against the sellable scorebook, not against generic basketball labels.
+    - Reuse the declarative rules-engine idea from the sibling project only as architecture guidance, not as shared implementation.
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.
     - Make the build and delivery story explicit before environment drift deepens.
