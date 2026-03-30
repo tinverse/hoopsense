@@ -127,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
     call_parser.add_argument("payload", help="JSON object for params")
     call_parser.add_argument("--timeout", type=float, default=30.0)
 
+    ask_parser = subparsers.add_parser("ask", help="Send a collaborative consultation request.")
+    ask_parser.add_argument("topic", choices=["architecture", "design", "implementation", "review", "general"])
+    ask_parser.add_argument("prompt")
+    ask_parser.add_argument("--timeout", type=float, default=60.0)
+
     subparsers.add_parser("serve-demo", help="Run a demo host with ask_codex.")
 
     args = parser.parse_args(argv)
@@ -137,6 +142,19 @@ def main(argv: list[str] | None = None) -> int:
         params = json.loads(args.payload)
         response = client.call(args.method, params, timeout=args.timeout)
         print(json.dumps(response, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "ask":
+        client = CodexMCPClient(project_root)
+        params = {"topic": args.topic, "prompt": args.prompt}
+        response = client.call("ask_codex", params, timeout=args.timeout)
+        
+        if "error" in response:
+            print(f"[ERROR] {response['error']['message']}", file=sys.stderr)
+            return 1
+            
+        result = response.get("result", {})
+        print(result.get("response", "No response content."))
         return 0
 
     if args.command == "serve-demo":
