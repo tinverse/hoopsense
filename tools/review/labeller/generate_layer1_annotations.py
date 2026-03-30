@@ -15,9 +15,35 @@ OUTPUT_DIR = REPO_ROOT / "data" / "review_artifacts" / "layer1"
 CALIBRATION_FILE = REPO_ROOT / "data" / "training" / "camera_calibration.json"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+COURT_X_RANGE = (-50.0, 2890.0)
+COURT_Y_RANGE = (-50.0, 1575.0)
+ACTIVE_PLAYER_SCORE_THRESHOLD = 0.55
+MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
+EDGE_MARGIN_RATIO = 0.06
+SHORT_GAP_REPAIR_MAX_GAP = 3
+
 
 def _to_float_list(values):
     return [float(v) for v in values]
+
+
+def _lerp(a, b, alpha):
+    return (1.0 - alpha) * float(a) + alpha * float(b)
+
+
+def _interpolate_point_list(points_a, points_b, alpha):
+    if not points_a or not points_b or len(points_a) != len(points_b):
+        return None
+    interpolated = []
+    for pt_a, pt_b in zip(points_a, points_b):
+        if len(pt_a) != len(pt_b):
+            return None
+        interpolated.append([_lerp(a, b, alpha) for a, b in zip(pt_a, pt_b)])
+    return interpolated
+
+
+def _clip01(value):
+    return max(0.0, min(1.0, float(value)))
 
 
 def estimate_uniform_bucket(frame, bbox_xyxy, keypoints_xy=None, keypoints_conf=None):
@@ -71,6 +97,65 @@ def estimate_uniform_bucket(frame, bbox_xyxy, keypoints_xy=None, keypoints_conf=
     else:
         bucket = "unknown"
     return {"bucket": bucket, "luma_mean": luma_mean}
+
+
+def score_active_player(
+    detection,
+    *,
+    frame_width,
+    frame_height,
+    track_frame_count=1,
+):
+    confidence = float(detection.get("confidence") or 0.0)
+    bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+    x1, y1, x2, y2 = bbox_xyxy
+    bbox_h = max(0.0, y2 - y1)
+    bbox_cx = (x1 + x2) * 0.5
+    bbox_cy = (y1 + y2) * 0.5
+
+    reasons = {}
+    score = 0.0
+
+    reasons["confidence"] = round(confidence, 4)
+    score += 0.35 * _clip01(confidence)
+
+    height_ratio = bbox_h / max(float(frame_height), 1.0)
+    height_score = _clip01((height_ratio - MIN_PLAYER_BBOX_HEIGHT_RATIO) / 0.18)
+    reasons["height_ratio"] = round(height_ratio, 4)
+    score += 0.20 * height_score
+
+    edge_margin_x = frame_width * EDGE_MARGIN_RATIO
+    edge_margin_y = frame_height * EDGE_MARGIN_RATIO
+    edge_penalty = 0.0
+    if bbox_cx < edge_margin_x or bbox_cx > frame_width - edge_margin_x:
+        edge_penalty += 0.15
+    if bbox_cy < edge_margin_y:
+        edge_penalty += 0.05
+    reasons["edge_penalty"] = round(edge_penalty, 4)
+    score -= edge_penalty
+
+    court_xy = detection.get("court_xy")
+    if court_xy is not None and len(court_xy) == 2:
+        cx, cy = float(court_xy[0]), float(court_xy[1])
+        in_bounds = (
+            COURT_X_RANGE[0] <= cx <= COURT_X_RANGE[1]
+            and COURT_Y_RANGE[0] <= cy <= COURT_Y_RANGE[1]
+        )
+        reasons["court_in_bounds"] = in_bounds
+        score += 0.20 if in_bounds else -0.20
+    else:
+        reasons["court_in_bounds"] = None
+
+    persistence_score = min(track_frame_count, 5) / 5.0
+    reasons["track_frame_count"] = int(track_frame_count)
+    score += 0.10 * persistence_score
+
+    active_score = round(_clip01(score), 4)
+    return {
+        "score": active_score,
+        "candidate": active_score >= ACTIVE_PLAYER_SCORE_THRESHOLD,
+        "reasons": reasons,
+    }
 
 
 def load_calibration(clip_id, calibration_file):
@@ -141,6 +226,139 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
     return detection
 
 
+def _track_frame_counts(frames):
+    counts = {}
+    for frame in frames:
+        seen = set()
+        for detection in frame.get("detections", []):
+            track_id = detection.get("track_id")
+            if track_id is None or track_id in seen:
+                continue
+            counts[track_id] = counts.get(track_id, 0) + 1
+            seen.add(track_id)
+    return counts
+
+
+def annotate_active_players(frames, video_meta):
+    track_counts = _track_frame_counts(frames)
+    frame_width = int(video_meta["width"])
+    frame_height = int(video_meta["height"])
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            score_info = score_active_player(
+                detection,
+                frame_width=frame_width,
+                frame_height=frame_height,
+                track_frame_count=track_counts.get(detection.get("track_id"), 1),
+            )
+            detection["active_player_score"] = score_info["score"]
+            detection["active_player_candidate"] = score_info["candidate"]
+            detection["active_player_reasons"] = score_info["reasons"]
+    return frames
+
+
+def _interpolate_detection(start_det, end_det, frame_idx, t_ms, alpha):
+    synthesized = {
+        "track_id": start_det.get("track_id"),
+        "class_id": start_det.get("class_id"),
+        "class_name": start_det.get("class_name"),
+        "confidence": round(_lerp(start_det.get("confidence", 0.0), end_det.get("confidence", 0.0), alpha), 4),
+        "bbox_xyxy": [_lerp(a, b, alpha) for a, b in zip(start_det.get("bbox_xyxy", []), end_det.get("bbox_xyxy", []))],
+        "bbox_xywh": [_lerp(a, b, alpha) for a, b in zip(start_det.get("bbox_xywh", []), end_det.get("bbox_xywh", []))],
+        "uniform_bucket": start_det.get("uniform_bucket") if start_det.get("uniform_bucket") == end_det.get("uniform_bucket") else "unknown",
+        "uniform_luma_mean": None,
+        "repair_source": {
+            "kind": "short_gap_interpolation",
+            "start_frame_idx": start_det.get("_frame_idx"),
+            "end_frame_idx": end_det.get("_frame_idx"),
+        },
+        "synthesized": True,
+    }
+    if start_det.get("court_xy") and end_det.get("court_xy"):
+        synthesized["court_xy"] = [
+            _lerp(start_det["court_xy"][0], end_det["court_xy"][0], alpha),
+            _lerp(start_det["court_xy"][1], end_det["court_xy"][1], alpha),
+        ]
+    keypoints_xy = _interpolate_point_list(
+        start_det.get("keypoints_xy"),
+        end_det.get("keypoints_xy"),
+        alpha,
+    )
+    if keypoints_xy is not None:
+        synthesized["keypoints_xy"] = keypoints_xy
+    keypoints_conf = _interpolate_point_list(
+        [[c] for c in start_det.get("keypoints_conf", [])],
+        [[c] for c in end_det.get("keypoints_conf", [])],
+        alpha,
+    )
+    if keypoints_conf is not None:
+        synthesized["keypoints_conf"] = [row[0] for row in keypoints_conf]
+    lifted_xyz = _interpolate_point_list(
+        start_det.get("lifted_keypoints_xyz"),
+        end_det.get("lifted_keypoints_xyz"),
+        alpha,
+    )
+    if lifted_xyz is not None:
+        synthesized["lifted_keypoints_xyz"] = lifted_xyz
+    synthesized["_frame_idx"] = frame_idx
+    synthesized["_t_ms"] = t_ms
+    return synthesized
+
+
+def repair_short_track_gaps(frames, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
+    frame_index = {frame["frame_idx"]: frame for frame in frames}
+    track_frames = {}
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            track_id = detection.get("track_id")
+            if track_id is None:
+                continue
+            detection["_frame_idx"] = frame["frame_idx"]
+            detection["_t_ms"] = frame["t_ms"]
+            track_frames.setdefault(track_id, []).append((frame["frame_idx"], detection))
+
+    for track_id, observations in track_frames.items():
+        observations.sort(key=lambda item: item[0])
+        for (start_idx, start_det), (end_idx, end_det) in zip(observations, observations[1:]):
+            gap = end_idx - start_idx - 1
+            if gap <= 0 or gap > max_gap:
+                continue
+            if not start_det.get("active_player_candidate") or not end_det.get("active_player_candidate"):
+                continue
+            for missing_frame_idx in range(start_idx + 1, end_idx):
+                frame = frame_index.get(missing_frame_idx)
+                if frame is None:
+                    continue
+                existing_track_ids = {
+                    detection.get("track_id")
+                    for detection in frame.get("detections", [])
+                }
+                if track_id in existing_track_ids:
+                    continue
+                alpha = (missing_frame_idx - start_idx) / float(end_idx - start_idx)
+                synthesized = _interpolate_detection(
+                    start_det,
+                    end_det,
+                    missing_frame_idx,
+                    frame["t_ms"],
+                    alpha,
+                )
+                frame.setdefault("detections", []).append(synthesized)
+
+    for frame in frames:
+        frame["detections"].sort(
+            key=lambda detection: (
+                detection.get("track_id") is None,
+                detection.get("track_id") if detection.get("track_id") is not None else 1_000_000,
+                not detection.get("synthesized", False),
+            )
+        )
+        for detection in frame.get("detections", []):
+            detection.pop("_frame_idx", None)
+            detection.pop("_t_ms", None)
+    return frames
+
+
 def annotate_clip(video_path, output_path, model_name, device, conf_threshold, calibration_file):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -190,21 +408,30 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     cap.release()
 
     relative_path = str(video_path.relative_to(CLIPS_DIR))
+    video_meta = {
+        "fps": fps,
+        "frame_count": frame_count,
+        "width": width,
+        "height": height,
+    }
+    frames = annotate_active_players(frames, video_meta)
+    frames = repair_short_track_gaps(frames)
+    frames = annotate_active_players(frames, video_meta)
+
     artifact = {
         "schema_version": "1.0.0",
         "clip_id": clip_id,
         "video_path": relative_path,
-        "video": {
-            "fps": fps,
-            "frame_count": frame_count,
-            "width": width,
-            "height": height,
-        },
+        "video": video_meta,
         "model": {
             "name": model_name,
             "task": "pose_track",
             "device": device,
             "classes": ["person"],
+        },
+        "postprocess": {
+            "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
+            "short_gap_repair_max_gap": SHORT_GAP_REPAIR_MAX_GAP,
         },
         "calibration": {
             "enabled": calibration is not None,

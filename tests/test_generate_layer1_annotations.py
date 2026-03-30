@@ -20,7 +20,12 @@ def cvt_color_to_gray(image, _flag):
 cv2_stub.cvtColor = cvt_color_to_gray
 sys.modules.setdefault("cv2", cv2_stub)
 
-from tools.review.labeller.generate_layer1_annotations import estimate_uniform_bucket
+from tools.review.labeller.generate_layer1_annotations import (
+    annotate_active_players,
+    estimate_uniform_bucket,
+    repair_short_track_gaps,
+    score_active_player,
+)
 
 
 class UniformBucketTest(unittest.TestCase):
@@ -53,6 +58,138 @@ class UniformBucketTest(unittest.TestCase):
         )
         self.assertEqual(result["bucket"], "dark")
         self.assertLess(result["luma_mean"], 95.0)
+
+
+class ActivePlayerScoreTest(unittest.TestCase):
+    def test_score_active_player_accepts_central_persistent_detection(self):
+        score_info = score_active_player(
+            {
+                "confidence": 0.91,
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_xy": [1200.0, 700.0],
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=4,
+        )
+        self.assertTrue(score_info["candidate"])
+        self.assertGreater(score_info["score"], 0.55)
+        self.assertTrue(score_info["reasons"]["court_in_bounds"])
+
+    def test_score_active_player_rejects_tiny_edge_detection(self):
+        score_info = score_active_player(
+            {
+                "confidence": 0.28,
+                "bbox_xyxy": [2.0, 30.0, 18.0, 60.0],
+                "court_xy": [3100.0, 1700.0],
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=1,
+        )
+        self.assertFalse(score_info["candidate"])
+        self.assertLess(score_info["score"], 0.55)
+        self.assertFalse(score_info["reasons"]["court_in_bounds"])
+
+
+class TrackRepairTest(unittest.TestCase):
+    def test_repair_short_track_gaps_interpolates_missing_frame(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 7,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 7,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.8,
+                    "bbox_xyxy": [140.0, 90.0, 200.0, 270.0],
+                    "bbox_xywh": [170.0, 180.0, 60.0, 180.0],
+                    "court_xy": [1100.0, 650.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        repaired = repair_short_track_gaps(frames, max_gap=2)
+        inserted = repaired[1]["detections"]
+        self.assertEqual(len(inserted), 1)
+        self.assertTrue(inserted[0]["synthesized"])
+        self.assertEqual(inserted[0]["track_id"], 7)
+        self.assertEqual(inserted[0]["repair_source"]["kind"], "short_gap_interpolation")
+        self.assertAlmostEqual(inserted[0]["bbox_xywh"][0], 150.0)
+        self.assertAlmostEqual(inserted[0]["court_xy"][0], 1050.0)
+
+    def test_repair_short_track_gaps_skips_non_candidates(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 7,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "active_player_candidate": False,
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 7,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.8,
+                    "bbox_xyxy": [140.0, 90.0, 200.0, 270.0],
+                    "bbox_xywh": [170.0, 180.0, 60.0, 180.0],
+                    "active_player_candidate": True,
+                }],
+            },
+        ]
+        repaired = repair_short_track_gaps(frames, max_gap=2)
+        self.assertEqual(repaired[1]["detections"], [])
+
+
+class ActivePlayerAnnotationTest(unittest.TestCase):
+    def test_annotate_active_players_adds_score_fields(self):
+        frames = [{
+            "frame_idx": 0,
+            "t_ms": 0,
+            "detections": [{
+                "track_id": 3,
+                "confidence": 0.9,
+                "bbox_xyxy": [220.0, 100.0, 300.0, 340.0],
+                "court_xy": [1200.0, 800.0],
+            }],
+        }]
+        annotated = annotate_active_players(
+            frames,
+            {"width": 640, "height": 480, "fps": 30.0, "frame_count": 1},
+        )
+        detection = annotated[0]["detections"][0]
+        self.assertIn("active_player_score", detection)
+        self.assertIn("active_player_candidate", detection)
+        self.assertIn("active_player_reasons", detection)
 
 
 if __name__ == "__main__":

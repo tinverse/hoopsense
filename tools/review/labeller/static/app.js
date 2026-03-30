@@ -299,13 +299,18 @@ function drawDetectionOverlay(detection) {
         ? ` ${detection.uniform_bucket.toUpperCase()}`
         : '';
     const confLabel = `${Math.round((detection.confidence || 0) * 100)}%`;
+    const activeScore = detection.active_player_score !== undefined && detection.active_player_score !== null
+        ? ` A${Math.round(detection.active_player_score * 100)}`
+        : '';
+    const repairLabel = detection.synthesized ? ' SYN' : '';
+    const candidateColor = detection.active_player_candidate ? "#35f28b" : "#ff8f70";
 
     ctx.save();
-    ctx.strokeStyle = "#3ed8ff";
+    ctx.strokeStyle = detection.synthesized ? "#ffd166" : "#3ed8ff";
     ctx.lineWidth = 4;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    const label = `${trackLabel}${uniformLabel} ${confLabel}`;
+    const label = `${trackLabel}${uniformLabel} ${confLabel}${activeScore}${repairLabel}`;
     const labelWidth = Math.max(120, label.length * 10 + 20);
     const labelHeight = 26;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
@@ -313,10 +318,10 @@ function drawDetectionOverlay(detection) {
 
     ctx.fillStyle = "rgba(15, 39, 48, 0.92)";
     ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
-    ctx.strokeStyle = "#7dffff";
+    ctx.strokeStyle = candidateColor;
     ctx.lineWidth = 2;
     ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
-    ctx.fillStyle = "#cfffff";
+    ctx.fillStyle = detection.synthesized ? "#ffe3a3" : "#cfffff";
     ctx.font = "bold 16px monospace";
     ctx.fillText(label, labelX + 10, labelY + 17);
     ctx.restore();
@@ -340,15 +345,18 @@ function redrawOverlay() {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
         const firstDetection = frame.detections.find(d => d.court_xy);
+        const activeCount = frame.detections.filter(d => d.active_player_candidate).length;
+        const synthCount = frame.detections.filter(d => d.synthesized).length;
         const courtText = firstDetection
             ? ` First court point: (${firstDetection.court_xy[0].toFixed(1)}, ${firstDetection.court_xy[1].toFixed(1)}).`
             : '';
         explainerDescription.textContent =
             `Real Ultralytics detections and pose keypoints for frame ${frame.frame_idx}. ` +
-            `Blue boxes show tracked players; cyan skeletons show keypoints.` +
+            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, and yellow boxes are repaired track gaps. ` +
+            `Cyan skeletons show keypoints.` +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -378,7 +386,11 @@ function populateFeedbackTrackList() {
             : `det-${index}`;
         opt.value = trackId;
         const uniformLabel = detection.uniform_bucket ? ` // ${detection.uniform_bucket}` : '';
-        opt.textContent = `Track ${trackId}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%`;
+        const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
+            ? ` // active ${Math.round(detection.active_player_score * 100)}`
+            : '';
+        const synthLabel = detection.synthesized ? ' // repaired' : '';
+        opt.textContent = `Track ${trackId}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }

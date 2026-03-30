@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.53` add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - `L3.46` check in canonical MVP stats header and formula templates with provenance rules
 - `L3.51` define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
 - `L3.47` map each MVP stat to required event primitives and possession fields
@@ -106,6 +107,8 @@ The current highest-priority frontier is:
 - [x] Render real detection, track, and pose overlays in the labeller from a persisted annotation artifact
 - [x] Verify the Orin GPU container command used for representative Layer 1 artifact generation
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
+- [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
+- [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
@@ -129,6 +132,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [ ] Check in canonical MVP stats header and formula templates with provenance rules
 - [ ] Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
 - [ ] Map each MVP stat to required event primitives and possession fields
