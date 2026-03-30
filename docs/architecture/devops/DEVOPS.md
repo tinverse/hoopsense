@@ -24,6 +24,8 @@ What is implemented:
 - `guix.scm` for the general development shell
 - `guix_orin.scm` for the Orin-oriented shell
 - `scripts/setup_orin.sh` for the Guix plus JetPack bridge
+- `scripts/run_layer1_labeller.sh` for the GPU-capable Layer 1 review app
+- `scripts/generate_layer1_annotations.sh` for GPU-backed perception artifact generation
 - `Dockerfile` for cloud-oriented packaging
 - `tools/infra/cloud_train_wrapper.sh` and `vertex_job.yaml` for cloud training entrypoints
 
@@ -78,7 +80,16 @@ Constraint:
 - this path is reproducible only up to that vendor boundary
 - `guix_orin.scm` pins the shell to Python 3.10 so `scripts/setup_orin.sh` can create the validated `.venv_orin310`
 - that venv uses the Jetson `jp6/cu126` torch wheel and `nvidia-cudss-cu12`
+- the same venv now carries the Layer 1 review stack (`ultralytics`, `flask`, `lap`, `torchvision`) without replacing the Jetson torch build
+- Jetson system OpenCV is linked into the venv instead of installing a conflicting pip wheel
 - `scripts/run_orin_cuda_probe.sh` intentionally exposes only `libcudss` from the venv and uses JetPack system CUDA/cuDNN libs for the rest
+
+Layer 1 review path:
+
+```bash
+./scripts/run_layer1_labeller.sh
+./scripts/generate_layer1_annotations.sh data/raw_clips/youth/DSC_4951_sample_0.mp4
+```
 
 ### Mode C: Cloud Training
 
