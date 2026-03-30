@@ -118,10 +118,27 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         pose_model(dummy)
         return
-    H = np.eye(3)
-    if os.path.exists("data/calibration.json"):
+    # Load Calibration (Unified)
+    H_global = np.eye(3)
+    H_sequence = None
+    cal_path = "data/training/camera_calibration.json"
+    clip_id = os.path.basename(video_path).split('.')[0]
+    
+    if os.path.exists(cal_path):
+        with open(cal_path, 'r') as f:
+            try:
+                cals = json.load(f)
+                if clip_id in cals:
+                    cal = cals[clip_id]
+                    if "h_sequence" in cal:
+                        H_sequence = {int(k): np.array(v) for k, v in cal["h_sequence"].items()}
+                    elif "h_matrix" in cal:
+                        H_global = np.array(cal["h_matrix"])
+            except:
+                pass
+    elif os.path.exists("data/calibration.json"):
         with open("data/calibration.json", 'r') as f:
-            H = np.array(json.load(f)["h_matrix"])
+            H_global = np.array(json.load(f).get("h_matrix", np.eye(3)))
     brain = None
     brain_path = "data/models/action_brain.pt"
     if os.path.exists(brain_path):
@@ -142,6 +159,10 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
                 break
             frame_idx += 1
             t_ms = int(frame_idx/fps*1000)
+            
+            # Select Homography for current frame
+            H = H_sequence.get(frame_idx, H_global) if H_sequence else H_global
+            
             res = pose_model.track(frame, persist=True, classes=[0, 32],
                                    verbose=False)
             if res[0].boxes.id is not None:

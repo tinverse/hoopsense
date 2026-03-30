@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # 1b. Install a modern Rust toolchain for the repo's Cargo.lock format.
@@ -23,14 +25,17 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
 RUN python3 -m pip install --upgrade pip
 
 # 3. Install Python Dependencies
-# ultralytics requires torch/torchvision, which are pre-installed in the base image.
-# We install dependencies without upgrading torch to avoid breaking the L4T bindings.
+# Keep Jetson's native OpenCV stack and avoid pip OpenCV wheels, which conflict with L4T.
 RUN pip3 install --no-cache-dir \
+    numpy==1.24.4 \
+    lap \
     pyyaml \
-    ultralytics \
-    easyocr \
-    opencv-python-headless \
+    matplotlib==3.7.5 \
+    psutil \
+    polars \
+    ultralytics-thop \
     scipy
+RUN pip3 install --no-cache-dir --no-deps ultralytics
 
 # 4. Set Workspace
 WORKDIR /app

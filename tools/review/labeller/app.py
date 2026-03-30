@@ -11,12 +11,22 @@ FILE_PATH = Path(__file__).resolve()
 REPO_ROOT = FILE_PATH.parent.parent.parent.parent
 CLIPS_DIR = REPO_ROOT / "data" / "raw_clips"
 TRAINING_DIR = REPO_ROOT / "data" / "training"
+PERCEPTION_DIR = REPO_ROOT / "data" / "review_artifacts" / "layer1"
+PERCEPTION_FEEDBACK_FILE = TRAINING_DIR / "perception_feedback.jsonl"
 GT_FILE = TRAINING_DIR / "manual_gt.jsonl"
 CALIBRATION_FILE = TRAINING_DIR / "camera_calibration.json"
+VALID_FEEDBACK_ISSUES = {
+    "false_positive",
+    "false_negative",
+    "merge_error",
+    "track_error",
+    "pose_error",
+}
 
 # Ensure directories exist
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+PERCEPTION_DIR.mkdir(parents=True, exist_ok=True)
 
 # Landmark data (NCAA cm)
 LANDMARKS = {
@@ -31,6 +41,33 @@ LANDMARKS = {
     "corner_tr": [2865, 0, 0],
     "corner_br": [2865, 1524, 0]
 }
+
+def get_perception_artifact_path(clip_id):
+    return PERCEPTION_DIR / f"{clip_id}.perception.json"
+
+
+def load_perception_artifact(clip_id):
+    artifact_path = get_perception_artifact_path(clip_id)
+    if not artifact_path.exists():
+        return None
+    with open(artifact_path, "r") as f:
+        return json.load(f)
+
+
+def build_disabled_perception_payload(clip_id, reason):
+    return {
+        "enabled": False,
+        "clip_id": clip_id,
+        "frames": [],
+        "status": reason,
+    }
+
+
+def find_artifact_frame(artifact, frame_idx):
+    for frame in artifact.get("frames", []):
+        if frame.get("frame_idx") == frame_idx:
+            return frame
+    return None
 
 
 @app.route('/')
@@ -57,6 +94,63 @@ def list_clips():
 @app.route('/api/landmarks')
 def get_landmarks():
     return jsonify(LANDMARKS)
+
+
+@app.route('/api/perception/<clip_id>')
+def get_perception_overlay(clip_id):
+    artifact = load_perception_artifact(clip_id)
+    if not artifact:
+        return jsonify(build_disabled_perception_payload(clip_id, "missing"))
+    if artifact.get("clip_id") != clip_id:
+        return jsonify(build_disabled_perception_payload(clip_id, "clip_id_mismatch")), 409
+    artifact["enabled"] = True
+    artifact["status"] = "ready"
+    return jsonify(artifact)
+
+
+@app.route('/api/perception_feedback', methods=['POST'])
+def save_perception_feedback():
+    data = request.json or {}
+    required = ["clip_id", "frame_idx", "t_ms", "issue_type", "timestamp"]
+    missing = [field for field in required if field not in data]
+    if missing:
+        return jsonify({
+            "status": "error",
+            "missing": missing
+        }), 400
+    if data["issue_type"] not in VALID_FEEDBACK_ISSUES:
+        return jsonify({
+            "status": "error",
+            "invalid_issue_type": data["issue_type"],
+        }), 400
+    artifact = load_perception_artifact(data["clip_id"])
+    if not artifact:
+        return jsonify({
+            "status": "error",
+            "reason": "artifact_missing",
+        }), 404
+    frame = find_artifact_frame(artifact, int(data["frame_idx"]))
+    if frame is None:
+        return jsonify({
+            "status": "error",
+            "reason": "frame_missing",
+        }), 400
+    track_id = data.get("track_id")
+    if track_id not in (None, ""):
+        valid_track_ids = {
+            str(detection.get("track_id"))
+            for detection in frame.get("detections", [])
+            if detection.get("track_id") is not None
+        }
+        if str(track_id) not in valid_track_ids:
+            return jsonify({
+                "status": "error",
+                "reason": "track_id_missing",
+            }), 400
+
+    with open(PERCEPTION_FEEDBACK_FILE, 'a') as f:
+        f.write(json.dumps(data) + "\n")
+    return jsonify({"status": "success"})
 
 
 @app.route('/api/video/<path:filename>')
@@ -112,36 +206,82 @@ def track_landmarks(video_path, start_frame_idx, initial_points):
 
 @app.route('/api/calibrate', methods=['POST'])
 def solve_panning_calibration():
-    """Tracks points across clip and solves H per frame."""
+    """
+    Temporal Aggregation Calibration:
+    1. Collects points from different timestamps.
+    2. Uses Optical Flow to project all points to frame_idx=0.
+    3. Solves for a global H based on the aggregated points.
+    4. Projects the global H back to all frames using tracked motion.
+    """
     data = request.json
     clip_id = data["id"]
     clip_path = CLIPS_DIR / data["path"]
-    start_time_ms = data["t_ms"]
     points_data = data["points"]
+    
     cap = cv2.VideoCapture(str(clip_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    start_frame_idx = int((start_time_ms / 1000.0) * fps)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
-    initial_img_pts = [[p["x"], p["y"]] for p in points_data]
-    world_pts = np.array([LANDMARKS[p["landmark_id"]][:2]
-                          for p in points_data], dtype=np.float32)
-    print(f"[INFO] Tracking {clip_id} from frame {start_frame_idx}...")
-    tracked_pts = track_landmarks(clip_path, start_frame_idx, initial_img_pts)
+
+    # Group points by frame_idx
+    frame_to_pts = {}
+    for p in points_data:
+        f_idx = int((p["t_ms"] / 1000.0) * fps)
+        if f_idx not in frame_to_pts:
+            frame_to_pts[f_idx] = []
+        frame_to_pts[f_idx].append(p)
+
+    # We need to project all points to a common reference (e.g., Frame 0)
+    # to solve for a "canonical" Homography that we then adjust per frame.
+    # For now, let's track all points across the whole clip.
+    
+    all_tracked = {} # landmark_id -> { frame_idx: (x, y) }
+    for f_idx, pts in frame_to_pts.items():
+        initial_pts = [[p["x"], p["y"]] for p in pts]
+        tracked = track_landmarks(clip_path, f_idx, initial_pts)
+        for i, p in enumerate(pts):
+            lid = p["landmark_id"]
+            if lid not in all_tracked:
+                all_tracked[lid] = {}
+            for res_f_idx, res_pts in tracked.items():
+                all_tracked[lid][res_f_idx] = res_pts[i]
+
+    # Solve H for every frame where we have at least 4 landmarks tracked
     h_matrices = {}
-    for f_idx, img_pts in tracked_pts.items():
-        H, _ = cv2.findHomography(np.array(img_pts, dtype=np.float32),
-                                  world_pts)
-        if H is not None:
-            h_matrices[str(f_idx)] = H.tolist()
+    for f_idx in range(total_frames):
+        img_pts = []
+        world_pts = []
+        for lid, frames in all_tracked.items():
+            if f_idx in frames:
+                img_pts.append(frames[f_idx])
+                world_pts.append(LANDMARKS[lid][:2])
+        
+        if len(img_pts) >= 4:
+            H, _ = cv2.findHomography(np.array(img_pts, dtype=np.float32),
+                                      np.array(world_pts, dtype=np.float32))
+            if H is not None:
+                h_matrices[str(f_idx)] = H.tolist()
+
     calibrations = {}
     if CALIBRATION_FILE.exists():
         with open(CALIBRATION_FILE, 'r') as f:
             calibrations = json.load(f)
-    calibrations[clip_id] = {"type": "panning", "h_sequence": h_matrices}
+    
+    calibrations[clip_id] = {
+        "type": "temporal_aggregation",
+        "h_sequence": h_matrices,
+        "landmark_count": len(all_tracked)
+    }
+    
     with open(CALIBRATION_FILE, 'w') as f:
         json.dump(calibrations, f, indent=2)
-    return jsonify({"status": "success", "mode": "panning",
-                    "frames_tracked": len(h_matrices)})
+
+    return jsonify({
+        "status": "success",
+        "mode": "temporal_aggregation",
+        "landmarks": list(all_tracked.keys()),
+        "frames_calibrated": len(h_matrices)
+    })
 
 
 if __name__ == '__main__':

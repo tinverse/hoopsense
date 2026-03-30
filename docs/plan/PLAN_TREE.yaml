@@ -12,7 +12,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-03-12"
+  last_updated: "2026-03-29"
 
 levels:
   L0:
@@ -427,11 +427,46 @@ levels:
       title: Decide the first migration target, if any, based on performance, determinism, and implementation risk
       owner: A0
       status: pending
+    - id: L3.38
+      parent: L2.32
+      title: Materialize a real Layer 1 annotation artifact for one representative 5-second clip
+      owner: A0
+      status: completed
+    - id: L3.39
+      parent: L2.32
+      title: Render real detection, track, and pose overlays in the labeller from the Layer 1 annotation artifact
+      owner: A0
+      status: completed
+    - id: L3.40
+      parent: L2.16
+      title: Define and verify the Orin GPU container command used to generate representative Layer 1 annotation artifacts
+      owner: A0
+      status: completed
+    - id: L3.41
+      parent: L2.3
+      title: Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
+      owner: A0
+      status: completed
+    - id: L3.42
+      parent: L2.32
+      title: Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
+      owner: A0
+      status: completed
+    - id: L3.43
+      parent: L2.21
+      title: Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
+      owner: A0
+      status: in_progress
+    - id: L3.44
+      parent: L2.16
+      title: Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
+      owner: A0
+      status: completed
 
 priorities:
   current_frontier:
-    - L3.34
-    - L3.35
+    - L3.43
+    - L3.44
     - L3.36
     - L3.37
     - L3.17

@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.43` publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
 - `L3.37` decide the first migration target, if any, based on performance, determinism, and implementation risk
 - `L3.24` make Docker docs explicitly cloud-oriented and not the native Orin story
 - `L3.26` publish separate runbooks for cloud/x86 training and Jetson/ARM64 runtime validation
@@ -93,6 +94,12 @@ The current highest-priority frontier is:
 - [x] Require plan-tree updates before substantial architecture or implementation changes
 - [x] Define measurable readiness checks for ingestion, tracking, pose, geometry, and lifting
 - [x] Add a perception-quality report artifact for representative clips
+- [x] Materialize one real Layer 1 annotation artifact from GPU-backed Ultralytics inference on a representative 5-second clip
+- [x] Render real detection, track, and pose overlays in the labeller from a persisted annotation artifact
+- [x] Verify the Orin GPU container command used for representative Layer 1 artifact generation
+- [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
+- [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
+- [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
@@ -106,7 +113,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
-- [ ] Verify actual CUDA acceleration in the Orin container (Refactored probe ready)
+- [ ] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
 - [ ] Decide the first migration target based on performance and risk (TrackManager identified)
 - [ ] Separate ARM64/Jetson runtime guidance from cloud/x86 Docker guidance
 - [ ] Add first slice reports for action class, camera/view, and pose quality
