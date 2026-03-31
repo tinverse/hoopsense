@@ -14,6 +14,7 @@ const feedbackTrackList = document.getElementById('feedback-track-list');
 const feedbackNote = document.getElementById('feedback-note');
 const feedbackStatus = document.getElementById('feedback-status');
 const playPauseButton = document.getElementById('btn-play-pause');
+const frameReadout = document.getElementById('frame-readout');
 
 let clips = [];
 let activeClip = null;
@@ -120,7 +121,18 @@ function clampVideoTime(seconds) {
 function syncPerceptionUI() {
     redrawOverlay();
     populateFeedbackTrackList();
+    updateFrameReadout();
     updateTransportButton();
+}
+
+function updateFrameReadout() {
+    if (!frameReadout) return;
+    const frame = getCurrentPerceptionFrame();
+    if (frame) {
+        frameReadout.textContent = `Frame: ${frame.frame_idx} // Time: ${(frame.t_ms / 1000).toFixed(2)}s`;
+        return;
+    }
+    frameReadout.textContent = `Frame: - // Time: ${player.currentTime.toFixed(2)}s`;
 }
 
 function schedulePlaybackOverlaySync() {
