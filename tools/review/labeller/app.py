@@ -25,12 +25,36 @@ VALID_FEEDBACK_ISSUES = {
 }
 
 
-def _landmark_spec(label, family, kind, xyz):
+def _line_primitive(label, family, endpoints_xy):
     return {
         "label": label,
         "family": family,
-        "kind": kind,
-        "court_xyz": [float(xyz[0]), float(xyz[1]), float(xyz[2])],
+        "kind": "line",
+        "world_points": [
+            [float(endpoints_xy[0][0]), float(endpoints_xy[0][1])],
+            [float(endpoints_xy[1][0]), float(endpoints_xy[1][1])],
+        ],
+    }
+
+
+def _arc_primitive(label, family, center_xy, radius, start_deg, end_deg):
+    return {
+        "label": label,
+        "family": family,
+        "kind": "arc",
+        "center_xy": [float(center_xy[0]), float(center_xy[1])],
+        "radius": float(radius),
+        "start_deg": float(start_deg),
+        "end_deg": float(end_deg),
+    }
+
+
+def _point_primitive(label, family, xy):
+    return {
+        "label": label,
+        "family": family,
+        "kind": "point",
+        "world_xy": [float(xy[0]), float(xy[1])],
     }
 
 # Ensure directories exist
@@ -38,86 +62,98 @@ CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_DIR.mkdir(parents=True, exist_ok=True)
 PERCEPTION_DIR.mkdir(parents=True, exist_ok=True)
 
-# Landmark data (NCAA cm). These are intentionally easier-to-click partial-court
-# correspondences so calibration does not depend on visible corners or center line.
-LANDMARKS = {
-    "rim_l": _landmark_spec("Left Rim", "rim", "point", [160, 762, 305]),
-    "rim_r": _landmark_spec("Right Rim", "rim", "point", [2705, 762, 305]),
-    "sideline_top_left_third": _landmark_spec("Far Sideline Left Third", "sideline", "line_point", [720, 0, 0]),
-    "sideline_top_mid": _landmark_spec("Far Sideline Midcourt", "sideline", "line_point", [1432, 0, 0]),
-    "sideline_top_right_third": _landmark_spec("Far Sideline Right Third", "sideline", "line_point", [2145, 0, 0]),
-    "sideline_bottom_left_third": _landmark_spec("Near Sideline Left Third", "sideline", "line_point", [720, 1524, 0]),
-    "sideline_bottom_mid": _landmark_spec("Near Sideline Midcourt", "sideline", "line_point", [1432, 1524, 0]),
-    "sideline_bottom_right_third": _landmark_spec("Near Sideline Right Third", "sideline", "line_point", [2145, 1524, 0]),
-    "baseline_left_top": _landmark_spec("Left Baseline Upper", "baseline", "line_point", [0, 280, 0]),
-    "baseline_left_mid": _landmark_spec("Left Baseline Mid", "baseline", "line_point", [0, 762, 0]),
-    "baseline_left_bottom": _landmark_spec("Left Baseline Lower", "baseline", "line_point", [0, 1244, 0]),
-    "baseline_right_top": _landmark_spec("Right Baseline Upper", "baseline", "line_point", [2865, 280, 0]),
-    "baseline_right_mid": _landmark_spec("Right Baseline Mid", "baseline", "line_point", [2865, 762, 0]),
-    "baseline_right_bottom": _landmark_spec("Right Baseline Lower", "baseline", "line_point", [2865, 1244, 0]),
-    "lane_left_top": _landmark_spec("Left Lane Upper Corner", "lane", "paint_corner", [580, 517, 0]),
-    "lane_left_bottom": _landmark_spec("Left Lane Lower Corner", "lane", "paint_corner", [580, 1007, 0]),
-    "lane_right_top": _landmark_spec("Right Lane Upper Corner", "lane", "paint_corner", [2285, 517, 0]),
-    "lane_right_bottom": _landmark_spec("Right Lane Lower Corner", "lane", "paint_corner", [2285, 1007, 0]),
-    "arc_left_upper": _landmark_spec("Left 3PT Arc Upper", "three_point_arc", "arc_point", [735.0, 409.0, 0]),
-    "arc_left_center": _landmark_spec("Left 3PT Arc Center", "three_point_arc", "arc_point", [835.0, 762.0, 0]),
-    "arc_left_lower": _landmark_spec("Left 3PT Arc Lower", "three_point_arc", "arc_point", [735.0, 1115.0, 0]),
-    "arc_right_upper": _landmark_spec("Right 3PT Arc Upper", "three_point_arc", "arc_point", [2130.0, 409.0, 0]),
-    "arc_right_center": _landmark_spec("Right 3PT Arc Center", "three_point_arc", "arc_point", [2030.0, 762.0, 0]),
-    "arc_right_lower": _landmark_spec("Right 3PT Arc Lower", "three_point_arc", "arc_point", [2130.0, 1115.0, 0]),
-    "corner_tl": _landmark_spec("Top-Left Corner", "corner", "point", [0, 0, 0]),
-    "corner_bl": _landmark_spec("Bottom-Left Corner", "corner", "point", [0, 1524, 0]),
-    "corner_tr": _landmark_spec("Top-Right Corner", "corner", "point", [2865, 0, 0]),
-    "corner_br": _landmark_spec("Bottom-Right Corner", "corner", "point", [2865, 1524, 0]),
+# Calibration primitives (NCAA cm). Reviewers can click arbitrary samples
+# along visible lines and arcs instead of needing precise named court points.
+CALIBRATION_PRIMITIVES = {
+    "far_sideline": _line_primitive("Far Sideline", "sideline", [[0, 0], [2865, 0]]),
+    "near_sideline": _line_primitive("Near Sideline", "sideline", [[0, 1524], [2865, 1524]]),
+    "left_baseline": _line_primitive("Left Baseline", "baseline", [[0, 0], [0, 1524]]),
+    "right_baseline": _line_primitive("Right Baseline", "baseline", [[2865, 0], [2865, 1524]]),
+    "left_lane_line": _line_primitive("Left Lane Edge", "lane", [[580, 517], [580, 1007]]),
+    "right_lane_line": _line_primitive("Right Lane Edge", "lane", [[2285, 517], [2285, 1007]]),
+    "left_free_throw_line": _line_primitive("Left Free Throw Line", "lane", [[580, 517], [580, 1007]]),
+    "right_free_throw_line": _line_primitive("Right Free Throw Line", "lane", [[2285, 517], [2285, 1007]]),
+    "left_three_point_arc": _arc_primitive("Left 3PT Arc", "three_point_arc", [160, 762], 675, -72, 72),
+    "right_three_point_arc": _arc_primitive("Right 3PT Arc", "three_point_arc", [2705, 762], 675, 108, 252),
+    "left_rim": _point_primitive("Left Rim", "rim", [160, 762]),
+    "right_rim": _point_primitive("Right Rim", "rim", [2705, 762]),
 }
 
 
-def get_landmark_world_xy(landmark_id):
-    spec = LANDMARKS.get(landmark_id)
+def get_point_identifier(point):
+    return point.get("primitive_id") or point.get("landmark_id")
+
+
+def get_primitive_spec(point_or_id):
+    primitive_id = point_or_id if isinstance(point_or_id, str) else get_point_identifier(point_or_id)
+    if primitive_id is None:
+        return None
+    return CALIBRATION_PRIMITIVES.get(primitive_id)
+
+
+def get_world_point_for_sample(primitive_id, alpha=0.5):
+    spec = get_primitive_spec(primitive_id)
     if spec is None:
         return None
-    return spec["court_xyz"][:2]
+    alpha = max(0.0, min(1.0, float(alpha)))
+    if spec["kind"] == "point":
+        return spec["world_xy"]
+    if spec["kind"] == "line":
+        start, end = spec["world_points"]
+        return [
+            (1.0 - alpha) * start[0] + alpha * end[0],
+            (1.0 - alpha) * start[1] + alpha * end[1],
+        ]
+    if spec["kind"] == "arc":
+        theta = np.deg2rad((1.0 - alpha) * spec["start_deg"] + alpha * spec["end_deg"])
+        center_x, center_y = spec["center_xy"]
+        radius = spec["radius"]
+        return [
+            center_x + radius * np.cos(theta),
+            center_y + radius * np.sin(theta),
+        ]
+    return None
 
 
 def summarize_calibration_points(points_data):
     families = {}
-    unique_landmark_ids = set()
+    unique_primitive_ids = set()
     for point in points_data:
-        landmark_id = point.get("landmark_id")
-        spec = LANDMARKS.get(landmark_id)
+        primitive_id = get_point_identifier(point)
+        spec = get_primitive_spec(primitive_id)
         if spec is None:
             continue
-        unique_landmark_ids.add(landmark_id)
+        unique_primitive_ids.add(primitive_id)
         family = spec["family"]
         families[family] = families.get(family, 0) + 1
     return {
         "point_count": len(points_data),
-        "unique_landmark_count": len(unique_landmark_ids),
+        "unique_primitive_count": len(unique_primitive_ids),
         "family_counts": families,
     }
 
 
 def validate_calibration_points(points_data):
     unknown = []
-    unique_landmark_ids = set()
+    unique_primitive_ids = set()
     families = set()
     for point in points_data:
-        landmark_id = point.get("landmark_id")
-        spec = LANDMARKS.get(landmark_id)
+        primitive_id = get_point_identifier(point)
+        spec = get_primitive_spec(primitive_id)
         if spec is None:
-            unknown.append(landmark_id)
+            unknown.append(primitive_id)
             continue
-        unique_landmark_ids.add(landmark_id)
+        unique_primitive_ids.add(primitive_id)
         families.add(spec["family"])
 
     if unknown:
-        return {"ok": False, "reason": "unknown_landmarks", "unknown_landmarks": sorted(set(unknown))}
+        return {"ok": False, "reason": "unknown_primitives", "unknown_primitives": sorted(set(unknown))}
     if len(points_data) < 4:
         return {"ok": False, "reason": "too_few_points", "required_points": 4}
-    if len(unique_landmark_ids) < 4:
-        return {"ok": False, "reason": "too_few_unique_landmarks", "required_landmarks": 4}
+    if len(unique_primitive_ids) < 2:
+        return {"ok": False, "reason": "too_few_unique_primitives", "required_primitives": 2}
     if len(families) < 2:
-        return {"ok": False, "reason": "too_few_landmark_families", "required_families": 2}
+        return {"ok": False, "reason": "too_few_primitive_families", "required_families": 2}
     return {"ok": True}
 
 def get_perception_artifact_path(clip_id):
@@ -173,7 +209,7 @@ def list_clips():
 
 @app.route('/api/landmarks')
 def get_landmarks():
-    return jsonify(LANDMARKS)
+    return jsonify(CALIBRATION_PRIMITIVES)
 
 
 @app.route('/api/perception/<clip_id>')
@@ -284,6 +320,57 @@ def track_landmarks(video_path, start_frame_idx, initial_points):
     return track_results
 
 
+def sort_points_for_primitive(sample_points, primitive_kind):
+    if primitive_kind == "point":
+        return sample_points
+    if primitive_kind == "line":
+        xs = [point["image_xy"][0] for point in sample_points]
+        ys = [point["image_xy"][1] for point in sample_points]
+        sort_idx = 0 if (max(xs) - min(xs)) >= (max(ys) - min(ys)) else 1
+        return sorted(sample_points, key=lambda point: point["image_xy"][sort_idx])
+    return sorted(sample_points, key=lambda point: point.get("sample_order", 0))
+
+
+def build_frame_correspondences(tracked_samples, frame_idx):
+    grouped = {}
+    for tracked_sample in tracked_samples.values():
+        frames = tracked_sample["frames"]
+        if frame_idx not in frames:
+            continue
+        primitive_id = tracked_sample["primitive_id"]
+        grouped.setdefault(primitive_id, []).append({
+            "image_xy": frames[frame_idx],
+            "sample_order": tracked_sample.get("sample_order", 0),
+        })
+
+    image_points = []
+    world_points = []
+    families = set()
+
+    for primitive_id, sample_points in grouped.items():
+        spec = get_primitive_spec(primitive_id)
+        if spec is None:
+            continue
+        ordered_points = sort_points_for_primitive(sample_points, spec["kind"])
+        if spec["kind"] == "point":
+            if not ordered_points:
+                continue
+            image_points.append(ordered_points[0]["image_xy"])
+            world_points.append(get_world_point_for_sample(primitive_id, 0.5))
+            families.add(spec["family"])
+            continue
+        if len(ordered_points) < 2:
+            continue
+        denom = max(len(ordered_points) - 1, 1)
+        for index, sample_point in enumerate(ordered_points):
+            alpha = index / denom
+            image_points.append(sample_point["image_xy"])
+            world_points.append(get_world_point_for_sample(primitive_id, alpha))
+            families.add(spec["family"])
+
+    return image_points, world_points, families
+
+
 @app.route('/api/calibrate', methods=['POST'])
 def solve_panning_calibration():
     """
@@ -321,31 +408,26 @@ def solve_panning_calibration():
     # to solve for a "canonical" Homography that we then adjust per frame.
     # For now, let's track all points across the whole clip.
     
-    all_tracked = {} # sample_key -> { frame_idx: (x, y), landmark_id: str }
+    all_tracked = {} # sample_key -> { frame_idx: (x, y), primitive_id: str, sample_order: int }
     for f_idx, pts in frame_to_pts.items():
         initial_pts = [[p["x"], p["y"]] for p in pts]
         tracked = track_landmarks(clip_path, f_idx, initial_pts)
         for i, p in enumerate(pts):
-            sample_key = p.get("point_key") or f'{p["landmark_id"]}@{f_idx}:{i}'
+            primitive_id = get_point_identifier(p)
+            sample_key = p.get("point_key") or f'{primitive_id}@{f_idx}:{i}'
             if sample_key not in all_tracked:
-                all_tracked[sample_key] = {"landmark_id": p["landmark_id"], "frames": {}}
+                all_tracked[sample_key] = {
+                    "primitive_id": primitive_id,
+                    "sample_order": int(p.get("sample_order", i)),
+                    "frames": {},
+                }
             for res_f_idx, res_pts in tracked.items():
                 all_tracked[sample_key]["frames"][res_f_idx] = res_pts[i]
 
     # Solve H for every frame where we have at least 4 landmarks tracked
     h_matrices = {}
     for f_idx in range(total_frames):
-        img_pts = []
-        world_pts = []
-        frame_families = set()
-        for tracked_sample in all_tracked.values():
-            landmark_id = tracked_sample["landmark_id"]
-            frames = tracked_sample["frames"]
-            if f_idx in frames:
-                img_pts.append(frames[f_idx])
-                world_pts.append(get_landmark_world_xy(landmark_id))
-                frame_families.add(LANDMARKS[landmark_id]["family"])
-
+        img_pts, world_pts, frame_families = build_frame_correspondences(all_tracked, f_idx)
         if len(img_pts) >= 4 and len(frame_families) >= 2:
             H, _ = cv2.findHomography(np.array(img_pts, dtype=np.float32),
                                       np.array(world_pts, dtype=np.float32))
@@ -360,12 +442,12 @@ def solve_panning_calibration():
     point_summary = summarize_calibration_points(points_data)
     calibrations[clip_id] = {
         "type": "temporal_aggregation_partial_court",
-        "solver": "point_correspondence_partial_court_v1",
+        "solver": "primitive_sample_correspondence_v1",
         "h_sequence": h_matrices,
-        "landmark_count": len({sample["landmark_id"] for sample in all_tracked.values()}),
+        "primitive_count": len({sample["primitive_id"] for sample in all_tracked.values()}),
         "point_sample_count": len(all_tracked),
-        "landmark_ids": sorted({sample["landmark_id"] for sample in all_tracked.values()}),
-        "landmark_families": sorted(point_summary["family_counts"]),
+        "primitive_ids": sorted({sample["primitive_id"] for sample in all_tracked.values()}),
+        "primitive_families": sorted(point_summary["family_counts"]),
         "point_summary": point_summary,
     }
     
@@ -375,8 +457,8 @@ def solve_panning_calibration():
     return jsonify({
         "status": "success",
         "mode": "temporal_aggregation_partial_court",
-        "landmarks": sorted({sample["landmark_id"] for sample in all_tracked.values()}),
-        "landmark_families": sorted(point_summary["family_counts"]),
+        "primitives": sorted({sample["primitive_id"] for sample in all_tracked.values()}),
+        "primitive_families": sorted(point_summary["family_counts"]),
         "frames_calibrated": len(h_matrices),
         "point_summary": point_summary,
     })

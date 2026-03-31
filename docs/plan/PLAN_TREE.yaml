@@ -518,6 +518,11 @@ levels:
       title: Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
       owner: A0
       status: completed
+    - id: L3.56
+      parent: L2.2
+      title: Replace named-point calibration clicks with primitive-based line and arc sampling in the labeller
+      owner: A0
+      status: completed
 
 priorities:
   current_frontier:
@@ -556,6 +561,7 @@ priorities:
     - Require event and possession coverage to be justified against the sellable scorebook, not against generic basketball labels.
     - Reuse the declarative rules-engine idea from the sibling project only as architecture guidance, not as shared implementation.
     - Make calibration workable on real youth-gym footage where corners, center line, and near sideline visibility are often missing.
+    - Prefer calibration primitives that match how reviewers actually see the court: arbitrary samples along visible lines and arcs, not precise named court points.
     - Make review feedback robust enough that multi-frame reviewer observations are not lost when they do not map cleanly to a single error button.
     - Improve player-track quality at the Layer 1 artifact stage before expanding downstream possession and stats logic.
     - Align task tracking with the actual architecture before more feature work lands.

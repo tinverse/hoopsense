@@ -111,6 +111,7 @@ The current highest-priority frontier is:
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
 - [x] Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
+- [x] Replace named-point calibration clicks with primitive-based line and arc sampling in the labeller
 - [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt

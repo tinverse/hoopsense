@@ -141,7 +141,6 @@ function populateLandmarkList() {
         lane: 'Lane / Paint',
         three_point_arc: '3-Point Arc',
         rim: 'Rims',
-        corner: 'Corners'
     };
     const grouped = {};
     Object.entries(landmarkSpecs).forEach(([landmarkId, spec]) => {
@@ -164,9 +163,9 @@ function populateLandmarkList() {
 }
 
 function updateCalibrationStats() {
-    const uniqueLandmarks = new Set(calibrationPoints.map(p => p.landmark_id));
-    const uniqueFamilies = new Set(calibrationPoints.map(p => p.landmark_family).filter(Boolean));
-    calStats.textContent = `Points: ${calibrationPoints.length} // landmarks: ${uniqueLandmarks.size} // families: ${uniqueFamilies.size}`;
+    const uniquePrimitives = new Set(calibrationPoints.map(p => p.primitive_id));
+    const uniqueFamilies = new Set(calibrationPoints.map(p => p.primitive_family).filter(Boolean));
+    calStats.textContent = `Points: ${calibrationPoints.length} // primitives: ${uniquePrimitives.size} // families: ${uniqueFamilies.size}`;
 }
 
 // 3. Labelling Actions
@@ -254,21 +253,22 @@ player.addEventListener('mousedown', (e) => {
     const x = clickX * box.ratio;
     const y = clickY * box.ratio;
     
-    const landmark_id = landmarkList.value;
-    const landmarkSpec = landmarkSpecs[landmark_id] || null;
+    const primitive_id = landmarkList.value;
+    const primitiveSpec = landmarkSpecs[primitive_id] || null;
     const t_ms = Math.floor(player.currentTime * 1000);
 
-    if (clickX >= 0 && clickX <= box.width && clickY >= 0 && clickY <= box.height && landmark_id) {
+    if (clickX >= 0 && clickX <= box.width && clickY >= 0 && clickY <= box.height && primitive_id) {
         calibrationPoints.push({
-            point_key: `${landmark_id}_${t_ms}_${calibrationPoints.length}`,
+            point_key: `${primitive_id}_${t_ms}_${calibrationPoints.length}`,
+            sample_order: calibrationPoints.length,
             x,
             y,
-            landmark_id,
-            landmark_family: landmarkSpec ? landmarkSpec.family : null,
-            landmark_kind: landmarkSpec ? landmarkSpec.kind : null,
+            primitive_id,
+            primitive_family: primitiveSpec ? primitiveSpec.family : null,
+            primitive_kind: primitiveSpec ? primitiveSpec.kind : null,
             t_ms
         });
-        drawPoint(x, y, landmarkSpec ? landmarkSpec.label : landmark_id);
+        drawPoint(x, y, primitiveSpec ? primitiveSpec.label : primitive_id);
         updateCalibrationStats();
     }
 });
@@ -389,8 +389,8 @@ function redrawOverlay() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     calibrationPoints.forEach(p => {
         if (Math.abs(p.t_ms - player.currentTime * 1000) < 100) {
-            const spec = landmarkSpecs[p.landmark_id];
-            drawPoint(p.x, p.y, spec ? spec.label : p.landmark_id);
+            const spec = landmarkSpecs[p.primitive_id];
+            drawPoint(p.x, p.y, spec ? spec.label : p.primitive_id);
         }
     });
 
@@ -570,7 +570,7 @@ function finishCalibration() {
     })
       .then(data => {
           console.log("Panning Calibration Complete. Frames:", data.frames_calibrated);
-          const families = (data.landmark_families || []).join(', ') || 'unknown';
+          const families = (data.primitive_families || []).join(', ') || 'unknown';
           alert(`Calibration saved. Frames: ${data.frames_calibrated}. Families: ${families}.`);
       })
       .catch((error) => {

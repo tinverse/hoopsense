@@ -45,14 +45,14 @@ class LabellerOverlayTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual([clip["id"] for clip in payload], ["with_overlay"])
 
-    def test_landmarks_payload_exposes_partial_court_families(self):
+    def test_calibration_primitives_payload_exposes_line_and_arc_families(self):
         module = load_labeller_module()
         client = module.app.test_client()
         response = client.get("/api/landmarks")
         payload = response.get_json()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["baseline_left_mid"]["family"], "baseline")
-        self.assertEqual(payload["arc_left_center"]["kind"], "arc_point")
+        self.assertEqual(payload["left_baseline"]["family"], "baseline")
+        self.assertEqual(payload["left_three_point_arc"]["kind"], "arc")
 
     def test_missing_overlay_returns_disabled_payload(self):
         module = load_labeller_module()
@@ -227,7 +227,7 @@ class LabellerOverlayTest(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.get_json()["reason"], "track_id_missing")
 
-    def test_partial_court_calibration_is_saved_without_corners(self):
+    def test_partial_court_primitive_calibration_is_saved_without_corners(self):
         module = load_labeller_module()
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -262,21 +262,23 @@ class LabellerOverlayTest(unittest.TestCase):
                     "id": "demo_clip",
                     "path": "youth/demo_clip.mp4",
                     "points": [
-                        {"point_key": "a", "landmark_id": "sideline_top_left_third", "x": 10, "y": 20, "t_ms": 0},
-                        {"point_key": "b", "landmark_id": "sideline_top_right_third", "x": 20, "y": 20, "t_ms": 0},
-                        {"point_key": "c", "landmark_id": "baseline_left_mid", "x": 10, "y": 40, "t_ms": 0},
-                        {"point_key": "d", "landmark_id": "arc_left_center", "x": 40, "y": 30, "t_ms": 0},
+                        {"point_key": "a", "primitive_id": "far_sideline", "x": 10, "y": 20, "t_ms": 0, "sample_order": 0},
+                        {"point_key": "b", "primitive_id": "far_sideline", "x": 20, "y": 20, "t_ms": 0, "sample_order": 1},
+                        {"point_key": "c", "primitive_id": "left_baseline", "x": 10, "y": 40, "t_ms": 0, "sample_order": 2},
+                        {"point_key": "d", "primitive_id": "left_three_point_arc", "x": 40, "y": 30, "t_ms": 0, "sample_order": 3},
+                        {"point_key": "e", "primitive_id": "left_three_point_arc", "x": 42, "y": 32, "t_ms": 0, "sample_order": 4},
                     ],
                 },
             )
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
             self.assertEqual(payload["status"], "success")
-            self.assertIn("sideline", payload["landmark_families"])
-            self.assertIn("baseline", payload["landmark_families"])
+            self.assertIn("sideline", payload["primitive_families"])
+            self.assertIn("baseline", payload["primitive_families"])
             saved = json.loads(module.CALIBRATION_FILE.read_text())
             self.assertEqual(saved["demo_clip"]["type"], "temporal_aggregation_partial_court")
-            self.assertIn("three_point_arc", saved["demo_clip"]["landmark_families"])
+            self.assertEqual(saved["demo_clip"]["solver"], "primitive_sample_correspondence_v1")
+            self.assertIn("three_point_arc", saved["demo_clip"]["primitive_families"])
 
 
 if __name__ == "__main__":

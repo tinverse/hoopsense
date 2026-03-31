@@ -39,7 +39,7 @@
         <div id="video-container">
             <video id="player" preload="auto"></video>
             <canvas id="overlay"></canvas>
-            <div id="calibration-hint" class="calibration-msg">CALIBRATION MODE: corners optional; click any visible sideline, baseline, lane, or 3PT arc landmarks across frames</div>
+            <div id="calibration-hint" class="calibration-msg">CALIBRATION MODE: choose a court primitive, then click 2-3 points along visible lines or a few points along a visible 3PT arc</div>
         </div>
         <div id="sidebar">
             <h3>SELECT CLIP</h3>
@@ -77,9 +77,9 @@
 
             <h3>CALIBRATION</h3>
             <select id="landmark-list" style="width: 100%; background: #111; color: #ffaa00; border: 1px solid #444; padding: 10px; margin-bottom: 10px;">
-                <option value="">-- Loading landmarks --</option>
+                <option value="">-- Loading court primitives --</option>
             </select>
-            <div id="calibration-stats">Points: 0 // landmarks: 0 // families: 0</div>
+            <div id="calibration-stats">Points: 0 // primitives: 0 // families: 0</div>
             <button class="btn" id="btn-run-cal" style="background: #004400; border-color: #00ff00; font-weight: bold; margin-bottom: 5px;">RUN CALIBRATION</button>
             <button class="btn" id="btn-reset-cal" style="background: #442200; border-color: #ffaa00; font-size: 0.8em; padding: 5px;">RESET ALL POINTS</button>
 
