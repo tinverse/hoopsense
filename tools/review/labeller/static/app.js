@@ -404,7 +404,7 @@ const COCO_EDGES = [
 ];
 
 function getCurrentPerceptionFrame() {
-    if (!perceptionVisible || !perceptionData || !perceptionData.enabled) return null;
+    if (!perceptionData || !perceptionData.enabled) return null;
     if (!perceptionFrames.length) return null;
     const targetMs = player.currentTime * 1000;
     let bestFrame = null;
@@ -521,7 +521,7 @@ function redrawOverlay() {
     });
 
     const frame = getCurrentPerceptionFrame();
-    if (frame) {
+    if (perceptionVisible && frame) {
         frame.detections.forEach(drawDetectionOverlay);
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -556,6 +556,8 @@ function redrawOverlay() {
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
         explainerDescription.textContent = 'Play or step through the clip to inspect the current frame’s tracked detections and keypoints.';
         explainerStatus.textContent = 'No frame-aligned detections at this timestamp';
+    } else if (perceptionData && perceptionData.enabled) {
+        explainerPanel.style.display = 'block';
     }
 }
 
