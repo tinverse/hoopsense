@@ -472,6 +472,11 @@ levels:
       parent: L2.3
       title: Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
       owner: A0
+      status: completed
+    - id: L3.63
+      parent: L2.32
+      title: Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
+      owner: A0
       status: in_progress
     - id: L3.42
       parent: L2.32
@@ -556,6 +561,7 @@ levels:
 
 priorities:
   current_frontier:
+    - L3.63
     - L3.62
     - L3.53
     - L3.61

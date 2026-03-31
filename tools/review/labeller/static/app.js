@@ -13,6 +13,7 @@ const explainerStatus = document.getElementById('explainer-status');
 const feedbackTrackList = document.getElementById('feedback-track-list');
 const feedbackNote = document.getElementById('feedback-note');
 const feedbackStatus = document.getElementById('feedback-status');
+const playPauseButton = document.getElementById('btn-play-pause');
 
 let clips = [];
 let activeClip = null;
@@ -23,6 +24,9 @@ let perceptionData = null;
 let perceptionFrames = [];
 let lastFeedbackFrameIdx = null;
 let perceptionVisible = false;
+let playbackOverlayHandle = null;
+const JERSEY_UI_MIN_CONFIDENCE = 0.9;
+const JERSEY_UI_MIN_EVIDENCE = 3;
 
 // 1. Fetch clips on load
 fetch('/api/clips')
@@ -107,6 +111,98 @@ function syncCanvasSize() {
 
 window.addEventListener('resize', syncCanvasSize);
 
+function clampVideoTime(seconds) {
+    const duration = Number.isFinite(player.duration) ? player.duration : null;
+    if (duration === null) return Math.max(0, seconds);
+    return Math.min(Math.max(0, seconds), duration);
+}
+
+function syncPerceptionUI() {
+    redrawOverlay();
+    populateFeedbackTrackList();
+    updateTransportButton();
+}
+
+function schedulePlaybackOverlaySync() {
+    cancelPlaybackOverlaySync();
+    const tick = () => {
+        if (player.paused || player.ended) {
+            playbackOverlayHandle = null;
+            updateTransportButton();
+            syncPerceptionUI();
+            return;
+        }
+        syncPerceptionUI();
+        if (typeof player.requestVideoFrameCallback === 'function') {
+            playbackOverlayHandle = player.requestVideoFrameCallback(() => tick());
+        } else {
+            playbackOverlayHandle = window.requestAnimationFrame(tick);
+        }
+    };
+    tick();
+}
+
+function cancelPlaybackOverlaySync() {
+    if (playbackOverlayHandle === null) return;
+    if (typeof player.cancelVideoFrameCallback === 'function' && typeof playbackOverlayHandle === 'number') {
+        try {
+            player.cancelVideoFrameCallback(playbackOverlayHandle);
+        } catch (_err) {
+            window.cancelAnimationFrame(playbackOverlayHandle);
+        }
+    } else {
+        window.cancelAnimationFrame(playbackOverlayHandle);
+    }
+    playbackOverlayHandle = null;
+}
+
+function stepFrames(frameDelta) {
+    player.pause();
+    player.currentTime = clampVideoTime(player.currentTime + (frameDelta / 30));
+    syncPerceptionUI();
+}
+
+function jumpSeconds(secondsDelta) {
+    player.pause();
+    player.currentTime = clampVideoTime(player.currentTime + secondsDelta);
+    syncPerceptionUI();
+}
+
+function rewindToStart() {
+    player.pause();
+    player.currentTime = 0;
+    syncPerceptionUI();
+}
+
+function togglePlayback() {
+    if (player.paused) {
+        player.play();
+    } else {
+        player.pause();
+    }
+    updateTransportButton();
+}
+
+function updateTransportButton() {
+    if (!playPauseButton) return;
+    playPauseButton.textContent = player.paused ? 'PLAY' : 'PAUSE';
+}
+
+function getVisibleJerseyMetadata(detection) {
+    const jerseyNumber = detection.identity_jersey_number;
+    const jerseyConfidence = detection.identity_jersey_number_confidence;
+    const jerseyEvidenceCount = detection.identity_jersey_evidence_count || 0;
+    if (jerseyNumber === null || jerseyNumber === undefined || jerseyNumber === '') return null;
+    if (jerseyConfidence === null || jerseyConfidence === undefined) return null;
+    if (jerseyConfidence < JERSEY_UI_MIN_CONFIDENCE) return null;
+    if (jerseyEvidenceCount < JERSEY_UI_MIN_EVIDENCE) return null;
+    return {
+        number: jerseyNumber,
+        confidence: jerseyConfidence,
+        evidenceCount: jerseyEvidenceCount,
+    };
+}
+
 function resetUI() {
     isCalibrating = true;
     updateCalibrationStats();
@@ -114,10 +210,11 @@ function resetUI() {
     
     player.onloadedmetadata = () => {
         syncCanvasSize();
-        redrawOverlay();
+        updateTransportButton();
+        syncPerceptionUI();
     };
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-    redrawOverlay();
+    syncPerceptionUI();
 }
 
 document.getElementById('btn-reset-cal').addEventListener('click', () => {
@@ -221,20 +318,17 @@ window.addEventListener('keydown', (e) => {
         case '4': saveLabel('idle'); break;
         case 'p':
         case 'P':
-            if (player.paused) player.play(); else player.pause();
+            togglePlayback();
             break;
         case 'ArrowRight':
-            player.pause();
-            player.currentTime += 1/30;
+            stepFrames(1);
             break;
         case 'ArrowLeft':
-            player.pause();
-            player.currentTime -= 1/30;
+            stepFrames(-1);
             break;
         case 'r':
         case 'R':
-            player.pause();
-            player.currentTime = 0;
+            rewindToStart();
             break;
     }
 });
@@ -359,11 +453,12 @@ function drawDetectionOverlay(detection) {
     const identityLabel = detection.identity_track_id !== null && detection.identity_track_id !== undefined && detection.identity_track_id !== detection.track_id
         ? `/I${detection.identity_track_id}`
         : '';
-    const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
-        ? ` #${detection.identity_jersey_number}`
+    const visibleJersey = getVisibleJerseyMetadata(detection);
+    const jerseyLabel = visibleJersey
+        ? ` #${visibleJersey.number}`
         : '';
-    const jerseyConfidenceLabel = detection.identity_jersey_number_confidence !== null && detection.identity_jersey_number_confidence !== undefined
-        ? `(${Math.round(detection.identity_jersey_number_confidence * 100)})`
+    const jerseyConfidenceLabel = visibleJersey
+        ? `(${Math.round(visibleJersey.confidence * 100)})`
         : '';
     const uniformLabel = detection.uniform_bucket && detection.uniform_bucket !== 'unknown'
         ? ` ${detection.uniform_bucket.toUpperCase()}`
@@ -422,7 +517,7 @@ function redrawOverlay() {
         const activeCount = frame.detections.filter(d => d.active_player_candidate).length;
         const synthCount = frame.detections.filter(d => d.synthesized).length;
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
-        const jerseyCount = frame.detections.filter(d => d.identity_jersey_number !== undefined && d.identity_jersey_number !== null && d.identity_jersey_number !== '').length;
+        const jerseyCount = frame.detections.filter(d => !!getVisibleJerseyMetadata(d)).length;
         const livePlayLabel = frame.live_play_label || 'unknown';
         const livePlayScore = frame.live_play_score !== undefined && frame.live_play_score !== null
             ? frame.live_play_score.toFixed(2)
@@ -476,11 +571,12 @@ function populateFeedbackTrackList() {
         const identityLabel = detection.identity_track_id !== null && detection.identity_track_id !== undefined && detection.identity_track_id !== detection.track_id
             ? ` // I${detection.identity_track_id}`
             : '';
-        const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
-            ? ` // #${detection.identity_jersey_number}`
+        const visibleJersey = getVisibleJerseyMetadata(detection);
+        const jerseyLabel = visibleJersey
+            ? ` // #${visibleJersey.number}`
             : '';
-        const jerseyConfidenceLabel = detection.identity_jersey_number_confidence !== null && detection.identity_jersey_number_confidence !== undefined
-            ? ` // jersey ${Math.round(detection.identity_jersey_number_confidence * 100)}`
+        const jerseyConfidenceLabel = visibleJersey
+            ? ` // jersey ${Math.round(visibleJersey.confidence * 100)}`
             : '';
         const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
             ? ` // active ${Math.round(detection.active_player_score * 100)}`
@@ -565,14 +661,13 @@ function loadPerceptionOverlay(clip) {
                 const liveSegmentCount = livePlaySegments.filter(segment => segment.label === 'live_play').length;
                 const deadSegmentCount = livePlaySegments.filter(segment => segment.label === 'dead_ball').length;
                 const uncertainSegmentCount = livePlaySegments.filter(segment => segment.label === 'uncertain').length;
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses // ${appearanceCount} appearance prototypes // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';
             }
             updateExplainerButton();
-            populateFeedbackTrackList();
-            redrawOverlay();
+            syncPerceptionUI();
         })
         .catch((error) => {
             perceptionData = null;
@@ -591,9 +686,16 @@ explainerToggle.addEventListener('click', () => {
 });
 
 player.addEventListener('timeupdate', redrawOverlay);
-player.addEventListener('timeupdate', populateFeedbackTrackList);
-player.addEventListener('seeked', redrawOverlay);
-player.addEventListener('seeked', populateFeedbackTrackList);
+player.addEventListener('timeupdate', syncPerceptionUI);
+player.addEventListener('seeked', syncPerceptionUI);
+player.addEventListener('pause', () => {
+    cancelPlaybackOverlaySync();
+    syncPerceptionUI();
+});
+player.addEventListener('play', () => {
+    updateTransportButton();
+    schedulePlaybackOverlaySync();
+});
 
 document.getElementById('feedback-fp').addEventListener('click', () => savePerceptionFeedback('false_positive'));
 document.getElementById('feedback-fn').addEventListener('click', () => savePerceptionFeedback('false_negative'));
@@ -604,6 +706,12 @@ document.getElementById('feedback-live').addEventListener('click', () => savePer
 document.getElementById('feedback-dead').addEventListener('click', () => savePerceptionFeedback('dead_ball', true));
 document.getElementById('feedback-uncertain').addEventListener('click', () => savePerceptionFeedback('uncertain_play_state', true));
 document.getElementById('feedback-note-save').addEventListener('click', () => savePerceptionFeedback('general_note'));
+document.getElementById('btn-play-pause').addEventListener('click', togglePlayback);
+document.getElementById('btn-rewind').addEventListener('click', rewindToStart);
+document.getElementById('btn-step-back').addEventListener('click', () => stepFrames(-1));
+document.getElementById('btn-step-forward').addEventListener('click', () => stepFrames(1));
+document.getElementById('btn-back-1s').addEventListener('click', () => jumpSeconds(-1.0));
+document.getElementById('btn-forward-1s').addEventListener('click', () => jumpSeconds(1.0));
 
 function finishCalibration() {
     isCalibrating = false;

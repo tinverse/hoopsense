@@ -28,6 +28,8 @@
         #feedback-panel select, #feedback-panel input { width: 100%; background: #111; color: #ffd49a; border: 1px solid #5f4521; padding: 8px; margin-bottom: 10px; }
         #feedback-status { color: #ffd49a; font-size: 0.9em; }
         .feedback-btn { background: #3c2414; border-color: #b17133; color: #ffd49a; }
+        #transport-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .transport-btn { background: #182218; border-color: #3f7a3f; color: #bfffbf; text-align: center; }
     </style>
 </head>
 <body>
@@ -98,6 +100,14 @@
 
             <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
             <h3>CONTROLS</h3>
+            <div id="transport-controls">
+                <button class="btn transport-btn" id="btn-play-pause">PLAY / PAUSE</button>
+                <button class="btn transport-btn" id="btn-rewind">REWIND</button>
+                <button class="btn transport-btn" id="btn-step-back">STEP BACK</button>
+                <button class="btn transport-btn" id="btn-step-forward">STEP FORWARD</button>
+                <button class="btn transport-btn" id="btn-back-1s">-1.0s</button>
+                <button class="btn transport-btn" id="btn-forward-1s">+1.0s</button>
+            </div>
             <div>Step: Arrows L/R</div>
             <div>Play/Pause: P</div>
             <div>Rewind to Start: R</div>
