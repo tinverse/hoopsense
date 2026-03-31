@@ -25,6 +25,7 @@ from tools.review.labeller.generate_layer1_annotations import (
     estimate_uniform_bucket,
     repair_short_track_gaps,
     score_active_player,
+    smooth_track_motion,
 )
 
 
@@ -90,6 +91,31 @@ class ActivePlayerScoreTest(unittest.TestCase):
         self.assertFalse(score_info["candidate"])
         self.assertLess(score_info["score"], 0.55)
         self.assertFalse(score_info["reasons"]["court_in_bounds"])
+
+    def test_score_active_player_rewards_motion(self):
+        static = score_active_player(
+            {
+                "confidence": 0.7,
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_xy": [1200.0, 700.0],
+                "motion_speed_px": 0.0,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=2,
+        )
+        moving = score_active_player(
+            {
+                "confidence": 0.7,
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_xy": [1200.0, 700.0],
+                "motion_speed_px": 12.0,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=2,
+        )
+        self.assertGreater(moving["score"], static["score"])
 
 
 class TrackRepairTest(unittest.TestCase):
@@ -190,6 +216,35 @@ class ActivePlayerAnnotationTest(unittest.TestCase):
         self.assertIn("active_player_score", detection)
         self.assertIn("active_player_candidate", detection)
         self.assertIn("active_player_reasons", detection)
+
+
+class KalmanMotionTest(unittest.TestCase):
+    def test_smooth_track_motion_adds_smoothed_fields(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "bbox_xywh": [100.0, 120.0, 50.0, 150.0],
+                }],
+            },
+            {
+                "frame_idx": 1,
+                "t_ms": 33,
+                "detections": [{
+                    "track_id": 3,
+                    "bbox_xywh": [110.0, 122.0, 50.0, 150.0],
+                }],
+            },
+        ]
+        smoothed = smooth_track_motion(frames, {"fps": 30.0, "frame_count": 2, "width": 640, "height": 480})
+        first = smoothed[0]["detections"][0]
+        second = smoothed[1]["detections"][0]
+        self.assertIn("smoothed_center_xy", first)
+        self.assertIn("smoothed_velocity_xy", second)
+        self.assertIn("motion_speed_px", second)
+        self.assertGreaterEqual(second["motion_speed_px"], 0.0)
 
 
 if __name__ == "__main__":

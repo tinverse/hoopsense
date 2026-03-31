@@ -356,6 +356,9 @@ function drawDetectionOverlay(detection) {
     const activeScore = detection.active_player_score !== undefined && detection.active_player_score !== null
         ? ` A${Math.round(detection.active_player_score * 100)}`
         : '';
+    const motionLabel = detection.motion_speed_px !== undefined && detection.motion_speed_px !== null
+        ? ` M${detection.motion_speed_px.toFixed(1)}`
+        : '';
     const repairLabel = detection.synthesized ? ' SYN' : '';
     const candidateColor = detection.active_player_candidate ? "#35f28b" : "#ff8f70";
 
@@ -364,7 +367,7 @@ function drawDetectionOverlay(detection) {
     ctx.lineWidth = 4;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    const label = `${trackLabel}${uniformLabel} ${confLabel}${activeScore}${repairLabel}`;
+    const label = `${trackLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
     const labelWidth = Math.max(120, label.length * 10 + 20);
     const labelHeight = 26;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
@@ -444,8 +447,11 @@ function populateFeedbackTrackList() {
         const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
             ? ` // active ${Math.round(detection.active_player_score * 100)}`
             : '';
+        const motionText = detection.motion_speed_px !== undefined && detection.motion_speed_px !== null
+            ? ` // motion ${detection.motion_speed_px.toFixed(1)}`
+            : '';
         const synthLabel = detection.synthesized ? ' // repaired' : '';
-        opt.textContent = `Track ${trackId}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${synthLabel}`;
+        opt.textContent = `Track ${trackId}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }

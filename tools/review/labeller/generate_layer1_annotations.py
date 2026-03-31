@@ -21,6 +21,7 @@ ACTIVE_PLAYER_SCORE_THRESHOLD = 0.55
 MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
 SHORT_GAP_REPAIR_MAX_GAP = 3
+MOTION_SCORE_THRESHOLD_PX = 6.0
 
 
 def _to_float_list(values):
@@ -44,6 +45,39 @@ def _interpolate_point_list(points_a, points_b, alpha):
 
 def _clip01(value):
     return max(0.0, min(1.0, float(value)))
+
+
+class KalmanTrack2D:
+    """Minimal constant-velocity Kalman filter for bbox-center smoothing."""
+
+    def __init__(self, x, y):
+        self.state = np.array([x, y, 0.0, 0.0], dtype=float)
+        self.cov = np.eye(4, dtype=float) * 25.0
+        self.process_noise = np.diag([1.0, 1.0, 4.0, 4.0]).astype(float)
+        self.measurement_noise = np.diag([9.0, 9.0]).astype(float)
+
+    def predict(self, dt):
+        transition = np.array([
+            [1.0, 0.0, dt, 0.0],
+            [0.0, 1.0, 0.0, dt],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ], dtype=float)
+        self.state = transition @ self.state
+        self.cov = transition @ self.cov @ transition.T + self.process_noise
+        return self.state.copy()
+
+    def update(self, measurement_xy):
+        observe = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ], dtype=float)
+        innovation = measurement_xy - (observe @ self.state)
+        innovation_cov = observe @ self.cov @ observe.T + self.measurement_noise
+        kalman_gain = self.cov @ observe.T @ np.linalg.inv(innovation_cov)
+        self.state = self.state + kalman_gain @ innovation
+        self.cov = (np.eye(4) - kalman_gain @ observe) @ self.cov
+        return self.state.copy()
 
 
 def estimate_uniform_bucket(frame, bbox_xyxy, keypoints_xy=None, keypoints_conf=None):
@@ -150,6 +184,11 @@ def score_active_player(
     reasons["track_frame_count"] = int(track_frame_count)
     score += 0.10 * persistence_score
 
+    motion_speed = float(detection.get("motion_speed_px") or 0.0)
+    motion_score = _clip01(motion_speed / MOTION_SCORE_THRESHOLD_PX)
+    reasons["motion_speed_px"] = round(motion_speed, 3)
+    score += 0.15 * motion_score
+
     active_score = round(_clip01(score), 4)
     return {
         "score": active_score,
@@ -254,6 +293,48 @@ def annotate_active_players(frames, video_meta):
             detection["active_player_score"] = score_info["score"]
             detection["active_player_candidate"] = score_info["candidate"]
             detection["active_player_reasons"] = score_info["reasons"]
+    return frames
+
+
+def smooth_track_motion(frames, video_meta):
+    fps = float(video_meta.get("fps") or 30.0)
+    dt = 1.0 / max(fps, 1.0)
+    track_filters = {}
+    last_sizes = {}
+
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            track_id = detection.get("track_id")
+            bbox_xywh = detection.get("bbox_xywh")
+            if track_id is None or not bbox_xywh or len(bbox_xywh) < 4:
+                detection["motion_speed_px"] = 0.0
+                continue
+
+            center_x, center_y, width, height = [float(v) for v in bbox_xywh]
+            kalman = track_filters.get(track_id)
+            if kalman is None:
+                kalman = KalmanTrack2D(center_x, center_y)
+                track_filters[track_id] = kalman
+                kalman_state = kalman.state.copy()
+            else:
+                kalman.predict(dt)
+                kalman_state = kalman.update(np.array([center_x, center_y], dtype=float))
+
+            vel_x = float(kalman_state[2])
+            vel_y = float(kalman_state[3])
+            motion_speed = float(np.linalg.norm([vel_x, vel_y]))
+            last_width, last_height = last_sizes.get(track_id, (width, height))
+            last_sizes[track_id] = (width, height)
+
+            detection["smoothed_center_xy"] = [float(kalman_state[0]), float(kalman_state[1])]
+            detection["smoothed_velocity_xy"] = [vel_x, vel_y]
+            detection["motion_speed_px"] = motion_speed
+            detection["smoothed_bbox_xywh"] = [
+                float(kalman_state[0]),
+                float(kalman_state[1]),
+                float((last_width + width) * 0.5),
+                float((last_height + height) * 0.5),
+            ]
     return frames
 
 
@@ -414,8 +495,10 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
         "width": width,
         "height": height,
     }
+    frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
     frames = repair_short_track_gaps(frames)
+    frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
 
     artifact = {
@@ -432,6 +515,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
         "postprocess": {
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
             "short_gap_repair_max_gap": SHORT_GAP_REPAIR_MAX_GAP,
+            "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,
+            "track_motion_smoother": "kalman_constant_velocity_v1",
         },
         "calibration": {
             "enabled": calibration is not None,

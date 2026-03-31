@@ -109,6 +109,7 @@ The current highest-priority frontier is:
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
+- [x] Add Kalman-smoothed track state and motion-aware scoring to Layer 1 artifacts
 - [x] Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
 - [x] Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
 - [x] Replace named-point calibration clicks with primitive-based line and arc sampling in the labeller
