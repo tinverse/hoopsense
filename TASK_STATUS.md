@@ -8,7 +8,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 
 The current highest-priority frontier is:
 - `L3.53` add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
-- `L3.60` attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
+- `L3.61` add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
 - `L3.46` check in canonical MVP stats header and formula templates with provenance rules
 - `L3.51` define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
 - `L3.47` map each MVP stat to required event primitives and possession fields
@@ -110,7 +110,8 @@ The current highest-priority frontier is:
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
-- [ ] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
+- [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
+- [ ] Add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
 - [x] Add Kalman-smoothed track state and motion-aware scoring to Layer 1 artifacts
 - [x] Support typed partial-court calibration landmarks and solver flow in the labeller without depending on visible corners
 - [x] Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
@@ -141,7 +142,7 @@ The current highest-priority frontier is:
 
 ### Active or Next
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
-- [ ] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
+- [ ] Add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
 - [ ] Check in canonical MVP stats header and formula templates with provenance rules
 - [ ] Define a HoopSense-native declarative rules layer for stat attribution without reusing Shush implementation
 - [ ] Map each MVP stat to required event primitives and possession fields

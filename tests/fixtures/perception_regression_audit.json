@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-03-31T06:08:39.874007+00:00",
+  "generated_at": "2026-03-31T08:39:11.583094+00:00",
   "fixture": "tests/fixtures/perception_regression_cases.json",
   "artifact_dir": "data/review_artifacts/layer1",
   "case_count": 7,
@@ -11,15 +11,15 @@
   ],
   "category_summary": {
     "bystander_false_positive": {
-      "active_candidate_count_total": 3,
+      "active_candidate_count_total": 8,
       "artifact_found_count": 1,
       "case_count": 1,
       "detection_count_total": 9,
       "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 324.073,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 9.0,
-      "avg_active_candidate_count": 3.0,
+      "avg_active_candidate_count": 8.0,
       "avg_synthesized_detection_count": 0.0
     },
     "cluster_merge": {
@@ -47,39 +47,39 @@
       "avg_synthesized_detection_count": 0.0
     },
     "dead_ball_context": {
-      "active_candidate_count_total": 5,
+      "active_candidate_count_total": 6,
       "artifact_found_count": 1,
       "case_count": 1,
       "detection_count_total": 7,
       "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 415.438,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 7.0,
-      "avg_active_candidate_count": 5.0,
+      "avg_active_candidate_count": 6.0,
       "avg_synthesized_detection_count": 0.0
     },
     "false_negative_generic": {
-      "active_candidate_count_total": 5,
+      "active_candidate_count_total": 6,
       "artifact_found_count": 3,
       "case_count": 3,
       "detection_count_total": 19,
       "frame_found_count": 3,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 280.865,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 6.333,
-      "avg_active_candidate_count": 1.667,
+      "avg_active_candidate_count": 2.0,
       "avg_synthesized_detection_count": 0.0
     },
     "false_positive_generic": {
-      "active_candidate_count_total": 3,
+      "active_candidate_count_total": 8,
       "artifact_found_count": 2,
       "case_count": 2,
       "detection_count_total": 18,
       "frame_found_count": 2,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 324.073,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 9.0,
-      "avg_active_candidate_count": 1.5,
+      "avg_active_candidate_count": 4.0,
       "avg_synthesized_detection_count": 0.0
     },
     "id_switch": {
@@ -95,15 +95,15 @@
       "avg_synthesized_detection_count": 0.0
     },
     "live_play_context": {
-      "active_candidate_count_total": 0,
+      "active_candidate_count_total": 4,
       "artifact_found_count": 1,
       "case_count": 1,
       "detection_count_total": 4,
       "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 339.77,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 4.0,
-      "avg_active_candidate_count": 0.0,
+      "avg_active_candidate_count": 4.0,
       "avg_synthesized_detection_count": 0.0
     },
     "spectator_false_positive": {
@@ -119,15 +119,15 @@
       "avg_synthesized_detection_count": 0.0
     },
     "uniform_confusion": {
-      "active_candidate_count_total": 2,
+      "active_candidate_count_total": 3,
       "artifact_found_count": 1,
       "case_count": 1,
       "detection_count_total": 4,
       "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "motion_speed_max_seen": 280.865,
       "synthesized_detection_count_total": 0,
       "avg_detection_count": 4.0,
-      "avg_active_candidate_count": 2.0,
+      "avg_active_candidate_count": 3.0,
       "avg_synthesized_detection_count": 0.0
     }
   },
@@ -351,8 +351,8 @@
         "motion_speed_median": 0.0,
         "motion_speed_max": 0.0,
         "uniform_bucket_counts": {
-          "dark": 6,
-          "unknown": 3
+          "dark": 5,
+          "unknown": 4
         },
         "active_uniform_bucket_counts": {},
         "overlap_pair_count": 0
@@ -404,25 +404,33 @@
           "74"
         ],
         "canonical_track_count": 4,
-        "active_candidate_count": 0,
-        "active_candidate_track_ids": [],
+        "active_candidate_count": 4,
+        "active_candidate_track_ids": [
+          "100",
+          "36",
+          "4",
+          "74"
+        ],
         "synthesized_detection_count": 0,
-        "low_motion_detection_count": 4,
-        "zero_motion_detection_count": 4,
-        "motion_speed_min": 0.0,
-        "motion_speed_median": 0.0,
-        "motion_speed_max": 0.0,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 16.013,
+        "motion_speed_median": 83.361,
+        "motion_speed_max": 339.77,
         "uniform_bucket_counts": {
           "dark": 2,
           "unknown": 2
         },
-        "active_uniform_bucket_counts": {},
+        "active_uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 2
+        },
         "overlap_pair_count": 0
       },
       "category_signals": {
-        "active_candidate_count": 0,
-        "motion_speed_max": 0.0,
-        "motion_speed_median": 0.0,
+        "active_candidate_count": 4,
+        "motion_speed_max": 339.77,
+        "motion_speed_median": 83.361,
         "track_ids": [
           "100",
           "36",
@@ -466,34 +474,35 @@
           "6"
         ],
         "canonical_track_count": 7,
-        "active_candidate_count": 5,
+        "active_candidate_count": 6,
         "active_candidate_track_ids": [
           "10",
           "16",
+          "17",
           "19",
           "42",
           "56"
         ],
         "synthesized_detection_count": 0,
-        "low_motion_detection_count": 7,
-        "zero_motion_detection_count": 7,
-        "motion_speed_min": 0.0,
-        "motion_speed_median": 0.0,
-        "motion_speed_max": 0.0,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 154.383,
+        "motion_speed_median": 256.002,
+        "motion_speed_max": 415.438,
         "uniform_bucket_counts": {
           "dark": 1,
           "unknown": 6
         },
         "active_uniform_bucket_counts": {
           "dark": 1,
-          "unknown": 4
+          "unknown": 5
         },
         "overlap_pair_count": 0
       },
       "category_signals": {
-        "active_candidate_count": 5,
-        "low_motion_detection_count": 7,
-        "zero_motion_detection_count": 7,
+        "active_candidate_count": 6,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
         "track_ids": [
           "10",
           "16",
@@ -535,22 +544,23 @@
           "3"
         ],
         "canonical_track_count": 4,
-        "active_candidate_count": 2,
+        "active_candidate_count": 3,
         "active_candidate_track_ids": [
           "121",
+          "122",
           "3"
         ],
         "synthesized_detection_count": 0,
-        "low_motion_detection_count": 4,
-        "zero_motion_detection_count": 4,
-        "motion_speed_min": 0.0,
-        "motion_speed_median": 0.0,
-        "motion_speed_max": 0.0,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 8.059,
+        "motion_speed_median": 35.001,
+        "motion_speed_max": 280.865,
         "uniform_bucket_counts": {
           "dark": 4
         },
         "active_uniform_bucket_counts": {
-          "dark": 2
+          "dark": 3
         },
         "overlap_pair_count": 0
       },
@@ -567,7 +577,7 @@
           "dark": 4
         },
         "active_uniform_bucket_counts": {
-          "dark": 2
+          "dark": 3
         }
       }
     },
@@ -611,32 +621,38 @@
           "97"
         ],
         "canonical_track_count": 9,
-        "active_candidate_count": 3,
+        "active_candidate_count": 8,
         "active_candidate_track_ids": [
+          "1",
+          "118",
+          "121",
+          "122",
           "19",
           "31",
+          "6",
           "80"
         ],
         "synthesized_detection_count": 0,
-        "low_motion_detection_count": 9,
-        "zero_motion_detection_count": 9,
-        "motion_speed_min": 0.0,
-        "motion_speed_median": 0.0,
-        "motion_speed_max": 0.0,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 22.171,
+        "motion_speed_median": 120.716,
+        "motion_speed_max": 324.073,
         "uniform_bucket_counts": {
           "dark": 8,
           "unknown": 1
         },
         "active_uniform_bucket_counts": {
-          "dark": 3
+          "dark": 7,
+          "unknown": 1
         },
         "overlap_pair_count": 0
       },
       "category_signals": {
         "detection_count": 9,
-        "active_candidate_count": 3,
-        "low_motion_detection_count": 9,
-        "zero_motion_detection_count": 9,
+        "active_candidate_count": 8,
+        "low_motion_detection_count": 0,
+        "zero_motion_detection_count": 0,
         "track_ids": [
           "1",
           "118",

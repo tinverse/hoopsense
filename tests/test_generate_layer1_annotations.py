@@ -26,9 +26,12 @@ from tools.review.labeller.generate_layer1_annotations import (
     _normalize_jersey_text,
     _resolve_identity_jersey_consensus,
     _score_identity_link,
+    annotate_team_appearance_consistency,
     annotate_active_players,
     annotate_identity_jersey_numbers,
     estimate_uniform_bucket,
+    estimate_torso_color_histogram,
+    histogram_intersection_distance,
     repair_short_track_gaps,
     score_active_player,
     smooth_track_motion,
@@ -65,6 +68,20 @@ class UniformBucketTest(unittest.TestCase):
         )
         self.assertEqual(result["bucket"], "dark")
         self.assertLess(result["luma_mean"], 95.0)
+
+    def test_estimate_torso_color_histogram_is_normalized(self):
+        crop = np.zeros((10, 10, 3), dtype=np.uint8)
+        crop[:, :] = [255, 255, 255]
+        hist = estimate_torso_color_histogram(crop)
+        self.assertIsNotNone(hist)
+        self.assertEqual(len(hist), 8)
+        self.assertAlmostEqual(sum(hist), 1.0, places=5)
+
+    def test_histogram_intersection_distance_distinguishes_colors(self):
+        dark = estimate_torso_color_histogram(np.zeros((8, 8, 3), dtype=np.uint8))
+        bright = estimate_torso_color_histogram(np.full((8, 8, 3), 255, dtype=np.uint8))
+        self.assertAlmostEqual(histogram_intersection_distance(dark, dark), 0.0, places=5)
+        self.assertGreater(histogram_intersection_distance(dark, bright), 0.9)
 
 
 class ActivePlayerScoreTest(unittest.TestCase):
@@ -122,6 +139,68 @@ class ActivePlayerScoreTest(unittest.TestCase):
             track_frame_count=2,
         )
         self.assertGreater(moving["score"], static["score"])
+
+    def test_score_active_player_penalizes_edge_low_motion_appearance_mismatch(self):
+        baseline = score_active_player(
+            {
+                "confidence": 0.7,
+                "bbox_xyxy": [4.0, 100.0, 90.0, 320.0],
+                "court_xy": [1200.0, 700.0],
+                "motion_speed_px": 0.0,
+                "appearance_team_distance": 0.7,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=2,
+        )
+        moving = score_active_player(
+            {
+                "confidence": 0.7,
+                "bbox_xyxy": [4.0, 100.0, 90.0, 320.0],
+                "court_xy": [1200.0, 700.0],
+                "motion_speed_px": 9.0,
+                "appearance_team_distance": 0.7,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=2,
+        )
+        self.assertGreater(baseline["reasons"]["appearance_penalty"], 0.0)
+        self.assertEqual(moving["reasons"]["appearance_penalty"], 0.0)
+
+
+class AppearanceConsistencyTest(unittest.TestCase):
+    def test_annotate_team_appearance_consistency_assigns_distance(self):
+        dark_hist = estimate_torso_color_histogram(np.zeros((8, 8, 3), dtype=np.uint8))
+        bright_hist = estimate_torso_color_histogram(np.full((8, 8, 3), 255, dtype=np.uint8))
+        frames = [
+            {
+                "frame_idx": 0,
+                "detections": [
+                    {
+                        "track_id": 1,
+                        "appearance_histogram_rgbq": dark_hist,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 8.0,
+                        "uniform_bucket": "dark",
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                    {
+                        "track_id": 2,
+                        "appearance_histogram_rgbq": bright_hist,
+                        "active_player_candidate": False,
+                        "motion_speed_px": 0.0,
+                        "uniform_bucket": "dark",
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.2},
+                    },
+                ],
+            }
+        ]
+        summary = annotate_team_appearance_consistency(frames)
+        self.assertEqual(summary["prototype_count"], 1)
+        self.assertEqual(frames[0]["detections"][0]["appearance_team_bucket"], "dark")
+        self.assertAlmostEqual(frames[0]["detections"][0]["appearance_team_distance"], 0.0, places=5)
+        self.assertGreater(frames[0]["detections"][1]["appearance_team_distance"], 0.9)
 
 
 class TrackRepairTest(unittest.TestCase):

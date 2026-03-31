@@ -462,7 +462,12 @@ levels:
       parent: L2.3
       title: Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
       owner: A0
-      status: pending
+      status: completed
+    - id: L3.61
+      parent: L2.3
+      title: Add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
+      owner: A0
+      status: in_progress
     - id: L3.42
       parent: L2.32
       title: Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
@@ -547,7 +552,7 @@ levels:
 priorities:
   current_frontier:
     - L3.53
-    - L3.60
+    - L3.61
     - L3.46
     - L3.51
     - L3.47

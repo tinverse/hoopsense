@@ -470,8 +470,11 @@ function populateFeedbackTrackList() {
         const motionText = detection.motion_speed_px !== undefined && detection.motion_speed_px !== null
             ? ` // motion ${detection.motion_speed_px.toFixed(1)}`
             : '';
+        const appearanceText = detection.appearance_team_distance !== undefined && detection.appearance_team_distance !== null
+            ? ` // teamdist ${detection.appearance_team_distance.toFixed(2)}`
+            : '';
         const synthLabel = detection.synthesized ? ' // repaired' : '';
-        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
+        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${appearanceText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }
@@ -539,7 +542,8 @@ function loadPerceptionOverlay(clip) {
                     `Artifact ready for ${clip.id}. Toggle the overlay and step through the clip to inspect real detections, pose, identity repairs, jersey evidence, and calibrated court coordinates when available.`;
                 const jerseyReady = data.postprocess && data.postprocess.jersey_ocr && data.postprocess.jersey_ocr.reader_available;
                 const jerseyCount = data.postprocess && data.postprocess.jersey_ocr ? data.postprocess.jersey_ocr.identity_count_with_consensus : 0;
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses`;
+                const appearanceCount = data.postprocess && data.postprocess.appearance_cue ? data.postprocess.appearance_cue.prototype_count : 0;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses // ${appearanceCount} appearance prototypes`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';

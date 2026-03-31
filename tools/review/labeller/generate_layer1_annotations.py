@@ -32,6 +32,8 @@ JERSEY_OCR_MIN_SHARPNESS = 25.0
 JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY = 5
 JERSEY_OCR_CONSENSUS_MIN_VOTES = 2
 JERSEY_OCR_CONSENSUS_MIN_SHARE = 0.62
+APPEARANCE_TEAM_DISTANCE_THRESHOLD = 0.42
+APPEARANCE_LOW_MOTION_THRESHOLD_PX = 3.0
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
 
@@ -99,6 +101,8 @@ def _initialize_identity_fields(detection):
     detection["identity_jersey_number_confidence"] = detection.get("identity_jersey_number_confidence")
     detection["identity_jersey_number_source"] = detection.get("identity_jersey_number_source")
     detection["identity_jersey_evidence_count"] = detection.get("identity_jersey_evidence_count")
+    detection["appearance_team_distance"] = detection.get("appearance_team_distance")
+    detection["appearance_team_bucket"] = detection.get("appearance_team_bucket")
 
 
 def get_easyocr_reader():
@@ -174,6 +178,29 @@ def _extract_jersey_crop(frame, detection):
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     return crop, sharpness
+
+
+def estimate_torso_color_histogram(crop_bgr):
+    if crop_bgr is None or crop_bgr.size == 0:
+        return None
+    pixels = crop_bgr.reshape(-1, 3).astype(np.float32)
+    if pixels.size == 0:
+        return None
+    quantized = (pixels >= 128.0).astype(np.int32)
+    bin_ids = quantized[:, 0] * 4 + quantized[:, 1] * 2 + quantized[:, 2]
+    hist = np.bincount(bin_ids, minlength=8).astype(np.float32)
+    total = float(hist.sum())
+    if total <= 0.0:
+        return None
+    hist /= total
+    return [round(float(v), 6) for v in hist.tolist()]
+
+
+def histogram_intersection_distance(hist_a, hist_b):
+    if not hist_a or not hist_b or len(hist_a) != len(hist_b):
+        return None
+    intersection = sum(min(float(a), float(b)) for a, b in zip(hist_a, hist_b))
+    return round(max(0.0, 1.0 - intersection), 6)
 
 
 def _normalize_jersey_text(text):
@@ -481,9 +508,9 @@ def score_active_player(
     edge_margin_x = frame_width * EDGE_MARGIN_RATIO
     edge_margin_y = frame_height * EDGE_MARGIN_RATIO
     edge_penalty = 0.0
-    if bbox_cx < edge_margin_x or bbox_cx > frame_width - edge_margin_x:
+    if x1 < edge_margin_x or x2 > frame_width - edge_margin_x:
         edge_penalty += 0.15
-    if bbox_cy < edge_margin_y:
+    if y1 < edge_margin_y or y2 > frame_height - edge_margin_y:
         edge_penalty += 0.05
     reasons["edge_penalty"] = round(edge_penalty, 4)
     score -= edge_penalty
@@ -508,6 +535,22 @@ def score_active_player(
     motion_score = _clip01(motion_speed / MOTION_SCORE_THRESHOLD_PX)
     reasons["motion_speed_px"] = round(motion_speed, 3)
     score += 0.15 * motion_score
+
+    appearance_distance = detection.get("appearance_team_distance")
+    reasons["appearance_team_distance"] = round(float(appearance_distance), 4) if appearance_distance is not None else None
+    appearance_penalty = 0.0
+    if (
+        appearance_distance is not None
+        and motion_speed <= APPEARANCE_LOW_MOTION_THRESHOLD_PX
+        and edge_penalty >= 0.15
+        and float(appearance_distance) > APPEARANCE_TEAM_DISTANCE_THRESHOLD
+    ):
+        appearance_penalty = 0.14 * _clip01(
+            (float(appearance_distance) - APPEARANCE_TEAM_DISTANCE_THRESHOLD)
+            / max(1.0 - APPEARANCE_TEAM_DISTANCE_THRESHOLD, 1e-6)
+        )
+        score -= appearance_penalty
+    reasons["appearance_penalty"] = round(appearance_penalty, 4)
 
     active_score = round(_clip01(score), 4)
     return {
@@ -585,6 +628,9 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
     if jersey_crop is not None:
         detection["_jersey_crop_bgr"] = jersey_crop
         detection["_jersey_crop_sharpness"] = jersey_sharpness
+        appearance_hist = estimate_torso_color_histogram(jersey_crop)
+        if appearance_hist is not None:
+            detection["appearance_histogram_rgbq"] = appearance_hist
 
     return detection
 
@@ -618,6 +664,60 @@ def annotate_active_players(frames, video_meta):
             detection["active_player_candidate"] = score_info["candidate"]
             detection["active_player_reasons"] = score_info["reasons"]
     return frames
+
+
+def annotate_team_appearance_consistency(frames):
+    prototypes = {}
+    grouped = {}
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            hist = detection.get("appearance_histogram_rgbq")
+            if not hist:
+                continue
+            if not detection.get("active_player_candidate"):
+                continue
+            if float(detection.get("motion_speed_px") or 0.0) < APPEARANCE_LOW_MOTION_THRESHOLD_PX:
+                continue
+            reasons = detection.get("active_player_reasons") or {}
+            if reasons.get("court_in_bounds") is False:
+                continue
+            if float(reasons.get("edge_penalty") or 0.0) >= 0.15:
+                continue
+            bucket = detection.get("uniform_bucket") if detection.get("uniform_bucket") in {"dark", "light"} else "unknown"
+            grouped.setdefault(bucket, []).append([float(v) for v in hist])
+
+    for bucket, samples in grouped.items():
+        if not samples:
+            continue
+        prototypes[bucket] = np.mean(np.array(samples, dtype=np.float32), axis=0).tolist()
+
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            hist = detection.get("appearance_histogram_rgbq")
+            if not hist:
+                detection["appearance_team_distance"] = None
+                detection["appearance_team_bucket"] = None
+                continue
+            preferred_bucket = detection.get("uniform_bucket") if detection.get("uniform_bucket") in {"dark", "light"} else None
+            candidate_buckets = []
+            if preferred_bucket and preferred_bucket in prototypes:
+                candidate_buckets.append(preferred_bucket)
+            candidate_buckets.extend(bucket for bucket in prototypes if bucket not in candidate_buckets)
+            best_bucket = None
+            best_distance = None
+            for bucket in candidate_buckets:
+                distance = histogram_intersection_distance(hist, prototypes[bucket])
+                if distance is None:
+                    continue
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best_bucket = bucket
+            detection["appearance_team_distance"] = best_distance
+            detection["appearance_team_bucket"] = best_bucket
+    return {
+        "prototype_count": len(prototypes),
+        "prototype_buckets": sorted(prototypes.keys()),
+    }
 
 
 def smooth_track_motion(frames, video_meta):
@@ -1040,6 +1140,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     }
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
+    appearance_summary = annotate_team_appearance_consistency(frames)
+    frames = annotate_active_players(frames, video_meta)
     frames = repair_short_track_gaps(frames, video_meta)
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
@@ -1063,6 +1165,13 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,
             "track_motion_smoother": "kalman_constant_velocity_v1",
             "identity_repair": "trajectory_bridge_v1",
+            "appearance_cue": {
+                "kind": "torso_rgb_quantized_histogram_v1",
+                "team_distance_threshold": APPEARANCE_TEAM_DISTANCE_THRESHOLD,
+                "low_motion_threshold_px": APPEARANCE_LOW_MOTION_THRESHOLD_PX,
+                "prototype_count": appearance_summary["prototype_count"],
+                "prototype_buckets": appearance_summary["prototype_buckets"],
+            },
             "jersey_ocr": {
                 "backend": "easyocr_v1",
                 "reader_available": jersey_ocr["reader_available"],
