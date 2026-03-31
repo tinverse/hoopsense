@@ -62,6 +62,11 @@ echo "[INFO] Installing Layer 1 inference dependencies into ${ORIN_VENV}"
   pyyaml \
   requests \
   scipy \
+  scikit-image \
+  python-bidi \
+  pyclipper \
+  shapely \
+  ninja \
   ultralytics-thop \
   matplotlib==3.7.5 \
   psutil \
@@ -70,6 +75,7 @@ echo "[INFO] Installing Layer 1 inference dependencies into ${ORIN_VENV}"
   lap
 "${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps ultralytics
 "${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps "torchvision==${TORCHVISION_VERSION}"
+"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps easyocr
 
 if [ -d "${ORIN_CV2_SRC}" ]; then
     rm -rf "${ORIN_CV2_DST}"

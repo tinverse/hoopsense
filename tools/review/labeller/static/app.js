@@ -355,6 +355,9 @@ function drawDetectionOverlay(detection) {
     const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
         ? ` #${detection.identity_jersey_number}`
         : '';
+    const jerseyConfidenceLabel = detection.identity_jersey_number_confidence !== null && detection.identity_jersey_number_confidence !== undefined
+        ? `(${Math.round(detection.identity_jersey_number_confidence * 100)})`
+        : '';
     const uniformLabel = detection.uniform_bucket && detection.uniform_bucket !== 'unknown'
         ? ` ${detection.uniform_bucket.toUpperCase()}`
         : '';
@@ -373,7 +376,7 @@ function drawDetectionOverlay(detection) {
     ctx.lineWidth = 4;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    const label = `${trackLabel}${identityLabel}${jerseyLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
+    const label = `${trackLabel}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
     const labelWidth = Math.max(120, label.length * 10 + 20);
     const labelHeight = 26;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
@@ -412,6 +415,7 @@ function redrawOverlay() {
         const activeCount = frame.detections.filter(d => d.active_player_candidate).length;
         const synthCount = frame.detections.filter(d => d.synthesized).length;
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
+        const jerseyCount = frame.detections.filter(d => d.identity_jersey_number !== undefined && d.identity_jersey_number !== null && d.identity_jersey_number !== '').length;
         const courtText = firstDetection
             ? ` First court point: (${firstDetection.court_xy[0].toFixed(1)}, ${firstDetection.court_xy[1].toFixed(1)}).`
             : '';
@@ -421,7 +425,7 @@ function redrawOverlay() {
             `Cyan skeletons show keypoints.` +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${jerseyCount} jersey-tagged // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -457,6 +461,9 @@ function populateFeedbackTrackList() {
         const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
             ? ` // #${detection.identity_jersey_number}`
             : '';
+        const jerseyConfidenceLabel = detection.identity_jersey_number_confidence !== null && detection.identity_jersey_number_confidence !== undefined
+            ? ` // jersey ${Math.round(detection.identity_jersey_number_confidence * 100)}`
+            : '';
         const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
             ? ` // active ${Math.round(detection.active_player_score * 100)}`
             : '';
@@ -464,7 +471,7 @@ function populateFeedbackTrackList() {
             ? ` // motion ${detection.motion_speed_px.toFixed(1)}`
             : '';
         const synthLabel = detection.synthesized ? ' // repaired' : '';
-        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
+        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }
@@ -529,8 +536,10 @@ function loadPerceptionOverlay(clip) {
             if (data.enabled) {
                 explainerTitle.textContent = 'Layer 1 Perception Overlay';
                 explainerDescription.textContent =
-                    `Artifact ready for ${clip.id}. Toggle the overlay and step through the clip to inspect real detections, pose, and calibrated court coordinates when available.`;
-                explainerStatus.textContent = data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only';
+                    `Artifact ready for ${clip.id}. Toggle the overlay and step through the clip to inspect real detections, pose, identity repairs, jersey evidence, and calibrated court coordinates when available.`;
+                const jerseyReady = data.postprocess && data.postprocess.jersey_ocr && data.postprocess.jersey_ocr.reader_available;
+                const jerseyCount = data.postprocess && data.postprocess.jersey_ocr ? data.postprocess.jersey_ocr.identity_count_with_consensus : 0;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';

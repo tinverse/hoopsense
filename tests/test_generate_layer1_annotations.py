@@ -11,6 +11,7 @@ sys.modules.setdefault("ultralytics", ultralytics_stub)
 
 cv2_stub = types.ModuleType("cv2")
 cv2_stub.COLOR_BGR2GRAY = 0
+cv2_stub.CV_64F = 0
 
 
 def cvt_color_to_gray(image, _flag):
@@ -18,11 +19,15 @@ def cvt_color_to_gray(image, _flag):
 
 
 cv2_stub.cvtColor = cvt_color_to_gray
+cv2_stub.Laplacian = lambda image, _dtype: image.astype(float)
 sys.modules.setdefault("cv2", cv2_stub)
 
 from tools.review.labeller.generate_layer1_annotations import (
+    _normalize_jersey_text,
+    _resolve_identity_jersey_consensus,
     _score_identity_link,
     annotate_active_players,
+    annotate_identity_jersey_numbers,
     estimate_uniform_bucket,
     repair_short_track_gaps,
     score_active_player,
@@ -275,6 +280,59 @@ class TrackRepairTest(unittest.TestCase):
         self.assertEqual(successor["identity_track_source"], "repaired")
         self.assertEqual(successor["identity_repair"]["predecessor_track_id"], 3)
         self.assertEqual(successor["identity_repair"]["successor_track_id"], 19)
+
+
+class JerseyIdentityTest(unittest.TestCase):
+    def test_normalize_jersey_text_handles_common_ocr_confusions(self):
+        self.assertEqual(_normalize_jersey_text("1O"), "10")
+        self.assertEqual(_normalize_jersey_text("O8"), "8")
+        self.assertIsNone(_normalize_jersey_text("ABC"))
+        self.assertIsNone(_normalize_jersey_text("000"))
+
+    def test_resolve_identity_jersey_consensus_requires_votes_and_share(self):
+        consensus = _resolve_identity_jersey_consensus(
+            [
+                {"candidate": "24", "ocr_confidence": 0.9, "sharpness": 90.0},
+                {"candidate": "24", "ocr_confidence": 0.8, "sharpness": 80.0},
+                {"candidate": "84", "ocr_confidence": 0.2, "sharpness": 30.0},
+            ]
+        )
+        self.assertIsNotNone(consensus)
+        self.assertEqual(consensus["number"], "24")
+        self.assertGreaterEqual(consensus["confidence"], 0.62)
+
+    def test_annotate_identity_jersey_numbers_applies_consensus_to_identity(self):
+        import tools.review.labeller.generate_layer1_annotations as gla
+
+        original_reader = gla.get_easyocr_reader
+        original_collect = gla._collect_jersey_evidence
+        try:
+            gla.get_easyocr_reader = lambda: object()
+
+            def fake_collect(_reader, detection):
+                mapping = {
+                    3: {"candidate": "24", "raw_text": "24", "ocr_confidence": 0.92, "sharpness": 70.0, "source": "stub"},
+                    19: {"candidate": "24", "raw_text": "24", "ocr_confidence": 0.81, "sharpness": 65.0, "source": "stub"},
+                }
+                evidence = mapping.get(detection.get("track_id"))
+                if evidence:
+                    detection["jersey_number_evidence"] = evidence
+                return evidence
+
+            gla._collect_jersey_evidence = fake_collect
+            frames = [
+                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+            ]
+            summary = annotate_identity_jersey_numbers(frames)
+            self.assertTrue(summary["reader_available"])
+            self.assertEqual(summary["identity_count_with_consensus"], 1)
+            self.assertEqual(frames[0]["detections"][0]["identity_jersey_number"], "24")
+            self.assertEqual(frames[1]["detections"][0]["identity_jersey_number"], "24")
+            self.assertEqual(frames[1]["detections"][0]["identity_jersey_evidence_count"], 2)
+        finally:
+            gla.get_easyocr_reader = original_reader
+            gla._collect_jersey_evidence = original_collect
 
 
 class ActivePlayerAnnotationTest(unittest.TestCase):

@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from pathlib import Path
 
 import cv2
@@ -25,6 +26,14 @@ MOTION_SCORE_THRESHOLD_PX = 6.0
 IDENTITY_REPAIR_SCORE_THRESHOLD = 0.72
 IDENTITY_REPAIR_MAX_COURT_DISTANCE = 260.0
 IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = 1.35
+JERSEY_OCR_MIN_CROP_WIDTH = 18
+JERSEY_OCR_MIN_CROP_HEIGHT = 18
+JERSEY_OCR_MIN_SHARPNESS = 25.0
+JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY = 5
+JERSEY_OCR_CONSENSUS_MIN_VOTES = 2
+JERSEY_OCR_CONSENSUS_MIN_SHARE = 0.62
+_EASYOCR_READER = None
+_EASYOCR_READER_ATTEMPTED = False
 
 
 def _to_float_list(values):
@@ -89,6 +98,273 @@ def _initialize_identity_fields(detection):
     detection["identity_jersey_number"] = detection.get("identity_jersey_number")
     detection["identity_jersey_number_confidence"] = detection.get("identity_jersey_number_confidence")
     detection["identity_jersey_number_source"] = detection.get("identity_jersey_number_source")
+    detection["identity_jersey_evidence_count"] = detection.get("identity_jersey_evidence_count")
+
+
+def get_easyocr_reader():
+    global _EASYOCR_READER, _EASYOCR_READER_ATTEMPTED
+    if _EASYOCR_READER_ATTEMPTED:
+        return _EASYOCR_READER
+    _EASYOCR_READER_ATTEMPTED = True
+    try:
+        import torch
+        import easyocr
+    except Exception:
+        _EASYOCR_READER = None
+        return None
+    try:
+        _EASYOCR_READER = easyocr.Reader(["en"], gpu=bool(torch.cuda.is_available()), verbose=False)
+    except Exception:
+        _EASYOCR_READER = None
+    return _EASYOCR_READER
+
+
+def _torso_crop_bounds(frame_shape, bbox_xyxy, keypoints_xy=None, keypoints_conf=None):
+    height, width = frame_shape[:2]
+    x1, y1, x2, y2 = [int(round(v)) for v in bbox_xyxy]
+    x1 = max(0, min(width - 1, x1))
+    x2 = max(0, min(width, x2))
+    y1 = max(0, min(height - 1, y1))
+    y2 = max(0, min(height, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    if keypoints_xy and keypoints_conf:
+        torso_indices = [5, 6, 11, 12]
+        torso_points = []
+        for idx in torso_indices:
+            if idx < len(keypoints_xy):
+                conf = keypoints_conf[idx] if idx < len(keypoints_conf) else 1.0
+                if conf >= 0.2:
+                    torso_points.append(keypoints_xy[idx])
+        if torso_points:
+            xs = [p[0] for p in torso_points]
+            ys = [p[1] for p in torso_points]
+            pad_x = max(10, int((max(xs) - min(xs)) * 0.35))
+            pad_y = max(12, int((max(ys) - min(ys)) * 0.3))
+            tx1 = max(0, int(min(xs) - pad_x))
+            tx2 = min(width, int(max(xs) + pad_x))
+            ty1 = max(0, int(min(ys) - pad_y))
+            ty2 = min(height, int(max(ys) + pad_y))
+            if tx2 > tx1 and ty2 > ty1:
+                return tx1, ty1, tx2, ty2
+
+    top = y1 + int((y2 - y1) * 0.15)
+    bottom = y1 + int((y2 - y1) * 0.62)
+    left = x1 + int((x2 - x1) * 0.18)
+    right = x2 - int((x2 - x1) * 0.18)
+    if bottom > top and right > left:
+        return left, top, right, bottom
+    return None
+
+
+def _extract_jersey_crop(frame, detection):
+    bounds = _torso_crop_bounds(
+        frame.shape,
+        detection.get("bbox_xyxy", [0, 0, 0, 0]),
+        keypoints_xy=detection.get("keypoints_xy"),
+        keypoints_conf=detection.get("keypoints_conf"),
+    )
+    if bounds is None:
+        return None, 0.0
+    x1, y1, x2, y2 = bounds
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0 or crop.shape[0] < JERSEY_OCR_MIN_CROP_HEIGHT or crop.shape[1] < JERSEY_OCR_MIN_CROP_WIDTH:
+        return None, 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return crop, sharpness
+
+
+def _normalize_jersey_text(text):
+    if not text:
+        return None
+    raw = str(text).strip().upper()
+    if not raw:
+        return None
+    if not any(ch.isdigit() for ch in raw) and len(raw) > 2:
+        return None
+    cleaned = (
+        raw
+        .upper()
+        .replace("O", "0")
+        .replace("I", "1")
+        .replace("L", "1")
+        .replace("S", "5")
+        .replace("B", "8")
+        .replace("Z", "2")
+    )
+    digits = re.sub(r"[^0-9]", "", cleaned)
+    if not digits:
+        return None
+    if len(digits) > 2:
+        digits = digits[-2:]
+    try:
+        value = int(digits)
+    except ValueError:
+        return None
+    if value <= 0 or value > 99:
+        return None
+    return str(value)
+
+
+def _run_jersey_ocr(reader, crop_bgr):
+    if reader is None or crop_bgr is None or crop_bgr.size == 0:
+        return None
+    try:
+        results = reader.readtext(crop_bgr, detail=1, allowlist="0123456789OILSBZ", paragraph=False)
+    except Exception:
+        return None
+    best = None
+    for item in results:
+        if len(item) < 3:
+            continue
+        _bbox, raw_text, conf = item
+        normalized = _normalize_jersey_text(raw_text)
+        if normalized is None:
+            continue
+        confidence = float(conf)
+        if best is None or confidence > best["ocr_confidence"]:
+            best = {
+                "candidate": normalized,
+                "raw_text": str(raw_text),
+                "ocr_confidence": confidence,
+            }
+    return best
+
+
+def _collect_jersey_evidence(reader, detection):
+    crop = detection.get("_jersey_crop_bgr")
+    sharpness = float(detection.get("_jersey_crop_sharpness") or 0.0)
+    if crop is None or sharpness < JERSEY_OCR_MIN_SHARPNESS:
+        return None
+    ocr = _run_jersey_ocr(reader, crop)
+    if ocr is None:
+        return None
+    evidence = {
+        "candidate": ocr["candidate"],
+        "raw_text": ocr["raw_text"],
+        "ocr_confidence": round(float(ocr["ocr_confidence"]), 4),
+        "sharpness": round(sharpness, 3),
+        "source": "easyocr_v1",
+    }
+    detection["jersey_number_evidence"] = evidence
+    return evidence
+
+
+def _resolve_identity_jersey_consensus(evidence_items):
+    if len(evidence_items) < JERSEY_OCR_CONSENSUS_MIN_VOTES:
+        return None
+    votes = {}
+    total_weight = 0.0
+    total_count = 0
+    for evidence in evidence_items:
+        candidate = evidence.get("candidate")
+        if candidate is None:
+            continue
+        confidence = float(evidence.get("ocr_confidence") or 0.0)
+        sharpness = float(evidence.get("sharpness") or 0.0)
+        quality_weight = _clip01(sharpness / 120.0)
+        weight = max(0.05, confidence * max(0.2, quality_weight))
+        total_weight += weight
+        total_count += 1
+        row = votes.setdefault(candidate, {"vote_count": 0, "weight": 0.0})
+        row["vote_count"] += 1
+        row["weight"] += weight
+    if total_count < JERSEY_OCR_CONSENSUS_MIN_VOTES or total_weight <= 0.0:
+        return None
+    winner, winner_row = max(votes.items(), key=lambda item: (item[1]["weight"], item[1]["vote_count"], item[0]))
+    confidence = winner_row["weight"] / total_weight
+    if winner_row["vote_count"] < JERSEY_OCR_CONSENSUS_MIN_VOTES:
+        return None
+    if confidence < JERSEY_OCR_CONSENSUS_MIN_SHARE:
+        return None
+    return {
+        "number": winner,
+        "confidence": round(confidence, 4),
+        "vote_count": int(winner_row["vote_count"]),
+        "evidence_count": int(total_count),
+        "votes": {
+            number: {
+                "vote_count": int(row["vote_count"]),
+                "weight": round(float(row["weight"]), 4),
+            }
+            for number, row in sorted(votes.items())
+        },
+        "source": "easyocr_consensus_v1",
+    }
+
+
+def annotate_identity_jersey_numbers(frames):
+    reader = get_easyocr_reader()
+    identity_samples = {}
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            identity_track_id = detection.get("identity_track_id")
+            if identity_track_id is None:
+                detection["identity_jersey_evidence_count"] = 0
+                continue
+            detection["identity_jersey_evidence_count"] = 0
+            evidence = _collect_jersey_evidence(reader, detection)
+            if evidence is None:
+                continue
+            sample = {
+                "frame_idx": frame.get("frame_idx"),
+                "track_id": detection.get("track_id"),
+                "identity_track_id": identity_track_id,
+                **evidence,
+            }
+            bucket = identity_samples.setdefault(identity_track_id, [])
+            bucket.append(sample)
+            bucket.sort(key=lambda item: (item["sharpness"], item["ocr_confidence"]), reverse=True)
+            del bucket[JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY:]
+
+    identity_consensus = {}
+    for identity_track_id, samples in identity_samples.items():
+        consensus = _resolve_identity_jersey_consensus(samples)
+        if consensus is None:
+            continue
+        identity_consensus[identity_track_id] = {
+            **consensus,
+            "samples": samples,
+        }
+
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            identity_track_id = detection.get("identity_track_id")
+            consensus = identity_consensus.get(identity_track_id)
+            if consensus is not None:
+                detection["identity_jersey_number"] = consensus["number"]
+                detection["identity_jersey_number_confidence"] = consensus["confidence"]
+                detection["identity_jersey_number_source"] = consensus["source"]
+                detection["identity_jersey_evidence_count"] = consensus["evidence_count"]
+            detection.pop("_jersey_crop_bgr", None)
+            detection.pop("_jersey_crop_sharpness", None)
+    return {
+        "reader_available": reader is not None,
+        "identity_count_with_consensus": len(identity_consensus),
+        "identity_consensus": {
+            str(identity_track_id): {
+                "number": consensus["number"],
+                "confidence": consensus["confidence"],
+                "vote_count": consensus["vote_count"],
+                "evidence_count": consensus["evidence_count"],
+                "votes": consensus["votes"],
+                "samples": [
+                    {
+                        "frame_idx": sample["frame_idx"],
+                        "track_id": sample["track_id"],
+                        "candidate": sample["candidate"],
+                        "raw_text": sample["raw_text"],
+                        "ocr_confidence": sample["ocr_confidence"],
+                        "sharpness": sample["sharpness"],
+                    }
+                    for sample in consensus["samples"]
+                ],
+            }
+            for identity_track_id, consensus in sorted(identity_consensus.items())
+        },
+    }
 
 
 class KalmanTrack2D:
@@ -305,6 +581,10 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
     )
     detection["uniform_bucket"] = uniform_stats["bucket"]
     detection["uniform_luma_mean"] = uniform_stats["luma_mean"]
+    jersey_crop, jersey_sharpness = _extract_jersey_crop(frame, detection)
+    if jersey_crop is not None:
+        detection["_jersey_crop_bgr"] = jersey_crop
+        detection["_jersey_crop_sharpness"] = jersey_sharpness
 
     return detection
 
@@ -763,6 +1043,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     frames = repair_short_track_gaps(frames, video_meta)
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
+    jersey_ocr = annotate_identity_jersey_numbers(frames)
 
     artifact = {
         "schema_version": "1.0.0",
@@ -782,12 +1063,22 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,
             "track_motion_smoother": "kalman_constant_velocity_v1",
             "identity_repair": "trajectory_bridge_v1",
+            "jersey_ocr": {
+                "backend": "easyocr_v1",
+                "reader_available": jersey_ocr["reader_available"],
+                "max_samples_per_identity": JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY,
+                "min_sharpness": JERSEY_OCR_MIN_SHARPNESS,
+                "consensus_min_votes": JERSEY_OCR_CONSENSUS_MIN_VOTES,
+                "consensus_min_share": JERSEY_OCR_CONSENSUS_MIN_SHARE,
+                "identity_count_with_consensus": jersey_ocr["identity_count_with_consensus"],
+            },
         },
         "calibration": {
             "enabled": calibration is not None,
             "source": str(calibration_file.relative_to(REPO_ROOT)) if calibration_file and calibration_file.exists() else None,
             "type": calibration.get("type") if calibration else None,
         },
+        "identity_jersey_consensus": jersey_ocr["identity_consensus"],
         "frames": frames,
     }
 
