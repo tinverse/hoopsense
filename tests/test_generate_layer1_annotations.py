@@ -21,6 +21,7 @@ cv2_stub.cvtColor = cvt_color_to_gray
 sys.modules.setdefault("cv2", cv2_stub)
 
 from tools.review.labeller.generate_layer1_annotations import (
+    _score_identity_link,
     annotate_active_players,
     estimate_uniform_bucket,
     repair_short_track_gaps,
@@ -194,6 +195,86 @@ class TrackRepairTest(unittest.TestCase):
         ]
         repaired = repair_short_track_gaps(frames, max_gap=2)
         self.assertEqual(repaired[1]["detections"], [])
+
+    def test_score_identity_link_rejects_conflicting_uniforms(self):
+        link = _score_identity_link(
+            {
+                "active_player_candidate": True,
+                "uniform_bucket": "dark",
+                "bbox_xywh": [100.0, 120.0, 50.0, 150.0],
+                "smoothed_center_xy": [100.0, 120.0],
+                "smoothed_velocity_xy": [20.0, 0.0],
+                "confidence": 0.8,
+            },
+            {
+                "active_player_candidate": True,
+                "uniform_bucket": "light",
+                "bbox_xywh": [102.0, 120.0, 50.0, 150.0],
+                "smoothed_center_xy": [102.0, 120.0],
+                "smoothed_velocity_xy": [18.0, 0.0],
+                "confidence": 0.8,
+            },
+            gap_frames=1,
+            fps=30.0,
+        )
+        self.assertIsNone(link)
+
+    def test_repair_short_track_gaps_bridges_short_identity_switch(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [120.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [108.0, 82.0, 168.0, 262.0],
+                    "bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "smoothed_center_xy": [138.0, 172.0],
+                    "smoothed_velocity_xy": [118.0, 1.0],
+                    "smoothed_bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "court_xy": [1015.0, 605.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        repaired = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+        )
+        inserted = repaired[1]["detections"]
+        self.assertEqual(len(inserted), 1)
+        self.assertTrue(inserted[0]["synthesized"])
+        self.assertEqual(inserted[0]["identity_track_id"], 3)
+        self.assertEqual(inserted[0]["identity_repair"]["kind"], "short_gap_identity_bridge")
+        successor = repaired[2]["detections"][0]
+        self.assertEqual(successor["track_id"], 19)
+        self.assertEqual(successor["identity_track_id"], 3)
+        self.assertEqual(successor["identity_track_source"], "repaired")
+        self.assertEqual(successor["identity_repair"]["predecessor_track_id"], 3)
+        self.assertEqual(successor["identity_repair"]["successor_track_id"], 19)
 
 
 class ActivePlayerAnnotationTest(unittest.TestCase):

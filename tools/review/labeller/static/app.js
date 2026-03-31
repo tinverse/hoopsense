@@ -349,6 +349,12 @@ function drawDetectionOverlay(detection) {
     const trackLabel = detection.track_id !== null && detection.track_id !== undefined
         ? `P${detection.track_id}`
         : detection.class_name;
+    const identityLabel = detection.identity_track_id !== null && detection.identity_track_id !== undefined && detection.identity_track_id !== detection.track_id
+        ? `/I${detection.identity_track_id}`
+        : '';
+    const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
+        ? ` #${detection.identity_jersey_number}`
+        : '';
     const uniformLabel = detection.uniform_bucket && detection.uniform_bucket !== 'unknown'
         ? ` ${detection.uniform_bucket.toUpperCase()}`
         : '';
@@ -367,7 +373,7 @@ function drawDetectionOverlay(detection) {
     ctx.lineWidth = 4;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    const label = `${trackLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
+    const label = `${trackLabel}${identityLabel}${jerseyLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
     const labelWidth = Math.max(120, label.length * 10 + 20);
     const labelHeight = 26;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
@@ -405,6 +411,7 @@ function redrawOverlay() {
         const firstDetection = frame.detections.find(d => d.court_xy);
         const activeCount = frame.detections.filter(d => d.active_player_candidate).length;
         const synthCount = frame.detections.filter(d => d.synthesized).length;
+        const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const courtText = firstDetection
             ? ` First court point: (${firstDetection.court_xy[0].toFixed(1)}, ${firstDetection.court_xy[1].toFixed(1)}).`
             : '';
@@ -414,7 +421,7 @@ function redrawOverlay() {
             `Cyan skeletons show keypoints.` +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -444,6 +451,12 @@ function populateFeedbackTrackList() {
             : `det-${index}`;
         opt.value = trackId;
         const uniformLabel = detection.uniform_bucket ? ` // ${detection.uniform_bucket}` : '';
+        const identityLabel = detection.identity_track_id !== null && detection.identity_track_id !== undefined && detection.identity_track_id !== detection.track_id
+            ? ` // I${detection.identity_track_id}`
+            : '';
+        const jerseyLabel = detection.identity_jersey_number !== null && detection.identity_jersey_number !== undefined && detection.identity_jersey_number !== ''
+            ? ` // #${detection.identity_jersey_number}`
+            : '';
         const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
             ? ` // active ${Math.round(detection.active_player_score * 100)}`
             : '';
@@ -451,7 +464,7 @@ function populateFeedbackTrackList() {
             ? ` // motion ${detection.motion_speed_px.toFixed(1)}`
             : '';
         const synthLabel = detection.synthesized ? ' // repaired' : '';
-        opt.textContent = `Track ${trackId}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
+        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }

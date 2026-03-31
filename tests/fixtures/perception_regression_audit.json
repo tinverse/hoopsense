@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-03-31T04:10:18.849018+00:00",
+  "generated_at": "2026-03-31T06:08:39.874007+00:00",
   "fixture": "tests/fixtures/perception_regression_cases.json",
   "artifact_dir": "data/review_artifacts/layer1",
   "case_count": 7,
@@ -159,6 +159,15 @@
           "5",
           "6"
         ],
+        "canonical_track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "canonical_track_count": 6,
         "active_candidate_count": 3,
         "active_candidate_track_ids": [
           "1",
@@ -225,6 +234,18 @@
           "5",
           "6"
         ],
+        "canonical_track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "canonical_track_count": 9,
         "active_candidate_count": 7,
         "active_candidate_track_ids": [
           "1",
@@ -265,6 +286,18 @@
           "5",
           "6"
         ],
+        "canonical_track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "canonical_track_count": 9,
         "motion_speed_max": 638.881,
         "motion_speed_median": 28.837,
         "synthesized_detection_count": 0
@@ -297,6 +330,18 @@
           "8",
           "9"
         ],
+        "canonical_track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "canonical_track_count": 9,
         "active_candidate_count": 0,
         "active_candidate_track_ids": [],
         "synthesized_detection_count": 0,
@@ -352,6 +397,13 @@
           "4",
           "74"
         ],
+        "canonical_track_ids": [
+          "100",
+          "36",
+          "4",
+          "74"
+        ],
+        "canonical_track_count": 4,
         "active_candidate_count": 0,
         "active_candidate_track_ids": [],
         "synthesized_detection_count": 0,
@@ -404,6 +456,16 @@
           "56",
           "6"
         ],
+        "canonical_track_ids": [
+          "10",
+          "16",
+          "17",
+          "19",
+          "42",
+          "56",
+          "6"
+        ],
+        "canonical_track_count": 7,
         "active_candidate_count": 5,
         "active_candidate_track_ids": [
           "10",
@@ -466,6 +528,13 @@
           "123",
           "3"
         ],
+        "canonical_track_ids": [
+          "121",
+          "122",
+          "123",
+          "3"
+        ],
+        "canonical_track_count": 4,
         "active_candidate_count": 2,
         "active_candidate_track_ids": [
           "121",
@@ -530,6 +599,18 @@
           "80",
           "97"
         ],
+        "canonical_track_ids": [
+          "1",
+          "118",
+          "121",
+          "122",
+          "19",
+          "31",
+          "6",
+          "80",
+          "97"
+        ],
+        "canonical_track_count": 9,
         "active_candidate_count": 3,
         "active_candidate_track_ids": [
           "19",

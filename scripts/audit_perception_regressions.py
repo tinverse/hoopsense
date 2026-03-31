@@ -58,6 +58,8 @@ CATEGORY_SIGNAL_MAP = {
     ],
     "id_switch": [
         "track_ids",
+        "canonical_track_ids",
+        "canonical_track_count",
         "motion_speed_max",
         "motion_speed_median",
         "synthesized_detection_count",
@@ -123,6 +125,11 @@ def summarize_frame(frame: dict) -> dict:
         for detection in detections
         if detection.get("track_id") is not None
     )
+    canonical_track_ids = sorted(
+        str(detection.get("identity_track_id", detection.get("track_id")))
+        for detection in detections
+        if detection.get("identity_track_id", detection.get("track_id")) is not None
+    )
     active = [d for d in detections if d.get("active_player_candidate")]
     motion_speeds = [float(d.get("motion_speed_px") or 0.0) for d in detections]
     uniform_bucket_counts = Counter(
@@ -152,6 +159,8 @@ def summarize_frame(frame: dict) -> dict:
     return {
         "detection_count": len(detections),
         "track_ids": track_ids,
+        "canonical_track_ids": canonical_track_ids,
+        "canonical_track_count": len(set(canonical_track_ids)),
         "active_candidate_count": len(active),
         "active_candidate_track_ids": sorted(
             str(d.get("track_id"))

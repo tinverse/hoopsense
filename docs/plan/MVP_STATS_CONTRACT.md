@@ -129,9 +129,10 @@ turnovers, and offensive vs defensive rebounds.
 
 ## Identity Requirement
 
-The MVP requires stable internal player identity within a game. It does not require full roster
-or jersey-to-real-name identification in the first slice, but it does require enough continuity
-to assign box-score events to the correct internal player ID.
+The MVP requires stable internal player identity within a game. It does not require full
+jersey-to-real-name roster mapping in the first slice, but it does require enough continuity to
+assign box-score events to the correct internal player ID and attach jersey-number evidence to
+that persistent identity when a trustworthy consensus is available.
 
 ## What Is Explicitly Deferred
 

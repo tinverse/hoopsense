@@ -22,6 +22,9 @@ MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
 SHORT_GAP_REPAIR_MAX_GAP = 3
 MOTION_SCORE_THRESHOLD_PX = 6.0
+IDENTITY_REPAIR_SCORE_THRESHOLD = 0.72
+IDENTITY_REPAIR_MAX_COURT_DISTANCE = 260.0
+IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = 1.35
 
 
 def _to_float_list(values):
@@ -45,6 +48,47 @@ def _interpolate_point_list(points_a, points_b, alpha):
 
 def _clip01(value):
     return max(0.0, min(1.0, float(value)))
+
+
+def _bbox_center_xy(detection):
+    smoothed = detection.get("smoothed_center_xy")
+    if smoothed and len(smoothed) == 2:
+        return float(smoothed[0]), float(smoothed[1])
+    bbox_xywh = detection.get("bbox_xywh")
+    if bbox_xywh and len(bbox_xywh) >= 2:
+        return float(bbox_xywh[0]), float(bbox_xywh[1])
+    bbox_xyxy = detection.get("bbox_xyxy")
+    if bbox_xyxy and len(bbox_xyxy) == 4:
+        x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+        return (x1 + x2) * 0.5, (y1 + y2) * 0.5
+    return 0.0, 0.0
+
+
+def _bbox_size_xy(detection):
+    bbox_xywh = detection.get("smoothed_bbox_xywh") or detection.get("bbox_xywh")
+    if bbox_xywh and len(bbox_xywh) >= 4:
+        return max(1.0, float(bbox_xywh[2])), max(1.0, float(bbox_xywh[3]))
+    bbox_xyxy = detection.get("bbox_xyxy")
+    if bbox_xyxy and len(bbox_xyxy) == 4:
+        x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+        return max(1.0, x2 - x1), max(1.0, y2 - y1)
+    return 1.0, 1.0
+
+
+def _vector_norm(vec):
+    if not vec or len(vec) < 2:
+        return 0.0
+    return float(np.linalg.norm([float(vec[0]), float(vec[1])]))
+
+
+def _initialize_identity_fields(detection):
+    canonical_track_id = detection.get("track_id")
+    detection["identity_track_id"] = canonical_track_id
+    detection["identity_track_source"] = "tracker"
+    detection["identity_repair"] = None
+    detection["identity_jersey_number"] = detection.get("identity_jersey_number")
+    detection["identity_jersey_number_confidence"] = detection.get("identity_jersey_number_confidence")
+    detection["identity_jersey_number_source"] = detection.get("identity_jersey_number_source")
 
 
 class KalmanTrack2D:
@@ -339,8 +383,15 @@ def smooth_track_motion(frames, video_meta):
 
 
 def _interpolate_detection(start_det, end_det, frame_idx, t_ms, alpha):
+    canonical_track_id = start_det.get("identity_track_id", start_det.get("track_id"))
     synthesized = {
         "track_id": start_det.get("track_id"),
+        "identity_track_id": canonical_track_id,
+        "identity_track_source": start_det.get("identity_track_source", "tracker"),
+        "identity_repair": start_det.get("identity_repair"),
+        "identity_jersey_number": start_det.get("identity_jersey_number"),
+        "identity_jersey_number_confidence": start_det.get("identity_jersey_number_confidence"),
+        "identity_jersey_number_source": start_det.get("identity_jersey_number_source"),
         "class_id": start_det.get("class_id"),
         "class_name": start_det.get("class_name"),
         "confidence": round(_lerp(start_det.get("confidence", 0.0), end_det.get("confidence", 0.0), alpha), 4),
@@ -386,17 +437,190 @@ def _interpolate_detection(start_det, end_det, frame_idx, t_ms, alpha):
     return synthesized
 
 
-def repair_short_track_gaps(frames, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
+def _score_identity_link(start_det, end_det, gap_frames, fps):
+    if not start_det.get("active_player_candidate") or not end_det.get("active_player_candidate"):
+        return None
+
+    start_bucket = start_det.get("uniform_bucket")
+    end_bucket = end_det.get("uniform_bucket")
+    if (
+        start_bucket in {"dark", "light"}
+        and end_bucket in {"dark", "light"}
+        and start_bucket != end_bucket
+    ):
+        return None
+
+    dt = max(1.0 / max(float(fps), 1.0), 1e-3)
+    elapsed_s = max(gap_frames + 1, 1) * dt
+    start_cx, start_cy = _bbox_center_xy(start_det)
+    end_cx, end_cy = _bbox_center_xy(end_det)
+    vel_x, vel_y = (start_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2]
+    predicted_x = float(start_cx) + float(vel_x) * elapsed_s
+    predicted_y = float(start_cy) + float(vel_y) * elapsed_s
+    center_distance = float(np.linalg.norm([end_cx - predicted_x, end_cy - predicted_y]))
+
+    _start_w, start_h = _bbox_size_xy(start_det)
+    _end_w, end_h = _bbox_size_xy(end_det)
+    avg_height = max(1.0, (start_h + end_h) * 0.5)
+    max_center_distance = max(40.0, avg_height * IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO)
+    if center_distance > max_center_distance:
+        return None
+    position_score = _clip01(1.0 - (center_distance / max_center_distance))
+
+    start_w, start_h = _bbox_size_xy(start_det)
+    end_w, end_h = _bbox_size_xy(end_det)
+    width_ratio = min(start_w, end_w) / max(start_w, end_w, 1.0)
+    height_ratio = min(start_h, end_h) / max(start_h, end_h, 1.0)
+    size_score = (width_ratio + height_ratio) * 0.5
+    if size_score < 0.55:
+        return None
+
+    start_vel = np.array((start_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2], dtype=float)
+    end_vel = np.array((end_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2], dtype=float)
+    start_speed = float(np.linalg.norm(start_vel))
+    end_speed = float(np.linalg.norm(end_vel))
+    if start_speed > 1.0 and end_speed > 1.0:
+        velocity_score = _clip01((float(np.dot(start_vel, end_vel)) / (start_speed * end_speed) + 1.0) * 0.5)
+    else:
+        velocity_score = 0.5
+
+    if start_bucket == end_bucket and start_bucket in {"dark", "light"}:
+        uniform_score = 1.0
+    elif start_bucket == "unknown" or end_bucket == "unknown":
+        uniform_score = 0.55
+    else:
+        uniform_score = 0.0
+
+    court_score = 0.5
+    if start_det.get("court_xy") and end_det.get("court_xy"):
+        court_distance = float(
+            np.linalg.norm(
+                [
+                    float(end_det["court_xy"][0]) - float(start_det["court_xy"][0]),
+                    float(end_det["court_xy"][1]) - float(start_det["court_xy"][1]),
+                ]
+            )
+        )
+        if court_distance > IDENTITY_REPAIR_MAX_COURT_DISTANCE:
+            return None
+        court_score = _clip01(1.0 - (court_distance / IDENTITY_REPAIR_MAX_COURT_DISTANCE))
+
+    gap_score = _clip01(1.0 - ((gap_frames - 1) / max(SHORT_GAP_REPAIR_MAX_GAP, 1)))
+    confidence_score = min(float(start_det.get("confidence") or 0.0), float(end_det.get("confidence") or 0.0))
+    link_score = (
+        0.34 * position_score
+        + 0.18 * velocity_score
+        + 0.14 * size_score
+        + 0.14 * uniform_score
+        + 0.10 * court_score
+        + 0.06 * gap_score
+        + 0.04 * confidence_score
+    )
+    return {
+        "score": round(float(link_score), 4),
+        "gap_frames": int(gap_frames),
+        "reasons": {
+            "position_score": round(position_score, 4),
+            "velocity_score": round(velocity_score, 4),
+            "size_score": round(size_score, 4),
+            "uniform_score": round(uniform_score, 4),
+            "court_score": round(court_score, 4),
+            "gap_score": round(gap_score, 4),
+            "confidence_score": round(confidence_score, 4),
+            "predicted_center_distance_px": round(center_distance, 3),
+        },
+    }
+
+
+def _find_identity_links(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
+    track_ids = sorted(track_frames)
+    candidates = []
+    for predecessor_track_id in track_ids:
+        predecessor_obs = sorted(track_frames.get(predecessor_track_id, []), key=lambda item: item[0])
+        if not predecessor_obs:
+            continue
+        predecessor_last_frame, predecessor_last_det = predecessor_obs[-1]
+        for successor_track_id in track_ids:
+            if successor_track_id == predecessor_track_id:
+                continue
+            successor_obs = sorted(track_frames.get(successor_track_id, []), key=lambda item: item[0])
+            if not successor_obs:
+                continue
+            successor_first_frame, successor_first_det = successor_obs[0]
+            gap_frames = successor_first_frame - predecessor_last_frame - 1
+            if gap_frames <= 0 or gap_frames > max_gap:
+                continue
+            link = _score_identity_link(predecessor_last_det, successor_first_det, gap_frames, fps)
+            if link is None or link["score"] < IDENTITY_REPAIR_SCORE_THRESHOLD:
+                continue
+            candidates.append(
+                {
+                    "predecessor_track_id": predecessor_track_id,
+                    "successor_track_id": successor_track_id,
+                    "start_det": predecessor_last_det,
+                    "end_det": successor_first_det,
+                    **link,
+                }
+            )
+
+    links_by_predecessor = {}
+    links_by_successor = {}
+    for candidate in sorted(candidates, key=lambda item: (-item["score"], item["gap_frames"], item["successor_track_id"])):
+        predecessor_track_id = candidate["predecessor_track_id"]
+        successor_track_id = candidate["successor_track_id"]
+        if predecessor_track_id in links_by_predecessor or successor_track_id in links_by_successor:
+            continue
+        competing_predecessor_scores = sorted(
+            other["score"]
+            for other in candidates
+            if other["predecessor_track_id"] == predecessor_track_id and other["successor_track_id"] != successor_track_id
+        )
+        competing_successor_scores = sorted(
+            other["score"]
+            for other in candidates
+            if other["successor_track_id"] == successor_track_id and other["predecessor_track_id"] != predecessor_track_id
+        )
+        best_competitor = max(competing_predecessor_scores + competing_successor_scores, default=0.0)
+        if best_competitor >= candidate["score"] - 0.05:
+            continue
+        links_by_predecessor[predecessor_track_id] = candidate
+        links_by_successor[successor_track_id] = candidate
+    return list(links_by_successor.values())
+
+
+def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
     frame_index = {frame["frame_idx"]: frame for frame in frames}
     track_frames = {}
+    fps = float((video_meta or {}).get("fps") or 30.0)
     for frame in frames:
         for detection in frame.get("detections", []):
             track_id = detection.get("track_id")
+            _initialize_identity_fields(detection)
             if track_id is None:
                 continue
             detection["_frame_idx"] = frame["frame_idx"]
             detection["_t_ms"] = frame["t_ms"]
             track_frames.setdefault(track_id, []).append((frame["frame_idx"], detection))
+
+    identity_links = _find_identity_links(track_frames, fps, max_gap=max_gap)
+
+    for link in identity_links:
+        predecessor_track_id = link["predecessor_track_id"]
+        successor_track_id = link["successor_track_id"]
+        canonical_track_id = track_frames[predecessor_track_id][0][1].get("identity_track_id", predecessor_track_id)
+        repair_meta = {
+            "kind": "short_gap_identity_bridge",
+            "predecessor_track_id": predecessor_track_id,
+            "successor_track_id": successor_track_id,
+            "canonical_track_id": canonical_track_id,
+            "gap_frames": link["gap_frames"],
+            "link_score": link["score"],
+            "reasons": link["reasons"],
+        }
+        for _frame_idx, detection in track_frames[successor_track_id]:
+            detection["identity_track_id"] = canonical_track_id
+            detection["identity_track_source"] = "repaired"
+            detection["identity_repair"] = repair_meta
 
     for track_id, observations in track_frames.items():
         observations.sort(key=lambda item: item[0])
@@ -426,9 +650,48 @@ def repair_short_track_gaps(frames, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
                 )
                 frame.setdefault("detections", []).append(synthesized)
 
+    for link in identity_links:
+        start_idx = link["start_det"]["_frame_idx"]
+        end_idx = link["end_det"]["_frame_idx"]
+        start_det = link["start_det"]
+        end_det = link["end_det"]
+        canonical_track_id = start_det.get("identity_track_id", start_det.get("track_id"))
+        for missing_frame_idx in range(start_idx + 1, end_idx):
+            frame = frame_index.get(missing_frame_idx)
+            if frame is None:
+                continue
+            existing_identity_ids = {
+                detection.get("identity_track_id", detection.get("track_id"))
+                for detection in frame.get("detections", [])
+            }
+            if canonical_track_id in existing_identity_ids:
+                continue
+            alpha = (missing_frame_idx - start_idx) / float(end_idx - start_idx)
+            synthesized = _interpolate_detection(
+                start_det,
+                end_det,
+                missing_frame_idx,
+                frame["t_ms"],
+                alpha,
+            )
+            synthesized["identity_track_id"] = canonical_track_id
+            synthesized["identity_track_source"] = "repaired"
+            synthesized["identity_repair"] = {
+                "kind": "short_gap_identity_bridge",
+                "predecessor_track_id": link["predecessor_track_id"],
+                "successor_track_id": link["successor_track_id"],
+                "canonical_track_id": canonical_track_id,
+                "gap_frames": link["gap_frames"],
+                "link_score": link["score"],
+                "reasons": link["reasons"],
+            }
+            frame.setdefault("detections", []).append(synthesized)
+
     for frame in frames:
         frame["detections"].sort(
             key=lambda detection: (
+                detection.get("identity_track_id") is None,
+                detection.get("identity_track_id") if detection.get("identity_track_id") is not None else 1_000_000,
                 detection.get("track_id") is None,
                 detection.get("track_id") if detection.get("track_id") is not None else 1_000_000,
                 not detection.get("synthesized", False),
@@ -497,7 +760,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     }
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
-    frames = repair_short_track_gaps(frames)
+    frames = repair_short_track_gaps(frames, video_meta)
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
 
@@ -515,8 +778,10 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
         "postprocess": {
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
             "short_gap_repair_max_gap": SHORT_GAP_REPAIR_MAX_GAP,
+            "identity_repair_score_threshold": IDENTITY_REPAIR_SCORE_THRESHOLD,
             "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,
             "track_motion_smoother": "kalman_constant_velocity_v1",
+            "identity_repair": "trajectory_bridge_v1",
         },
         "calibration": {
             "enabled": calibration is not None,

@@ -13,7 +13,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-03-29"
+  last_updated: "2026-03-30"
 
 levels:
   L0:
@@ -458,6 +458,11 @@ levels:
       title: Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
       owner: A0
       status: in_progress
+    - id: L3.60
+      parent: L2.3
+      title: Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
+      owner: A0
+      status: pending
     - id: L3.42
       parent: L2.32
       title: Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
@@ -542,6 +547,7 @@ levels:
 priorities:
   current_frontier:
     - L3.53
+    - L3.60
     - L3.46
     - L3.51
     - L3.47
