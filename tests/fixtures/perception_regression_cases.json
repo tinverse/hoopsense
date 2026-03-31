@@ -1,0 +1,152 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-03-31T03:17:48.384108+00:00",
+  "source": "data/training/perception_feedback.jsonl",
+  "case_count": 7,
+  "cases": [
+    {
+      "case_id": "DSC_4953_sample_0:0",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 0,
+      "t_ms_min": 0,
+      "t_ms_max": 0,
+      "issue_types": [
+        "false_negative",
+        "false_positive",
+        "general_note"
+      ],
+      "categories": [
+        "cluster_miss",
+        "false_negative_generic",
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "P6 erroneously detects seated spectator.",
+        "P6 erroneously shows seated spectator. Missed 3 players clustered together at 2 o'clock (front right) wrt P3."
+      ],
+      "source_count": 4
+    },
+    {
+      "case_id": "DSC_4953_sample_0:28",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 28,
+      "t_ms_min": 1167,
+      "t_ms_max": 1167,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "id_switch"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "Player numbers keep changing as they get detected again. P3 and P23 are the same"
+      ],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4959_sample_3:0",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 0,
+      "t_ms_min": 0,
+      "t_ms_max": 0,
+      "issue_types": [
+        "false_negative",
+        "false_positive",
+        "merge_error"
+      ],
+      "categories": [
+        "cluster_merge",
+        "false_negative_generic",
+        "false_positive_generic"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [],
+      "source_count": 3
+    },
+    {
+      "case_id": "DSC_4959_sample_3:120",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "track_ids": [],
+      "notes": [
+        "player dribbling and bringing the ball forward."
+      ],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4959_sample_6:120",
+      "clip_id": "DSC_4959_sample_6",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "dead_ball_context"
+      ],
+      "scene_context": "dead_ball",
+      "track_ids": [],
+      "notes": [
+        "all the players from one team are getting subbed out."
+      ],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4975_sample_1:120",
+      "clip_id": "DSC_4975_sample_1",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "false_negative",
+        "general_note"
+      ],
+      "categories": [
+        "false_negative_generic",
+        "uniform_confusion"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "missed two players, mixing up dark and light uniforms"
+      ],
+      "source_count": 2
+    },
+    {
+      "case_id": "brainrot_dynamite_7_sample_3:120",
+      "clip_id": "brainrot_dynamite_7_sample_3",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "false_positive",
+        "general_note"
+      ],
+      "categories": [
+        "bystander_false_positive",
+        "false_positive_generic"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "P121, P122 and P97 are bystanders"
+      ],
+      "source_count": 2
+    }
+  ]
+}
