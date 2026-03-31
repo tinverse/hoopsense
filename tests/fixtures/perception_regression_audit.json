@@ -1,0 +1,573 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-03-31T04:10:18.849018+00:00",
+  "fixture": "tests/fixtures/perception_regression_cases.json",
+  "artifact_dir": "data/review_artifacts/layer1",
+  "case_count": 7,
+  "limitations": [
+    "This audit reports current artifact signals for reviewed cases; it does not declare pass/fail quality.",
+    "Layer 1 review artifacts are currently person-only; ball detections and live-play truth are not included here.",
+    "Use category rollups to steer heuristic changes, then validate on held-out clips to avoid clip-specific overfitting."
+  ],
+  "category_summary": {
+    "bystander_false_positive": {
+      "active_candidate_count_total": 3,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 9,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 9.0,
+      "avg_active_candidate_count": 3.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "cluster_merge": {
+      "active_candidate_count_total": 0,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 9,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 9.0,
+      "avg_active_candidate_count": 0.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "cluster_miss": {
+      "active_candidate_count_total": 3,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 6,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 6.0,
+      "avg_active_candidate_count": 3.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "dead_ball_context": {
+      "active_candidate_count_total": 5,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 7,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 7.0,
+      "avg_active_candidate_count": 5.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "false_negative_generic": {
+      "active_candidate_count_total": 5,
+      "artifact_found_count": 3,
+      "case_count": 3,
+      "detection_count_total": 19,
+      "frame_found_count": 3,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 6.333,
+      "avg_active_candidate_count": 1.667,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "false_positive_generic": {
+      "active_candidate_count_total": 3,
+      "artifact_found_count": 2,
+      "case_count": 2,
+      "detection_count_total": 18,
+      "frame_found_count": 2,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 9.0,
+      "avg_active_candidate_count": 1.5,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "id_switch": {
+      "active_candidate_count_total": 7,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 9,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 638.881,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 9.0,
+      "avg_active_candidate_count": 7.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "live_play_context": {
+      "active_candidate_count_total": 0,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 4,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 4.0,
+      "avg_active_candidate_count": 0.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "spectator_false_positive": {
+      "active_candidate_count_total": 3,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 6,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 6.0,
+      "avg_active_candidate_count": 3.0,
+      "avg_synthesized_detection_count": 0.0
+    },
+    "uniform_confusion": {
+      "active_candidate_count_total": 2,
+      "artifact_found_count": 1,
+      "case_count": 1,
+      "detection_count_total": 4,
+      "frame_found_count": 1,
+      "motion_speed_max_seen": 0.0,
+      "synthesized_detection_count_total": 0,
+      "avg_detection_count": 4.0,
+      "avg_active_candidate_count": 2.0,
+      "avg_synthesized_detection_count": 0.0
+    }
+  },
+  "cases": [
+    {
+      "case_id": "DSC_4953_sample_0:0",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 0,
+      "categories": [
+        "cluster_miss",
+        "false_negative_generic",
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_0.perception.json",
+      "notes": [
+        "P6 erroneously detects seated spectator.",
+        "P6 erroneously shows seated spectator. Missed 3 players clustered together at 2 o'clock (front right) wrt P3."
+      ],
+      "frame_metrics": {
+        "detection_count": 6,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "active_candidate_count": 3,
+        "active_candidate_track_ids": [
+          "1",
+          "3",
+          "4"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 6,
+        "zero_motion_detection_count": 6,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 4,
+          "unknown": 2
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 1
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 6,
+        "overlap_pair_count": 0,
+        "synthesized_detection_count": 0,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "active_candidate_count": 3,
+        "low_motion_detection_count": 6,
+        "zero_motion_detection_count": 6
+      }
+    },
+    {
+      "case_id": "DSC_4953_sample_0:28",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 28,
+      "categories": [
+        "id_switch"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_0.perception.json",
+      "notes": [
+        "Player numbers keep changing as they get detected again. P3 and P23 are the same"
+      ],
+      "frame_metrics": {
+        "detection_count": 9,
+        "track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "active_candidate_count": 7,
+        "active_candidate_track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 2,
+        "zero_motion_detection_count": 1,
+        "motion_speed_min": 0.179,
+        "motion_speed_median": 28.837,
+        "motion_speed_max": 638.881,
+        "uniform_bucket_counts": {
+          "dark": 4,
+          "light": 2,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 4,
+          "light": 1,
+          "unknown": 2
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "motion_speed_max": 638.881,
+        "motion_speed_median": 28.837,
+        "synthesized_detection_count": 0
+      }
+    },
+    {
+      "case_id": "DSC_4959_sample_3:0",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 0,
+      "categories": [
+        "cluster_merge",
+        "false_negative_generic",
+        "false_positive_generic"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_3.perception.json",
+      "notes": [],
+      "frame_metrics": {
+        "detection_count": 9,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "active_candidate_count": 0,
+        "active_candidate_track_ids": [],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 9,
+        "zero_motion_detection_count": 9,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 6,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {},
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 9,
+        "overlap_pair_count": 0,
+        "synthesized_detection_count": 0,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "active_candidate_count": 0
+      }
+    },
+    {
+      "case_id": "DSC_4959_sample_3:120",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 120,
+      "categories": [
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_3.perception.json",
+      "notes": [
+        "player dribbling and bringing the ball forward."
+      ],
+      "frame_metrics": {
+        "detection_count": 4,
+        "track_ids": [
+          "100",
+          "36",
+          "4",
+          "74"
+        ],
+        "active_candidate_count": 0,
+        "active_candidate_track_ids": [],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 4,
+        "zero_motion_detection_count": 4,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 2
+        },
+        "active_uniform_bucket_counts": {},
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "active_candidate_count": 0,
+        "motion_speed_max": 0.0,
+        "motion_speed_median": 0.0,
+        "track_ids": [
+          "100",
+          "36",
+          "4",
+          "74"
+        ]
+      }
+    },
+    {
+      "case_id": "DSC_4959_sample_6:120",
+      "clip_id": "DSC_4959_sample_6",
+      "frame_idx": 120,
+      "categories": [
+        "dead_ball_context"
+      ],
+      "scene_context": "dead_ball",
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_6.perception.json",
+      "notes": [
+        "all the players from one team are getting subbed out."
+      ],
+      "frame_metrics": {
+        "detection_count": 7,
+        "track_ids": [
+          "10",
+          "16",
+          "17",
+          "19",
+          "42",
+          "56",
+          "6"
+        ],
+        "active_candidate_count": 5,
+        "active_candidate_track_ids": [
+          "10",
+          "16",
+          "19",
+          "42",
+          "56"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 7,
+        "zero_motion_detection_count": 7,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 1,
+          "unknown": 6
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 1,
+          "unknown": 4
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "active_candidate_count": 5,
+        "low_motion_detection_count": 7,
+        "zero_motion_detection_count": 7,
+        "track_ids": [
+          "10",
+          "16",
+          "17",
+          "19",
+          "42",
+          "56",
+          "6"
+        ]
+      }
+    },
+    {
+      "case_id": "DSC_4975_sample_1:120",
+      "clip_id": "DSC_4975_sample_1",
+      "frame_idx": 120,
+      "categories": [
+        "false_negative_generic",
+        "uniform_confusion"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4975_sample_1.perception.json",
+      "notes": [
+        "missed two players, mixing up dark and light uniforms"
+      ],
+      "frame_metrics": {
+        "detection_count": 4,
+        "track_ids": [
+          "121",
+          "122",
+          "123",
+          "3"
+        ],
+        "active_candidate_count": 2,
+        "active_candidate_track_ids": [
+          "121",
+          "3"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 4,
+        "zero_motion_detection_count": 4,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 4
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 2
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 4,
+        "synthesized_detection_count": 0,
+        "track_ids": [
+          "121",
+          "122",
+          "123",
+          "3"
+        ],
+        "uniform_bucket_counts": {
+          "dark": 4
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 2
+        }
+      }
+    },
+    {
+      "case_id": "brainrot_dynamite_7_sample_3:120",
+      "clip_id": "brainrot_dynamite_7_sample_3",
+      "frame_idx": 120,
+      "categories": [
+        "bystander_false_positive",
+        "false_positive_generic"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/brainrot_dynamite_7_sample_3.perception.json",
+      "notes": [
+        "P121, P122 and P97 are bystanders"
+      ],
+      "frame_metrics": {
+        "detection_count": 9,
+        "track_ids": [
+          "1",
+          "118",
+          "121",
+          "122",
+          "19",
+          "31",
+          "6",
+          "80",
+          "97"
+        ],
+        "active_candidate_count": 3,
+        "active_candidate_track_ids": [
+          "19",
+          "31",
+          "80"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 9,
+        "zero_motion_detection_count": 9,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "uniform_bucket_counts": {
+          "dark": 8,
+          "unknown": 1
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 3
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 9,
+        "active_candidate_count": 3,
+        "low_motion_detection_count": 9,
+        "zero_motion_detection_count": 9,
+        "track_ids": [
+          "1",
+          "118",
+          "121",
+          "122",
+          "19",
+          "31",
+          "6",
+          "80",
+          "97"
+        ]
+      }
+    }
+  ]
+}

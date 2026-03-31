@@ -114,6 +114,7 @@ The current highest-priority frontier is:
 - [x] Add an explicit general-note save path in the labeller so freeform perception review notes are not silently lost
 - [x] Replace named-point calibration clicks with primitive-based line and arc sampling in the labeller
 - [x] Normalize labeller feedback into a categorized regression fixture for Layer 1 tracking and postprocess work
+- [x] Add a regression-audit report over reviewed Layer 1 failure cases to guide tracking changes without clip-specific overfitting
 - [x] Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt

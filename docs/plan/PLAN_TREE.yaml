@@ -533,6 +533,11 @@ levels:
       title: Normalize labeller feedback into a categorized regression fixture for Layer 1 tracking and postprocess work
       owner: A0
       status: completed
+    - id: L3.59
+      parent: L2.32
+      title: Add a regression-audit report over reviewed Layer 1 failure cases to guide tracking changes without clip-specific overfitting
+      owner: A0
+      status: completed
 
 priorities:
   current_frontier:
@@ -574,6 +579,7 @@ priorities:
     - Use motion-aware track smoothing as a Layer 1 postprocess signal before expanding to heavier live-play gating or tracker rewrites.
     - Make review feedback robust enough that multi-frame reviewer observations are not lost when they do not map cleanly to a single error button.
     - Convert qualitative review notes into a reusable regression fixture before treating them as training signal.
+    - Use the reviewed regression cases as an audit surface, not as clip-specific exception rules.
     - Improve player-track quality at the Layer 1 artifact stage before expanding downstream possession and stats logic.
     - Align task tracking with the actual architecture before more feature work lands.
     - Put dataset and checkpoint governance in place before scaling training complexity.
