@@ -21,6 +21,9 @@ VALID_FEEDBACK_ISSUES = {
     "merge_error",
     "track_error",
     "pose_error",
+    "live_play",
+    "dead_ball",
+    "uncertain_play_state",
     "general_note",
 }
 

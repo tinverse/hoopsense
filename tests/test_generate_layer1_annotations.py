@@ -29,11 +29,13 @@ from tools.review.labeller.generate_layer1_annotations import (
     annotate_team_appearance_consistency,
     annotate_active_players,
     annotate_identity_jersey_numbers,
+    annotate_live_play,
     estimate_uniform_bucket,
     estimate_torso_color_histogram,
     histogram_intersection_distance,
     repair_short_track_gaps,
     score_active_player,
+    score_live_play_frame,
     smooth_track_motion,
 )
 
@@ -434,6 +436,110 @@ class ActivePlayerAnnotationTest(unittest.TestCase):
         self.assertIn("active_player_score", detection)
         self.assertIn("active_player_candidate", detection)
         self.assertIn("active_player_reasons", detection)
+
+
+class LivePlayGateTest(unittest.TestCase):
+    def test_score_live_play_frame_prefers_multi_player_motion(self):
+        live_info = score_live_play_frame(
+            {
+                "frame_idx": 10,
+                "detections": [
+                    {
+                        "track_id": 1,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 85.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                    {
+                        "track_id": 2,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 62.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                    {
+                        "track_id": 3,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 41.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                ],
+            }
+        )
+        self.assertGreaterEqual(live_info["score"], 0.62)
+        self.assertEqual(live_info["label"], "live_play")
+
+    def test_score_live_play_frame_marks_idle_sparse_frame_dead_ball(self):
+        live_info = score_live_play_frame(
+            {
+                "frame_idx": 3,
+                "detections": [
+                    {
+                        "track_id": 6,
+                        "active_player_candidate": False,
+                        "motion_speed_px": 0.0,
+                        "active_player_reasons": {"court_in_bounds": False, "edge_penalty": 0.2},
+                    },
+                    {
+                        "track_id": 7,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 0.0,
+                        "active_player_reasons": {"court_in_bounds": False, "edge_penalty": 0.2},
+                    },
+                ],
+            }
+        )
+        self.assertLessEqual(live_info["score"], 0.38)
+        self.assertEqual(live_info["label"], "dead_ball")
+
+    def test_annotate_live_play_stitches_segment_with_hysteresis(self):
+        live_frame = {
+            "detections": [
+                {
+                    "track_id": 1,
+                    "active_player_candidate": True,
+                    "motion_speed_px": 75.0,
+                    "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                },
+                {
+                    "track_id": 2,
+                    "active_player_candidate": True,
+                    "motion_speed_px": 68.0,
+                    "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                },
+                {
+                    "track_id": 3,
+                    "active_player_candidate": True,
+                    "motion_speed_px": 54.0,
+                    "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                },
+            ],
+        }
+        dip_frame = {
+            "detections": [
+                {
+                    "track_id": 1,
+                    "active_player_candidate": True,
+                    "motion_speed_px": 4.0,
+                    "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                },
+                {
+                    "track_id": 2,
+                    "active_player_candidate": True,
+                    "motion_speed_px": 3.0,
+                    "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                },
+            ],
+        }
+        frames = []
+        for frame_idx in range(5):
+            frame = {"frame_idx": frame_idx, "t_ms": frame_idx * 33, **live_frame}
+            frames.append(frame)
+        frames.append({"frame_idx": 5, "t_ms": 165, **dip_frame})
+        summary = annotate_live_play(frames, {"fps": 30.0})
+        self.assertEqual(frames[4]["live_play_label"], "live_play")
+        self.assertEqual(frames[5]["live_play_label"], "uncertain")
+        self.assertGreaterEqual(len(summary["segments"]), 1)
+        self.assertIn("live_play", [segment["label"] for segment in summary["segments"]])
 
 
 class KalmanMotionTest(unittest.TestCase):

@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.62` add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
 - `L3.53` add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - `L3.61` add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
 - `L3.46` check in canonical MVP stats header and formula templates with provenance rules
@@ -109,6 +110,7 @@ The current highest-priority frontier is:
 - [x] Verify the Orin GPU container command used for representative Layer 1 artifact generation
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
+- [ ] Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
 - [ ] Add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
@@ -141,6 +143,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [ ] Add a coarse torso-color appearance cue to further suppress seated spectators and sideline bystanders
 - [ ] Check in canonical MVP stats header and formula templates with provenance rules

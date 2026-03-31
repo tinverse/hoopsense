@@ -173,6 +173,37 @@ class LabellerOverlayTest(unittest.TestCase):
             self.assertEqual(saved["issue_type"], "general_note")
             self.assertTrue("track_id" not in saved or saved["track_id"] is None)
 
+    def test_live_play_feedback_is_appended_without_track(self):
+        module = load_labeller_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module.PERCEPTION_DIR = Path(tmpdir)
+            module.PERCEPTION_FEEDBACK_FILE = Path(tmpdir) / "perception_feedback.jsonl"
+            artifact = {
+                "schema_version": "1.0.0",
+                "clip_id": "demo_clip",
+                "frames": [{
+                    "frame_idx": 120,
+                    "detections": [{"track_id": 6}],
+                }],
+            }
+            (module.PERCEPTION_DIR / "demo_clip.perception.json").write_text(json.dumps(artifact))
+            client = module.app.test_client()
+            response = client.post(
+                "/api/perception_feedback",
+                json={
+                    "clip_id": "demo_clip",
+                    "frame_idx": 120,
+                    "t_ms": 4000,
+                    "issue_type": "live_play",
+                    "note": "player dribbling and bringing the ball forward",
+                    "timestamp": "2026-03-31T12:00:00Z",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["status"], "success")
+            saved = json.loads(module.PERCEPTION_FEEDBACK_FILE.read_text().strip())
+            self.assertEqual(saved["issue_type"], "live_play")
+
     def test_invalid_feedback_issue_type_is_rejected(self):
         module = load_labeller_module()
         with tempfile.TemporaryDirectory() as tmpdir:

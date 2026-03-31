@@ -313,6 +313,13 @@ function getCurrentPerceptionFrame() {
     return bestFrame;
 }
 
+function getCurrentLivePlaySegment(frame) {
+    if (!(perceptionData && Array.isArray(perceptionData.live_play_segments) && frame)) return null;
+    return perceptionData.live_play_segments.find(
+        segment => segment.start_frame <= frame.frame_idx && frame.frame_idx <= segment.end_frame
+    ) || null;
+}
+
 function drawSkeleton(detection) {
     const keypoints = detection.keypoints_xy || [];
     const confidences = detection.keypoints_conf || [];
@@ -416,16 +423,27 @@ function redrawOverlay() {
         const synthCount = frame.detections.filter(d => d.synthesized).length;
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const jerseyCount = frame.detections.filter(d => d.identity_jersey_number !== undefined && d.identity_jersey_number !== null && d.identity_jersey_number !== '').length;
+        const livePlayLabel = frame.live_play_label || 'unknown';
+        const livePlayScore = frame.live_play_score !== undefined && frame.live_play_score !== null
+            ? frame.live_play_score.toFixed(2)
+            : 'n/a';
+        const segment = getCurrentLivePlaySegment(frame);
+        const segmentText = segment
+            ? ` Segment ${segment.label} frames ${segment.start_frame}-${segment.end_frame}.`
+            : '';
+        const dominantSignal = segment && segment.reasons_summary ? segment.reasons_summary.dominant_signal : null;
         const courtText = firstDetection
             ? ` First court point: (${firstDetection.court_xy[0].toFixed(1)}, ${firstDetection.court_xy[1].toFixed(1)}).`
             : '';
         explainerDescription.textContent =
             `Real Ultralytics detections and pose keypoints for frame ${frame.frame_idx}. ` +
             `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, and yellow boxes are repaired track gaps. ` +
-            `Cyan skeletons show keypoints.` +
+            `Cyan skeletons show keypoints. Live-play gate: ${livePlayLabel} @ ${livePlayScore}.` +
+            (dominantSignal ? ` Dominant signal: ${dominantSignal}.` : '') +
+            segmentText +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${jerseyCount} jersey-tagged // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${jerseyCount} jersey-tagged // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -479,7 +497,7 @@ function populateFeedbackTrackList() {
     });
 }
 
-function savePerceptionFeedback(issueType) {
+function savePerceptionFeedback(issueType, frameLevelOnly = false) {
     if (!(activeClip && perceptionData && perceptionData.enabled)) return;
     const frame = getCurrentPerceptionFrame();
     if (!frame) {
@@ -492,7 +510,7 @@ function savePerceptionFeedback(issueType) {
         domain: activeClip.domain,
         frame_idx: frame.frame_idx,
         t_ms: frame.t_ms,
-        track_id: feedbackTrackList.value || null,
+        track_id: frameLevelOnly ? null : (feedbackTrackList.value || null),
         issue_type: issueType,
         note: feedbackNote.value.trim(),
         timestamp: new Date().toISOString()
@@ -543,7 +561,11 @@ function loadPerceptionOverlay(clip) {
                 const jerseyReady = data.postprocess && data.postprocess.jersey_ocr && data.postprocess.jersey_ocr.reader_available;
                 const jerseyCount = data.postprocess && data.postprocess.jersey_ocr ? data.postprocess.jersey_ocr.identity_count_with_consensus : 0;
                 const appearanceCount = data.postprocess && data.postprocess.appearance_cue ? data.postprocess.appearance_cue.prototype_count : 0;
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses // ${appearanceCount} appearance prototypes`;
+                const livePlaySegments = Array.isArray(data.live_play_segments) ? data.live_play_segments : [];
+                const liveSegmentCount = livePlaySegments.filter(segment => segment.label === 'live_play').length;
+                const deadSegmentCount = livePlaySegments.filter(segment => segment.label === 'dead_ball').length;
+                const uncertainSegmentCount = livePlaySegments.filter(segment => segment.label === 'uncertain').length;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'available' : 'unavailable'} // ${jerseyCount} identity consensuses // ${appearanceCount} appearance prototypes // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';
@@ -578,6 +600,9 @@ document.getElementById('feedback-fn').addEventListener('click', () => savePerce
 document.getElementById('feedback-merge').addEventListener('click', () => savePerceptionFeedback('merge_error'));
 document.getElementById('feedback-track').addEventListener('click', () => savePerceptionFeedback('track_error'));
 document.getElementById('feedback-pose').addEventListener('click', () => savePerceptionFeedback('pose_error'));
+document.getElementById('feedback-live').addEventListener('click', () => savePerceptionFeedback('live_play', true));
+document.getElementById('feedback-dead').addEventListener('click', () => savePerceptionFeedback('dead_ball', true));
+document.getElementById('feedback-uncertain').addEventListener('click', () => savePerceptionFeedback('uncertain_play_state', true));
 document.getElementById('feedback-note-save').addEventListener('click', () => savePerceptionFeedback('general_note'));
 
 function finishCalibration() {

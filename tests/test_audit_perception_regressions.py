@@ -31,11 +31,28 @@ class AuditPerceptionRegressionsTest(unittest.TestCase):
 
             artifact = {
                 "clip_id": "clip_a",
+                "live_play_segments": [
+                    {
+                        "start_frame": 0,
+                        "end_frame": 0,
+                        "start_t_ms": 0,
+                        "end_t_ms": 0,
+                        "label": "dead_ball",
+                        "mean_score": 0.2,
+                        "peak_score": 0.2,
+                        "frame_count": 1,
+                        "reasons_summary": {"dominant_signal": "low_on_court_motion"},
+                    }
+                ],
                 "video": {"width": 1280, "height": 720, "fps": 30.0},
                 "frames": [
                     {
                         "frame_idx": 0,
                         "t_ms": 0,
+                        "live_play_score": 0.2,
+                        "live_play_label": "dead_ball",
+                        "live_play_segment_label": "dead_ball",
+                        "live_play_segment_duration_ms": 0,
                         "detections": [
                             {
                                 "track_id": 6,
@@ -69,6 +86,7 @@ class AuditPerceptionRegressionsTest(unittest.TestCase):
             self.assertEqual(case["frame_metrics"]["uniform_bucket_counts"]["light"], 1)
             self.assertIn("low_motion_detection_count", case["category_signals"])
             self.assertIn("active_uniform_bucket_counts", case["category_signals"])
+            self.assertEqual(case["frame_metrics"]["live_play_label"], "dead_ball")
 
             summary = report["category_summary"]
             self.assertEqual(summary["spectator_false_positive"]["case_count"], 1)

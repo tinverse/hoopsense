@@ -23,6 +23,15 @@ MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
 SHORT_GAP_REPAIR_MAX_GAP = 3
 MOTION_SCORE_THRESHOLD_PX = 6.0
+LIVE_PLAY_HIGH_MOTION_THRESHOLD_PX = 18.0
+LIVE_PLAY_SCORE_THRESHOLD = 0.62
+DEAD_BALL_SCORE_THRESHOLD = 0.38
+LIVE_PLAY_ENTER_WINDOW = 5
+LIVE_PLAY_ENTER_MIN_POSITIVE = 3
+LIVE_PLAY_EXIT_WINDOW = 8
+LIVE_PLAY_EXIT_MIN_NEGATIVE = 6
+LIVE_PLAY_MOTION_SUM_THRESHOLD_PX = 180.0
+LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX = 40.0
 IDENTITY_REPAIR_SCORE_THRESHOLD = 0.72
 IDENTITY_REPAIR_MAX_COURT_DISTANCE = 260.0
 IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = 1.35
@@ -720,6 +729,234 @@ def annotate_team_appearance_consistency(frames):
     }
 
 
+def score_live_play_frame(frame):
+    detections = frame.get("detections", [])
+    active = [d for d in detections if d.get("active_player_candidate")]
+    active_reasons = [d.get("active_player_reasons") or {} for d in active]
+    on_court_active = [
+        d for d, reasons in zip(active, active_reasons)
+        if reasons.get("court_in_bounds") is not False
+    ]
+    motion_speeds = [float(d.get("motion_speed_px") or 0.0) for d in active]
+    velocity_vectors = [
+        [float(v[0]), float(v[1])]
+        for v in (d.get("smoothed_velocity_xy") or [0.0, 0.0] for d in active)
+    ]
+    motion_energy_sum = float(sum(motion_speeds))
+    motion_energy_median = float(np.median(motion_speeds)) if motion_speeds else 0.0
+    high_motion_count = sum(1 for speed in motion_speeds if speed >= LIVE_PLAY_HIGH_MOTION_THRESHOLD_PX)
+    edge_active_count = sum(
+        1 for reasons in active_reasons
+        if float(reasons.get("edge_penalty") or 0.0) >= 0.15
+    )
+    appearance_mismatch_count = sum(
+        1 for detection in active
+        if detection.get("appearance_team_distance") is not None
+        and float(detection.get("appearance_team_distance")) > APPEARANCE_TEAM_DISTANCE_THRESHOLD
+    )
+    track_churn_count = sum(
+        1 for detection in detections
+        if detection.get("identity_repair") or detection.get("synthesized")
+    )
+
+    median_vx = float(np.median([vec[0] for vec in velocity_vectors])) if velocity_vectors else 0.0
+    median_abs_vy = float(np.median([abs(vec[1]) for vec in velocity_vectors])) if velocity_vectors else 0.0
+    positive_x = sum(1 for vec in velocity_vectors if vec[0] > 0.0)
+    negative_x = sum(1 for vec in velocity_vectors if vec[0] < 0.0)
+    x_sign_dominance = (
+        max(positive_x, negative_x) / max(len(velocity_vectors), 1)
+        if velocity_vectors else 0.0
+    )
+    camera_pan_pressure = (
+        _clip01((x_sign_dominance - 0.8) / 0.2)
+        * _clip01(abs(median_vx) / 120.0)
+        * _clip01(1.0 - (median_abs_vy / 40.0))
+    )
+
+    on_court_presence_score = _clip01((len(on_court_active) - 1) / 3.0)
+    motion_sum_score = _clip01(motion_energy_sum / LIVE_PLAY_MOTION_SUM_THRESHOLD_PX)
+    motion_median_score = _clip01(motion_energy_median / LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX)
+    high_motion_score = _clip01(high_motion_count / 2.0)
+    continuity_score = 1.0 - _clip01(track_churn_count / max(len(detections), 1))
+    motion_attenuation = max(0.05, 1.0 - 0.95 * camera_pan_pressure)
+    motion_sum_score *= motion_attenuation
+    motion_median_score *= motion_attenuation
+    high_motion_score *= motion_attenuation
+
+    edge_ratio = edge_active_count / max(len(active), 1) if active else 1.0
+    appearance_ratio = appearance_mismatch_count / max(len(active), 1) if active else 0.0
+    sparse_dead_score = 1.0 - _clip01((len(on_court_active) - 1) / 2.0)
+    low_motion_dead_score = 1.0 - _clip01(motion_energy_sum / 80.0)
+    edge_dead_score = _clip01(edge_ratio)
+    appearance_dead_score = _clip01(appearance_ratio)
+    churn_dead_score = _clip01(track_churn_count / max(len(detections), 1))
+
+    live_play_bias = (
+        0.30 * on_court_presence_score
+        + 0.25 * motion_sum_score
+        + 0.20 * motion_median_score
+        + 0.15 * high_motion_score
+        + 0.10 * continuity_score
+    )
+    dead_ball_bias = (
+        0.25 * sparse_dead_score
+        + 0.15 * low_motion_dead_score
+        + 0.15 * edge_dead_score
+        + 0.10 * appearance_dead_score
+        + 0.10 * churn_dead_score
+        + 0.35 * camera_pan_pressure
+    )
+    score = _clip01(0.5 + 0.5 * (live_play_bias - dead_ball_bias))
+    if score >= LIVE_PLAY_SCORE_THRESHOLD:
+        label = "live_play"
+    elif score <= DEAD_BALL_SCORE_THRESHOLD:
+        label = "dead_ball"
+    else:
+        label = "uncertain"
+    reasons = {
+        "active_candidate_count": int(len(active)),
+        "on_court_active_candidate_count": int(len(on_court_active)),
+        "motion_energy_sum": round(motion_energy_sum, 3),
+        "motion_energy_median": round(motion_energy_median, 3),
+        "high_motion_active_candidate_count": int(high_motion_count),
+        "edge_active_candidate_count": int(edge_active_count),
+        "appearance_mismatch_candidate_count": int(appearance_mismatch_count),
+        "track_churn_count": int(track_churn_count),
+        "camera_pan_pressure": round(camera_pan_pressure, 4),
+        "dead_ball_bias": round(dead_ball_bias, 4),
+        "live_play_bias": round(live_play_bias, 4),
+        "ball_signal_present": None,
+    }
+    return {
+        "score": round(score, 4),
+        "label": label,
+        "reasons": reasons,
+    }
+
+
+def _trailing_window(values, end_idx, window):
+    start_idx = max(0, end_idx - window + 1)
+    return values[start_idx : end_idx + 1]
+
+
+def _window_average(values):
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
+
+
+def _window_count(values, predicate):
+    return sum(1 for value in values if predicate(float(value)))
+
+
+def _dominant_live_play_signal(frames):
+    if not frames:
+        return "no_frames"
+    labels = [frame.get("live_play_label") for frame in frames]
+    if labels and all(label == "live_play" for label in labels):
+        motion_total = sum((frame.get("live_play_reasons") or {}).get("motion_energy_sum", 0.0) for frame in frames)
+        on_court_total = sum((frame.get("live_play_reasons") or {}).get("on_court_active_candidate_count", 0) for frame in frames)
+        return "on_court_motion" if motion_total >= on_court_total * 20.0 else "stable_on_court_presence"
+    if labels and all(label == "dead_ball" for label in labels):
+        sparse_total = sum((frame.get("live_play_reasons") or {}).get("on_court_active_candidate_count", 0) for frame in frames)
+        motion_total = sum((frame.get("live_play_reasons") or {}).get("motion_energy_sum", 0.0) for frame in frames)
+        return "low_on_court_motion" if motion_total <= sparse_total * 12.0 else "edge_heavy_idle_scene"
+    return "mixed_evidence"
+
+
+def annotate_live_play(frames, video_meta=None):
+    if not frames:
+        return {"segments": []}
+
+    raw_scores = []
+    raw_labels = []
+    for frame in frames:
+        live_info = score_live_play_frame(frame)
+        frame["live_play_score"] = live_info["score"]
+        frame["live_play_label"] = live_info["label"]
+        frame["live_play_reasons"] = live_info["reasons"]
+        raw_scores.append(live_info["score"])
+        raw_labels.append(live_info["label"])
+
+    state = "dead_ball"
+    for idx, frame in enumerate(frames):
+        enter_window = _trailing_window(raw_scores, idx, LIVE_PLAY_ENTER_WINDOW)
+        exit_window = _trailing_window(raw_scores, idx, LIVE_PLAY_EXIT_WINDOW)
+        dead_window = _trailing_window(raw_scores, idx, LIVE_PLAY_ENTER_WINDOW)
+        sustain_live = (
+            _window_average(enter_window) >= LIVE_PLAY_SCORE_THRESHOLD
+            or _window_count(enter_window, lambda score: score >= 0.55) >= 2
+        )
+        enter_live = (
+            len(enter_window) >= LIVE_PLAY_ENTER_MIN_POSITIVE
+            and _window_average(enter_window) >= LIVE_PLAY_SCORE_THRESHOLD
+            and _window_count(enter_window, lambda score: score >= 0.55) >= LIVE_PLAY_ENTER_MIN_POSITIVE
+        )
+        exit_live = (
+            len(exit_window) >= LIVE_PLAY_EXIT_MIN_NEGATIVE
+            and _window_average(exit_window) <= DEAD_BALL_SCORE_THRESHOLD
+            and _window_count(exit_window, lambda score: score <= 0.45) >= LIVE_PLAY_EXIT_MIN_NEGATIVE
+        )
+        enter_dead = (
+            len(dead_window) >= 3
+            and _window_average(dead_window) <= DEAD_BALL_SCORE_THRESHOLD
+            and _window_count(dead_window, lambda score: score <= 0.45) >= 3
+        )
+
+        if state == "live_play":
+            if exit_live:
+                state = "dead_ball"
+            elif not sustain_live:
+                state = "uncertain"
+        else:
+            if enter_live:
+                state = "live_play"
+            elif enter_dead:
+                state = "dead_ball"
+            else:
+                state = "uncertain"
+
+        frame["live_play_state_label"] = state
+
+    segments = []
+    segment_start = 0
+    for idx in range(1, len(frames) + 1):
+        if idx < len(frames) and frames[idx]["live_play_label"] == frames[segment_start]["live_play_label"]:
+            continue
+        segment_frames = frames[segment_start:idx]
+        scores = [float(frame.get("live_play_score") or 0.0) for frame in segment_frames]
+        segments.append({
+            "start_frame": int(segment_frames[0]["frame_idx"]),
+            "end_frame": int(segment_frames[-1]["frame_idx"]),
+            "start_t_ms": int(segment_frames[0]["t_ms"]),
+            "end_t_ms": int(segment_frames[-1]["t_ms"]),
+            "label": segment_frames[0]["live_play_label"],
+            "mean_score": round(_window_average(scores), 4),
+            "peak_score": round(max(scores) if scores else 0.0, 4),
+            "frame_count": len(segment_frames),
+            "reasons_summary": {
+                "dominant_signal": _dominant_live_play_signal(segment_frames),
+            },
+        })
+        segment_start = idx
+
+    for frame in frames:
+        segment = next(
+            (
+                seg for seg in segments
+                if seg["start_frame"] <= frame["frame_idx"] <= seg["end_frame"]
+            ),
+            None,
+        )
+        if segment is not None:
+            frame["live_play_segment_label"] = segment["label"]
+            frame["live_play_segment_start_frame"] = segment["start_frame"]
+            frame["live_play_segment_end_frame"] = segment["end_frame"]
+            frame["live_play_segment_duration_ms"] = int(segment["end_t_ms"] - segment["start_t_ms"])
+
+    return {"segments": segments}
+
+
 def smooth_track_motion(frames, video_meta):
     fps = float(video_meta.get("fps") or 30.0)
     dt = 1.0 / max(fps, 1.0)
@@ -1146,6 +1383,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
     jersey_ocr = annotate_identity_jersey_numbers(frames)
+    live_play = annotate_live_play(frames, video_meta)
 
     artifact = {
         "schema_version": "1.0.0",
@@ -1172,6 +1410,18 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
                 "prototype_count": appearance_summary["prototype_count"],
                 "prototype_buckets": appearance_summary["prototype_buckets"],
             },
+            "live_play_gate": {
+                "kind": "heuristic_frame_and_segment_v1",
+                "live_threshold": LIVE_PLAY_SCORE_THRESHOLD,
+                "dead_threshold": DEAD_BALL_SCORE_THRESHOLD,
+                "high_motion_threshold_px": LIVE_PLAY_HIGH_MOTION_THRESHOLD_PX,
+                "enter_window": LIVE_PLAY_ENTER_WINDOW,
+                "enter_min_positive": LIVE_PLAY_ENTER_MIN_POSITIVE,
+                "exit_window": LIVE_PLAY_EXIT_WINDOW,
+                "exit_min_negative": LIVE_PLAY_EXIT_MIN_NEGATIVE,
+                "ball_signal_present": False,
+                "segment_count": len(live_play["segments"]),
+            },
             "jersey_ocr": {
                 "backend": "easyocr_v1",
                 "reader_available": jersey_ocr["reader_available"],
@@ -1188,6 +1438,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "type": calibration.get("type") if calibration else None,
         },
         "identity_jersey_consensus": jersey_ocr["identity_consensus"],
+        "live_play_segments": live_play["segments"],
         "frames": frames,
     }
 

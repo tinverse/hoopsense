@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-03-31T08:39:11.583094+00:00",
+  "generated_at": "2026-03-31T19:14:02.137856+00:00",
   "fixture": "tests/fixtures/perception_regression_cases.json",
   "artifact_dir": "data/review_artifacts/layer1",
   "case_count": 7,
@@ -180,6 +180,10 @@
         "motion_speed_min": 0.0,
         "motion_speed_median": 0.0,
         "motion_speed_max": 0.0,
+        "live_play_score": 0.55,
+        "live_play_label": "uncertain",
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 250,
         "uniform_bucket_counts": {
           "dark": 4,
           "unknown": 2
@@ -262,6 +266,10 @@
         "motion_speed_min": 0.179,
         "motion_speed_median": 28.837,
         "motion_speed_max": 638.881,
+        "live_play_score": 0.9778,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4714,
         "uniform_bucket_counts": {
           "dark": 4,
           "light": 2,
@@ -350,6 +358,10 @@
         "motion_speed_min": 0.0,
         "motion_speed_median": 0.0,
         "motion_speed_max": 0.0,
+        "live_play_score": 0.275,
+        "live_play_label": "dead_ball",
+        "live_play_segment_label": "dead_ball",
+        "live_play_segment_duration_ms": 83,
         "uniform_bucket_counts": {
           "dark": 5,
           "unknown": 4
@@ -417,6 +429,10 @@
         "motion_speed_min": 16.013,
         "motion_speed_median": 83.361,
         "motion_speed_max": 339.77,
+        "live_play_score": 1.0,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4839,
         "uniform_bucket_counts": {
           "dark": 2,
           "unknown": 2
@@ -428,6 +444,10 @@
         "overlap_pair_count": 0
       },
       "category_signals": {
+        "live_play_label": "live_play",
+        "live_play_score": 1.0,
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4839,
         "active_candidate_count": 4,
         "motion_speed_max": 339.77,
         "motion_speed_median": 83.361,
@@ -489,6 +509,10 @@
         "motion_speed_min": 154.383,
         "motion_speed_median": 256.002,
         "motion_speed_max": 415.438,
+        "live_play_score": 0.5737,
+        "live_play_label": "uncertain",
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 0,
         "uniform_bucket_counts": {
           "dark": 1,
           "unknown": 6
@@ -500,6 +524,10 @@
         "overlap_pair_count": 0
       },
       "category_signals": {
+        "live_play_label": "uncertain",
+        "live_play_score": 0.5737,
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 0,
         "active_candidate_count": 6,
         "low_motion_detection_count": 0,
         "zero_motion_detection_count": 0,
@@ -556,6 +584,10 @@
         "motion_speed_min": 8.059,
         "motion_speed_median": 35.001,
         "motion_speed_max": 280.865,
+        "live_play_score": 0.8484,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4797,
         "uniform_bucket_counts": {
           "dark": 4
         },
@@ -638,6 +670,10 @@
         "motion_speed_min": 22.171,
         "motion_speed_median": 120.716,
         "motion_speed_max": 324.073,
+        "live_play_score": 0.9361,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4714,
         "uniform_bucket_counts": {
           "dark": 8,
           "unknown": 1
