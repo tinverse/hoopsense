@@ -7,8 +7,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ORIN_VENV="${REPO_ROOT}/.venv_orin310"
+ORIN_VENV_PYTHON="${ORIN_VENV}/bin/python"
+HOST_PYTHON="/usr/bin/python3.10"
 TORCH_WHEEL_URL="https://pypi.jetson-ai-lab.io/jp6/cu126/+f/37d/7e156cfb4a646/torch-2.10.0-cp310-cp310-linux_aarch64.whl#sha256=37d7e156cfb4a646c4d7347597727db1529d184108f703324dfff1842cec094e"
 TORCHVISION_VERSION="0.25.0"
+JETSON_PYPI_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126"
 ORIN_CV2_SRC="/usr/lib/python3.10/dist-packages/cv2"
 ORIN_CV2_DST="${ORIN_VENV}/lib/python3.10/site-packages/cv2"
 
@@ -18,6 +21,11 @@ echo "[INFO] Starting HoopSense Orin Setup..."
 CUDA_PATH="/usr/local/cuda"
 if [ ! -d "$CUDA_PATH" ]; then
     echo "[ERROR] CUDA not found at $CUDA_PATH. Is JetPack installed?"
+    exit 1
+fi
+
+if [ ! -x "$HOST_PYTHON" ]; then
+    echo "[ERROR] Expected host Python 3.10 at $HOST_PYTHON"
     exit 1
 fi
 
@@ -48,20 +56,19 @@ chmod +x hoops-orin-shell
 # 4. Create the reproducible Python 3.10 probe environment.
 if [ ! -x "${ORIN_VENV}/bin/python" ]; then
     echo "[INFO] Creating Orin probe venv at ${ORIN_VENV}"
-    "${REPO_ROOT}/hoops-orin-shell" python3 -m venv "${ORIN_VENV}"
+    "${HOST_PYTHON}" -m venv "${ORIN_VENV}"
 fi
 
 echo "[INFO] Installing exact Orin probe dependencies into ${ORIN_VENV}"
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install -U pip setuptools wheel numpy
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install "${TORCH_WHEEL_URL}"
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install nvidia-cudss-cu12
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install -U pip setuptools wheel numpy
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install "${TORCH_WHEEL_URL}"
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install nvidia-cudss-cu12
 
 echo "[INFO] Installing Layer 1 inference dependencies into ${ORIN_VENV}"
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install \
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install \
   pillow \
   pyyaml \
   requests \
-  scipy \
   scikit-image \
   python-bidi \
   pyclipper \
@@ -73,9 +80,9 @@ echo "[INFO] Installing Layer 1 inference dependencies into ${ORIN_VENV}"
   polars \
   flask \
   lap
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps ultralytics
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps "torchvision==${TORCHVISION_VERSION}"
-"${REPO_ROOT}/hoops-orin-shell" "${ORIN_VENV}/bin/python" -m pip install --no-deps easyocr
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --no-deps ultralytics
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --index-url "${JETSON_PYPI_INDEX}" --no-deps --force-reinstall "torchvision==${TORCHVISION_VERSION}"
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --no-deps easyocr
 
 if [ -d "${ORIN_CV2_SRC}" ]; then
     rm -rf "${ORIN_CV2_DST}"
