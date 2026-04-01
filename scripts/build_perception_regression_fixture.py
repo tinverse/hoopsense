@@ -41,6 +41,13 @@ def derive_categories(entry: dict) -> list[str]:
     note = normalize_note(entry.get("note")).lower()
     categories = set()
 
+    if issue_type == "live_play":
+        categories.add("live_play_context")
+    if issue_type == "dead_ball":
+        categories.add("dead_ball_context")
+    if issue_type == "uncertain_play_state":
+        categories.add("scene_context")
+
     if issue_type == "false_positive":
         if _contains_any(note, [r"\bspectator\b", r"\bseated\b", r"\bbench\b"]):
             categories.add("spectator_false_positive")
@@ -59,6 +66,12 @@ def derive_categories(entry: dict) -> list[str]:
         categories.add("cluster_miss")
 
     if _contains_any(note, [r"\bbystander", r"\bbystanders\b"]):
+        categories.add("bystander_false_positive")
+
+    if _contains_any(note, [r"\bspectator\b", r"\bseated\b", r"\bbench\b"]):
+        categories.add("spectator_false_positive")
+
+    if _contains_any(note, [r"\bref\b", r"\breferee\b", r"\bsideline\b"]):
         categories.add("bystander_false_positive")
 
     if issue_type == "merge_error" or _contains_any(note, [r"\bmerged\b", r"\bmerge\b"]):

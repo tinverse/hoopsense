@@ -1,48 +1,48 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-03-31T19:14:02.137856+00:00",
+  "generated_at": "2026-04-01T02:53:03.072313+00:00",
   "fixture": "tests/fixtures/perception_regression_cases.json",
   "artifact_dir": "data/review_artifacts/layer1",
-  "case_count": 7,
+  "case_count": 14,
   "limitations": [
     "This audit reports current artifact signals for reviewed cases; it does not declare pass/fail quality.",
-    "Layer 1 review artifacts are currently person-only; ball detections and live-play truth are not included here.",
+    "Ball detections are a minimal single-frame artifact in v1; they are not yet a stable tracker or possession signal.",
     "Use category rollups to steer heuristic changes, then validate on held-out clips to avoid clip-specific overfitting."
   ],
   "category_summary": {
     "bystander_false_positive": {
-      "active_candidate_count_total": 8,
-      "artifact_found_count": 1,
-      "case_count": 1,
-      "detection_count_total": 9,
-      "frame_found_count": 1,
-      "motion_speed_max_seen": 324.073,
+      "active_candidate_count_total": 18,
+      "artifact_found_count": 3,
+      "case_count": 3,
+      "detection_count_total": 24,
+      "frame_found_count": 3,
+      "motion_speed_max_seen": 937.772,
       "synthesized_detection_count_total": 0,
-      "avg_detection_count": 9.0,
-      "avg_active_candidate_count": 8.0,
+      "avg_detection_count": 8.0,
+      "avg_active_candidate_count": 6.0,
       "avg_synthesized_detection_count": 0.0
     },
     "cluster_merge": {
-      "active_candidate_count_total": 0,
-      "artifact_found_count": 1,
-      "case_count": 1,
-      "detection_count_total": 9,
-      "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "active_candidate_count_total": 5,
+      "artifact_found_count": 2,
+      "case_count": 2,
+      "detection_count_total": 14,
+      "frame_found_count": 2,
+      "motion_speed_max_seen": 937.772,
       "synthesized_detection_count_total": 0,
-      "avg_detection_count": 9.0,
-      "avg_active_candidate_count": 0.0,
+      "avg_detection_count": 7.0,
+      "avg_active_candidate_count": 2.5,
       "avg_synthesized_detection_count": 0.0
     },
     "cluster_miss": {
-      "active_candidate_count_total": 3,
-      "artifact_found_count": 1,
-      "case_count": 1,
-      "detection_count_total": 6,
-      "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
+      "active_candidate_count_total": 6,
+      "artifact_found_count": 2,
+      "case_count": 2,
+      "detection_count_total": 14,
+      "frame_found_count": 2,
+      "motion_speed_max_seen": 20.728,
       "synthesized_detection_count_total": 0,
-      "avg_detection_count": 6.0,
+      "avg_detection_count": 7.0,
       "avg_active_candidate_count": 3.0,
       "avg_synthesized_detection_count": 0.0
     },
@@ -95,28 +95,40 @@
       "avg_synthesized_detection_count": 0.0
     },
     "live_play_context": {
-      "active_candidate_count_total": 4,
-      "artifact_found_count": 1,
-      "case_count": 1,
-      "detection_count_total": 4,
-      "frame_found_count": 1,
-      "motion_speed_max_seen": 339.77,
+      "active_candidate_count_total": 11,
+      "artifact_found_count": 3,
+      "case_count": 3,
+      "detection_count_total": 13,
+      "frame_found_count": 3,
+      "motion_speed_max_seen": 937.772,
       "synthesized_detection_count_total": 0,
-      "avg_detection_count": 4.0,
-      "avg_active_candidate_count": 4.0,
+      "avg_detection_count": 4.333,
+      "avg_active_candidate_count": 3.667,
       "avg_synthesized_detection_count": 0.0
     },
+    "scene_context": {
+      "active_candidate_count_total": 7,
+      "artifact_found_count": 2,
+      "case_count": 2,
+      "detection_count_total": 18,
+      "frame_found_count": 2,
+      "motion_speed_max_seen": 657.378,
+      "synthesized_detection_count_total": 1,
+      "avg_detection_count": 9.0,
+      "avg_active_candidate_count": 3.5,
+      "avg_synthesized_detection_count": 0.5
+    },
     "spectator_false_positive": {
-      "active_candidate_count_total": 3,
-      "artifact_found_count": 1,
-      "case_count": 1,
-      "detection_count_total": 6,
-      "frame_found_count": 1,
-      "motion_speed_max_seen": 0.0,
-      "synthesized_detection_count_total": 0,
-      "avg_detection_count": 6.0,
-      "avg_active_candidate_count": 3.0,
-      "avg_synthesized_detection_count": 0.0
+      "active_candidate_count_total": 17,
+      "artifact_found_count": 4,
+      "case_count": 4,
+      "detection_count_total": 29,
+      "frame_found_count": 4,
+      "motion_speed_max_seen": 657.378,
+      "synthesized_detection_count_total": 2,
+      "avg_detection_count": 7.25,
+      "avg_active_candidate_count": 4.25,
+      "avg_synthesized_detection_count": 0.5
     },
     "uniform_confusion": {
       "active_candidate_count_total": 3,
@@ -184,6 +196,8 @@
         "live_play_label": "uncertain",
         "live_play_segment_label": "uncertain",
         "live_play_segment_duration_ms": 250,
+        "ball_signal_present": null,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 4,
           "unknown": 2
@@ -270,6 +284,8 @@
         "live_play_label": "live_play",
         "live_play_segment_label": "live_play",
         "live_play_segment_duration_ms": 4714,
+        "ball_signal_present": null,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 4,
           "light": 2,
@@ -312,19 +328,446 @@
       }
     },
     {
+      "case_id": "DSC_4953_sample_0:30",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 30,
+      "categories": [
+        "scene_context",
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_0.perception.json",
+      "notes": [
+        "could've detected P15's jersey number #42 in this frame.",
+        "P5 and P6 are seated spectators."
+      ],
+      "frame_metrics": {
+        "detection_count": 9,
+        "track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "canonical_track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "canonical_track_count": 9,
+        "active_candidate_count": 7,
+        "active_candidate_track_ids": [
+          "1",
+          "12",
+          "2",
+          "23",
+          "3",
+          "4",
+          "6"
+        ],
+        "synthesized_detection_count": 1,
+        "low_motion_detection_count": 2,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 2.122,
+        "motion_speed_median": 45.312,
+        "motion_speed_max": 657.378,
+        "live_play_score": 0.9782,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4714,
+        "ball_signal_present": null,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 4,
+          "light": 2,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 4,
+          "unknown": 3
+        },
+        "overlap_pair_count": 1
+      },
+      "category_signals": {
+        "detection_count": 9,
+        "active_candidate_count": 7,
+        "track_ids": [
+          "1",
+          "12",
+          "15",
+          "2",
+          "23",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "low_motion_detection_count": 2,
+        "zero_motion_detection_count": 0
+      }
+    },
+    {
+      "case_id": "DSC_4953_sample_1:0",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 0,
+      "categories": [
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_1.perception.json",
+      "notes": [],
+      "frame_metrics": {
+        "detection_count": 4,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "canonical_track_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "canonical_track_count": 4,
+        "active_candidate_count": 2,
+        "active_candidate_track_ids": [
+          "1",
+          "2"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 4,
+        "zero_motion_detection_count": 4,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 0.0,
+        "motion_speed_max": 0.0,
+        "live_play_score": 0.4525,
+        "live_play_label": "uncertain",
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 166,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 1,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 1,
+          "unknown": 1
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "live_play_label": "uncertain",
+        "live_play_score": 0.4525,
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 166,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "active_candidate_count": 2,
+        "motion_speed_max": 0.0,
+        "motion_speed_median": 0.0,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ]
+      }
+    },
+    {
+      "case_id": "DSC_4953_sample_1:76",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 76,
+      "categories": [
+        "bystander_false_positive",
+        "cluster_merge",
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_1.perception.json",
+      "notes": [
+        "P4 is dribbling the ball forward starting at frame 0. However by frame 56-60, P4 gets tagged as P27, is merged with P2, In frame 63, the ref is tagged as P23. When P4(now P27) emerges from P2, he is tagged as P41",
+        "This clip is live play"
+      ],
+      "frame_metrics": {
+        "detection_count": 5,
+        "track_ids": [
+          "2",
+          "23",
+          "27",
+          "36",
+          "41"
+        ],
+        "canonical_track_ids": [
+          "2",
+          "23",
+          "27",
+          "36",
+          "41"
+        ],
+        "canonical_track_count": 5,
+        "active_candidate_count": 5,
+        "active_candidate_track_ids": [
+          "2",
+          "23",
+          "27",
+          "36",
+          "41"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 1,
+        "zero_motion_detection_count": 1,
+        "motion_speed_min": 0.0,
+        "motion_speed_median": 494.057,
+        "motion_speed_max": 937.772,
+        "live_play_score": 0.975,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 208,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 3
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 5,
+        "active_candidate_count": 5,
+        "low_motion_detection_count": 1,
+        "zero_motion_detection_count": 1,
+        "track_ids": [
+          "2",
+          "23",
+          "27",
+          "36",
+          "41"
+        ],
+        "overlap_pair_count": 0,
+        "synthesized_detection_count": 0,
+        "live_play_label": "live_play",
+        "live_play_score": 0.975,
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 208,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "motion_speed_max": 937.772,
+        "motion_speed_median": 494.057
+      }
+    },
+    {
+      "case_id": "DSC_4953_sample_1:120",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 120,
+      "categories": [
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4953_sample_1.perception.json",
+      "notes": [
+        "P81 is a seated spectator in this frame."
+      ],
+      "frame_metrics": {
+        "detection_count": 7,
+        "track_ids": [
+          "36",
+          "41",
+          "59",
+          "61",
+          "81",
+          "83",
+          "84"
+        ],
+        "canonical_track_ids": [
+          "36",
+          "41",
+          "59",
+          "61",
+          "81",
+          "83",
+          "84"
+        ],
+        "canonical_track_count": 7,
+        "active_candidate_count": 4,
+        "active_candidate_track_ids": [
+          "36",
+          "41",
+          "59",
+          "61"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 3,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 0.696,
+        "motion_speed_median": 27.612,
+        "motion_speed_max": 153.455,
+        "live_play_score": 0.6068,
+        "live_play_label": "uncertain",
+        "live_play_segment_label": "uncertain",
+        "live_play_segment_duration_ms": 209,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 3,
+          "light": 1,
+          "unknown": 3
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 3,
+          "unknown": 1
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 7,
+        "active_candidate_count": 4,
+        "low_motion_detection_count": 3,
+        "zero_motion_detection_count": 0,
+        "track_ids": [
+          "36",
+          "41",
+          "59",
+          "61",
+          "81",
+          "83",
+          "84"
+        ]
+      }
+    },
+    {
+      "case_id": "DSC_4954_sample_0:120",
+      "clip_id": "DSC_4954_sample_0",
+      "frame_idx": 120,
+      "categories": [
+        "bystander_false_positive"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4954_sample_0.perception.json",
+      "notes": [
+        "Players are lining up. #5 P59 got the ball from the ref. and is getting ready to shoot"
+      ],
+      "frame_metrics": {
+        "detection_count": 10,
+        "track_ids": [
+          "1",
+          "31",
+          "35",
+          "41",
+          "49",
+          "56",
+          "58",
+          "59",
+          "7",
+          "9"
+        ],
+        "canonical_track_ids": [
+          "1",
+          "31",
+          "35",
+          "41",
+          "49",
+          "56",
+          "58",
+          "59",
+          "7",
+          "9"
+        ],
+        "canonical_track_count": 10,
+        "active_candidate_count": 5,
+        "active_candidate_track_ids": [
+          "49",
+          "56",
+          "59",
+          "7",
+          "9"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 3,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 1.694,
+        "motion_speed_median": 13.991,
+        "motion_speed_max": 235.574,
+        "live_play_score": 0.8843,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4839,
+        "ball_signal_present": null,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 4,
+          "unknown": 6
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 3,
+          "unknown": 2
+        },
+        "overlap_pair_count": 1
+      },
+      "category_signals": {
+        "detection_count": 10,
+        "active_candidate_count": 5,
+        "low_motion_detection_count": 3,
+        "zero_motion_detection_count": 0,
+        "track_ids": [
+          "1",
+          "31",
+          "35",
+          "41",
+          "49",
+          "56",
+          "58",
+          "59",
+          "7",
+          "9"
+        ]
+      }
+    },
+    {
       "case_id": "DSC_4959_sample_3:0",
       "clip_id": "DSC_4959_sample_3",
       "frame_idx": 0,
       "categories": [
         "cluster_merge",
         "false_negative_generic",
-        "false_positive_generic"
+        "false_positive_generic",
+        "scene_context"
       ],
       "scene_context": null,
       "artifact_found": true,
       "frame_found": true,
       "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_3.perception.json",
-      "notes": [],
+      "notes": [
+        "ok now P7 and P8 are just sitting down and are spectators. P2 and P1 are just subs waiting on the sidelines",
+        "P5 is three players. #30 is right. but there are two more."
+      ],
       "frame_metrics": {
         "detection_count": 9,
         "track_ids": [
@@ -358,10 +801,12 @@
         "motion_speed_min": 0.0,
         "motion_speed_median": 0.0,
         "motion_speed_max": 0.0,
-        "live_play_score": 0.275,
+        "live_play_score": 0.265,
         "live_play_label": "dead_ball",
         "live_play_segment_label": "dead_ball",
         "live_play_segment_duration_ms": 83,
+        "ball_signal_present": false,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 5,
           "unknown": 4
@@ -385,6 +830,165 @@
           "9"
         ],
         "active_candidate_count": 0
+      }
+    },
+    {
+      "case_id": "DSC_4959_sample_3:5",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 5,
+      "categories": [
+        "cluster_miss"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_3.perception.json",
+      "notes": [
+        "In frame 8, there are 4 players in a cluster  in front of #30 that get  totally missed."
+      ],
+      "frame_metrics": {
+        "detection_count": 8,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "9"
+        ],
+        "canonical_track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "9"
+        ],
+        "canonical_track_count": 8,
+        "active_candidate_count": 3,
+        "active_candidate_track_ids": [
+          "1",
+          "3",
+          "5"
+        ],
+        "synthesized_detection_count": 0,
+        "low_motion_detection_count": 3,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 0.963,
+        "motion_speed_median": 6.803,
+        "motion_speed_max": 20.728,
+        "live_play_score": 0.6808,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4797,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 6,
+          "unknown": 2
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 3
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 8,
+        "overlap_pair_count": 0,
+        "synthesized_detection_count": 0,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "9"
+        ]
+      }
+    },
+    {
+      "case_id": "DSC_4959_sample_3:8",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 8,
+      "categories": [
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "artifact_found": true,
+      "frame_found": true,
+      "artifact_path": "data/review_artifacts/layer1/DSC_4959_sample_3.perception.json",
+      "notes": [
+        "In frame, P7, seated spectator gets detected again as a player."
+      ],
+      "frame_metrics": {
+        "detection_count": 7,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "6",
+          "7",
+          "9"
+        ],
+        "canonical_track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "6",
+          "7",
+          "9"
+        ],
+        "canonical_track_count": 7,
+        "active_candidate_count": 3,
+        "active_candidate_track_ids": [
+          "1",
+          "3",
+          "4"
+        ],
+        "synthesized_detection_count": 1,
+        "low_motion_detection_count": 2,
+        "zero_motion_detection_count": 0,
+        "motion_speed_min": 2.712,
+        "motion_speed_median": 23.151,
+        "motion_speed_max": 53.733,
+        "live_play_score": 0.7839,
+        "live_play_label": "live_play",
+        "live_play_segment_label": "live_play",
+        "live_play_segment_duration_ms": 4797,
+        "ball_signal_present": false,
+        "ball_confidence": null,
+        "uniform_bucket_counts": {
+          "dark": 5,
+          "unknown": 2
+        },
+        "active_uniform_bucket_counts": {
+          "dark": 2,
+          "unknown": 1
+        },
+        "overlap_pair_count": 0
+      },
+      "category_signals": {
+        "detection_count": 7,
+        "active_candidate_count": 3,
+        "low_motion_detection_count": 2,
+        "zero_motion_detection_count": 0,
+        "track_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "6",
+          "7",
+          "9"
+        ]
       }
     },
     {
@@ -429,10 +1033,12 @@
         "motion_speed_min": 16.013,
         "motion_speed_median": 83.361,
         "motion_speed_max": 339.77,
-        "live_play_score": 1.0,
+        "live_play_score": 0.99,
         "live_play_label": "live_play",
         "live_play_segment_label": "live_play",
-        "live_play_segment_duration_ms": 4839,
+        "live_play_segment_duration_ms": 4797,
+        "ball_signal_present": false,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 2,
           "unknown": 2
@@ -445,9 +1051,11 @@
       },
       "category_signals": {
         "live_play_label": "live_play",
-        "live_play_score": 1.0,
+        "live_play_score": 0.99,
         "live_play_segment_label": "live_play",
-        "live_play_segment_duration_ms": 4839,
+        "live_play_segment_duration_ms": 4797,
+        "ball_signal_present": false,
+        "ball_confidence": null,
         "active_candidate_count": 4,
         "motion_speed_max": 339.77,
         "motion_speed_median": 83.361,
@@ -509,10 +1117,12 @@
         "motion_speed_min": 154.383,
         "motion_speed_median": 256.002,
         "motion_speed_max": 415.438,
-        "live_play_score": 0.5737,
+        "live_play_score": 0.5637,
         "live_play_label": "uncertain",
         "live_play_segment_label": "uncertain",
         "live_play_segment_duration_ms": 0,
+        "ball_signal_present": false,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 1,
           "unknown": 6
@@ -525,9 +1135,11 @@
       },
       "category_signals": {
         "live_play_label": "uncertain",
-        "live_play_score": 0.5737,
+        "live_play_score": 0.5637,
         "live_play_segment_label": "uncertain",
         "live_play_segment_duration_ms": 0,
+        "ball_signal_present": false,
+        "ball_confidence": null,
         "active_candidate_count": 6,
         "low_motion_detection_count": 0,
         "zero_motion_detection_count": 0,
@@ -588,6 +1200,8 @@
         "live_play_label": "live_play",
         "live_play_segment_label": "live_play",
         "live_play_segment_duration_ms": 4797,
+        "ball_signal_present": null,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 4
         },
@@ -674,6 +1288,8 @@
         "live_play_label": "live_play",
         "live_play_segment_label": "live_play",
         "live_play_segment_duration_ms": 4714,
+        "ball_signal_present": null,
+        "ball_confidence": null,
         "uniform_bucket_counts": {
           "dark": 8,
           "unknown": 1

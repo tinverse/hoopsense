@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-03-31T03:17:48.384108+00:00",
+  "generated_at": "2026-04-01T02:53:02.185041+00:00",
   "source": "data/training/perception_feedback.jsonl",
-  "case_count": 7,
+  "case_count": 14,
   "cases": [
     {
       "case_id": "DSC_4953_sample_0:0",
@@ -48,6 +48,104 @@
       "source_count": 1
     },
     {
+      "case_id": "DSC_4953_sample_0:30",
+      "clip_id": "DSC_4953_sample_0",
+      "frame_idx": 30,
+      "t_ms_min": 1251,
+      "t_ms_max": 1251,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "scene_context",
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "could've detected P15's jersey number #42 in this frame.",
+        "P5 and P6 are seated spectators."
+      ],
+      "source_count": 2
+    },
+    {
+      "case_id": "DSC_4953_sample_1:0",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 0,
+      "t_ms_min": 0,
+      "t_ms_max": 0,
+      "issue_types": [
+        "live_play"
+      ],
+      "categories": [
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "track_ids": [],
+      "notes": [],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4953_sample_1:76",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 76,
+      "t_ms_min": 3169,
+      "t_ms_max": 3169,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "bystander_false_positive",
+        "cluster_merge",
+        "live_play_context"
+      ],
+      "scene_context": "live_play",
+      "track_ids": [],
+      "notes": [
+        "P4 is dribbling the ball forward starting at frame 0. However by frame 56-60, P4 gets tagged as P27, is merged with P2, In frame 63, the ref is tagged as P23. When P4(now P27) emerges from P2, he is tagged as P41",
+        "This clip is live play"
+      ],
+      "source_count": 2
+    },
+    {
+      "case_id": "DSC_4953_sample_1:120",
+      "clip_id": "DSC_4953_sample_1",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "P81 is a seated spectator in this frame."
+      ],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4954_sample_0:120",
+      "clip_id": "DSC_4954_sample_0",
+      "frame_idx": 120,
+      "t_ms_min": 5005,
+      "t_ms_max": 5005,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "bystander_false_positive"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "Players are lining up. #5 P59 got the ball from the ref. and is getting ready to shoot"
+      ],
+      "source_count": 1
+    },
+    {
       "case_id": "DSC_4959_sample_3:0",
       "clip_id": "DSC_4959_sample_3",
       "frame_idx": 0,
@@ -56,17 +154,60 @@
       "issue_types": [
         "false_negative",
         "false_positive",
+        "general_note",
         "merge_error"
       ],
       "categories": [
         "cluster_merge",
         "false_negative_generic",
-        "false_positive_generic"
+        "false_positive_generic",
+        "scene_context"
       ],
       "scene_context": null,
       "track_ids": [],
-      "notes": [],
-      "source_count": 3
+      "notes": [
+        "ok now P7 and P8 are just sitting down and are spectators. P2 and P1 are just subs waiting on the sidelines",
+        "P5 is three players. #30 is right. but there are two more."
+      ],
+      "source_count": 5
+    },
+    {
+      "case_id": "DSC_4959_sample_3:5",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 5,
+      "t_ms_min": 208,
+      "t_ms_max": 208,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "cluster_miss"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "In frame 8, there are 4 players in a cluster  in front of #30 that get  totally missed."
+      ],
+      "source_count": 1
+    },
+    {
+      "case_id": "DSC_4959_sample_3:8",
+      "clip_id": "DSC_4959_sample_3",
+      "frame_idx": 8,
+      "t_ms_min": 333,
+      "t_ms_max": 333,
+      "issue_types": [
+        "general_note"
+      ],
+      "categories": [
+        "spectator_false_positive"
+      ],
+      "scene_context": null,
+      "track_ids": [],
+      "notes": [
+        "In frame, P7, seated spectator gets detected again as a player."
+      ],
+      "source_count": 1
     },
     {
       "case_id": "DSC_4959_sample_3:120",
