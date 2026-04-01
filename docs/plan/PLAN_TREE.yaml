@@ -13,7 +13,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-03-30"
+  last_updated: "2026-03-31"
 
 levels:
   L0:
@@ -483,6 +483,36 @@ levels:
       title: Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
       owner: A0
       status: in_progress
+    - id: L3.65
+      parent: L2.18
+      title: Refactor `extract_game_dna` into focused inference pipeline classes without changing output contract
+      owner: A0
+      status: completed
+    - id: L3.66
+      parent: L2.3
+      title: Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
+      owner: A0
+      status: in_progress
+    - id: L3.67
+      parent: L2.3
+      title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
+      owner: A0
+      status: completed
+    - id: L3.68
+      parent: L2.3
+      title: Check in an explicit Layer 1 identity-policy contract and machine-readable rules file
+      owner: A0
+      status: completed
+    - id: L3.69
+      parent: L2.13
+      title: Check in machine-readable MVP event-evidence rules and a loader for deterministic stat attribution
+      owner: A0
+      status: completed
+    - id: L3.70
+      parent: L2.13
+      title: Make the first deterministic event-attribution path consume the checked-in MVP event rules
+      owner: A0
+      status: in_progress
     - id: L3.42
       parent: L2.32
       title: Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
@@ -566,6 +596,8 @@ levels:
 
 priorities:
   current_frontier:
+    - L3.70
+    - L3.66
     - L3.64
     - L3.63
     - L3.62

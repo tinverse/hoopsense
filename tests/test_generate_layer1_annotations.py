@@ -1,6 +1,8 @@
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -12,6 +14,7 @@ sys.modules.setdefault("ultralytics", ultralytics_stub)
 cv2_stub = types.ModuleType("cv2")
 cv2_stub.COLOR_BGR2GRAY = 0
 cv2_stub.CV_64F = 0
+cv2_stub.INTER_AREA = 0
 
 
 def cvt_color_to_gray(image, _flag):
@@ -20,6 +23,7 @@ def cvt_color_to_gray(image, _flag):
 
 cv2_stub.cvtColor = cvt_color_to_gray
 cv2_stub.Laplacian = lambda image, _dtype: image.astype(float)
+cv2_stub.resize = lambda image, dsize, interpolation=None: np.resize(image, (dsize[1], dsize[0]))
 sys.modules.setdefault("cv2", cv2_stub)
 
 from tools.review.labeller.generate_layer1_annotations import (
@@ -28,11 +32,13 @@ from tools.review.labeller.generate_layer1_annotations import (
     _score_identity_link,
     annotate_team_appearance_consistency,
     annotate_active_players,
+    annotate_continuity_segments,
     annotate_identity_jersey_numbers,
     annotate_live_play,
     estimate_uniform_bucket,
     estimate_torso_color_histogram,
     histogram_intersection_distance,
+    load_layer1_identity_policy,
     repair_short_track_gaps,
     score_active_player,
     score_live_play_frame,
@@ -84,6 +90,21 @@ class UniformBucketTest(unittest.TestCase):
         bright = estimate_torso_color_histogram(np.full((8, 8, 3), 255, dtype=np.uint8))
         self.assertAlmostEqual(histogram_intersection_distance(dark, dark), 0.0, places=5)
         self.assertGreater(histogram_intersection_distance(dark, bright), 0.9)
+
+
+class IdentityPolicyTest(unittest.TestCase):
+    def test_load_layer1_identity_policy_loads_default_contract(self):
+        policy = load_layer1_identity_policy()
+        self.assertEqual(policy["kind"], "layer1_identity_policy")
+        self.assertEqual(policy["assumptions"]["disappearance_default"], "occlusion_or_detector_miss")
+        self.assertTrue(policy["continuity"]["reset_identity_on_discontinuity"])
+
+    def test_load_layer1_identity_policy_rejects_missing_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_policy.yaml"
+            path.write_text("version: '1.0'\nkind: layer1_identity_policy\ncontinuity: {}\n")
+            with self.assertRaises(ValueError):
+                load_layer1_identity_policy(path)
 
 
 class ActivePlayerScoreTest(unittest.TestCase):
@@ -362,6 +383,58 @@ class TrackRepairTest(unittest.TestCase):
         self.assertEqual(successor["identity_repair"]["predecessor_track_id"], 3)
         self.assertEqual(successor["identity_repair"]["successor_track_id"], 19)
 
+    def test_repair_short_track_gaps_does_not_bridge_across_discontinuity_segments(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [120.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                    "continuity_segment_id": 0,
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [108.0, 82.0, 168.0, 262.0],
+                    "bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "smoothed_center_xy": [138.0, 172.0],
+                    "smoothed_velocity_xy": [118.0, 1.0],
+                    "smoothed_bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "court_xy": [1015.0, 605.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                    "continuity_segment_id": 1,
+                }],
+            },
+        ]
+        repaired = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+        )
+        self.assertEqual(repaired[1]["detections"], [])
+        successor = repaired[2]["detections"][0]
+        self.assertEqual(successor["identity_track_id"], 19)
+        self.assertIsNone(successor["identity_repair"])
+
 
 class JerseyIdentityTest(unittest.TestCase):
     def test_normalize_jersey_text_handles_common_ocr_confusions(self):
@@ -589,6 +662,37 @@ class LivePlayGateTest(unittest.TestCase):
         self.assertEqual(frames[5]["live_play_label"], "uncertain")
         self.assertGreaterEqual(len(summary["segments"]), 1)
         self.assertIn("live_play", [segment["label"] for segment in summary["segments"]])
+
+
+class ContinuitySegmentationTest(unittest.TestCase):
+    def test_annotate_continuity_segments_marks_visual_cut(self):
+        dark_sig = np.zeros((18, 32), dtype=np.float32).tolist()
+        bright_sig = np.ones((18, 32), dtype=np.float32).tolist()
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "_frame_visual_signature": dark_sig,
+                "detections": [{"track_id": 1}],
+            },
+            {
+                "frame_idx": 1,
+                "t_ms": 33,
+                "_frame_visual_signature": dark_sig,
+                "detections": [{"track_id": 1}],
+            },
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "_frame_visual_signature": bright_sig,
+                "detections": [{"track_id": 7}],
+            },
+        ]
+        summary = annotate_continuity_segments(frames)
+        self.assertEqual(len(summary["segments"]), 2)
+        self.assertEqual(frames[1]["continuity_segment_id"], 0)
+        self.assertEqual(frames[2]["continuity_segment_id"], 1)
+        self.assertEqual(frames[2]["discontinuity_label"], "discontinuity")
 
 
 class KalmanMotionTest(unittest.TestCase):

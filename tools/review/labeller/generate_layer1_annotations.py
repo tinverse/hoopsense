@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import yaml
 from ultralytics import YOLO
 
 from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
@@ -14,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIPS_DIR = REPO_ROOT / "data" / "raw_clips"
 OUTPUT_DIR = REPO_ROOT / "data" / "review_artifacts" / "layer1"
 CALIBRATION_FILE = REPO_ROOT / "data" / "training" / "camera_calibration.json"
+IDENTITY_POLICY_FILE = REPO_ROOT / "specs" / "layer1_identity_policy.yaml"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COURT_X_RANGE = (-50.0, 2890.0)
@@ -21,7 +23,6 @@ COURT_Y_RANGE = (-50.0, 1575.0)
 ACTIVE_PLAYER_SCORE_THRESHOLD = 0.55
 MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
-SHORT_GAP_REPAIR_MAX_GAP = 3
 MOTION_SCORE_THRESHOLD_PX = 6.0
 LIVE_PLAY_HIGH_MOTION_THRESHOLD_PX = 18.0
 LIVE_PLAY_SCORE_THRESHOLD = 0.62
@@ -32,9 +33,6 @@ LIVE_PLAY_EXIT_WINDOW = 8
 LIVE_PLAY_EXIT_MIN_NEGATIVE = 6
 LIVE_PLAY_MOTION_SUM_THRESHOLD_PX = 180.0
 LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX = 40.0
-IDENTITY_REPAIR_SCORE_THRESHOLD = 0.72
-IDENTITY_REPAIR_MAX_COURT_DISTANCE = 260.0
-IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = 1.35
 JERSEY_OCR_MIN_CROP_WIDTH = 18
 JERSEY_OCR_MIN_CROP_HEIGHT = 18
 JERSEY_OCR_MIN_SHARPNESS = 25.0
@@ -47,6 +45,56 @@ BALL_CLASS_ID = 32
 BALL_MIN_LIVE_PLAY_CONFIDENCE = 0.35
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
+
+
+def load_layer1_identity_policy(policy_file=IDENTITY_POLICY_FILE):
+    """Load the checked-in Layer 1 identity policy and validate core keys."""
+    with open(policy_file, "r") as f:
+        policy = yaml.safe_load(f)
+
+    continuity = policy.get("continuity") or {}
+    identity = policy.get("identity") or {}
+    short_gap = identity.get("short_gap") or {}
+    hypotheses = identity.get("hypotheses") or {}
+    assumptions = policy.get("assumptions") or {}
+
+    required_sections = {
+        "assumptions": assumptions,
+        "continuity": continuity,
+        "identity": identity,
+        "identity.short_gap": short_gap,
+        "identity.hypotheses": hypotheses,
+    }
+    missing_sections = [name for name, value in required_sections.items() if not value]
+    if missing_sections:
+        raise ValueError(
+            f"Layer 1 identity policy is missing required sections: {', '.join(missing_sections)}"
+        )
+
+    return policy
+
+
+LAYER1_IDENTITY_POLICY = load_layer1_identity_policy()
+IDENTITY_POLICY_VERSION = str(LAYER1_IDENTITY_POLICY.get("version") or "unknown")
+IDENTITY_POLICY_ASSUMPTIONS = LAYER1_IDENTITY_POLICY["assumptions"]
+CONTINUITY_POLICY = LAYER1_IDENTITY_POLICY["continuity"]
+IDENTITY_POLICY = LAYER1_IDENTITY_POLICY["identity"]
+IDENTITY_SHORT_GAP_POLICY = IDENTITY_POLICY["short_gap"]
+IDENTITY_HYPOTHESIS_POLICY = IDENTITY_POLICY["hypotheses"]
+
+SHORT_GAP_REPAIR_MAX_GAP = int(IDENTITY_SHORT_GAP_POLICY["max_gap_frames"])
+IDENTITY_REPAIR_SCORE_THRESHOLD = float(IDENTITY_SHORT_GAP_POLICY["repair_score_threshold"])
+IDENTITY_REPAIR_MAX_COURT_DISTANCE = float(IDENTITY_SHORT_GAP_POLICY["max_court_distance"])
+IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = float(IDENTITY_SHORT_GAP_POLICY["max_center_distance_ratio"])
+IDENTITY_HYPOTHESIS_MIN_SCORE = float(IDENTITY_HYPOTHESIS_POLICY["min_score"])
+IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP = int(IDENTITY_HYPOTHESIS_POLICY["max_candidates_per_group"])
+IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN = float(IDENTITY_HYPOTHESIS_POLICY["ambiguity_margin"])
+DISCONTINUITY_VISUAL_DELTA_THRESHOLD = float(CONTINUITY_POLICY["visual_delta_threshold"])
+DISCONTINUITY_TRACK_CHURN_THRESHOLD = float(CONTINUITY_POLICY["track_churn_threshold"])
+DISCONTINUITY_SCORE_THRESHOLD = float(CONTINUITY_POLICY["score_threshold"])
+RESET_IDENTITY_ON_DISCONTINUITY = bool(CONTINUITY_POLICY.get("reset_identity_on_discontinuity", True))
+OCCLUSION_FIRST_WITHIN_SEGMENT = bool(IDENTITY_POLICY.get("occlusion_first_within_segment", True))
+IDENTITY_HYPOTHESES_ENABLED = bool(IDENTITY_HYPOTHESIS_POLICY.get("enabled", True))
 
 
 def _to_float_list(values):
@@ -129,6 +177,30 @@ def _vector_norm(vec):
     if not vec or len(vec) < 2:
         return 0.0
     return float(np.linalg.norm([float(vec[0]), float(vec[1])]))
+
+
+def _frame_visual_signature(frame_bgr):
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    thumb = cv2.resize(gray, (32, 18), interpolation=cv2.INTER_AREA)
+    return (thumb.astype(np.float32) / 255.0).tolist()
+
+
+def _frame_visual_delta(signature_a, signature_b):
+    if not signature_a or not signature_b:
+        return 0.0
+    a = np.array(signature_a, dtype=np.float32)
+    b = np.array(signature_b, dtype=np.float32)
+    if a.shape != b.shape:
+        return 0.0
+    return float(np.mean(np.abs(a - b)))
+
+
+def _frame_track_ids(frame):
+    return {
+        int(detection["track_id"])
+        for detection in frame.get("detections", [])
+        if detection.get("track_id") is not None
+    }
 
 
 def _initialize_identity_fields(detection):
@@ -906,6 +978,98 @@ def _dominant_live_play_signal(frames):
     return "mixed_evidence"
 
 
+def annotate_continuity_segments(frames):
+    if not frames:
+        return {"segments": []}
+
+    segments = []
+    current_segment_id = 0
+    segment_start_idx = 0
+
+    for idx, frame in enumerate(frames):
+        if idx == 0:
+            frame["continuity_segment_id"] = current_segment_id
+            frame["discontinuity_score"] = 0.0
+            frame["discontinuity_label"] = "continuous"
+            frame["discontinuity_reasons"] = {
+                "visual_delta": 0.0,
+                "track_churn": 0.0,
+                "detection_count_delta": 0,
+            }
+            for detection in frame.get("detections", []):
+                detection["continuity_segment_id"] = current_segment_id
+            continue
+
+        previous = frames[idx - 1]
+        visual_delta = _frame_visual_delta(
+            previous.get("_frame_visual_signature"),
+            frame.get("_frame_visual_signature"),
+        )
+        prev_ids = _frame_track_ids(previous)
+        curr_ids = _frame_track_ids(frame)
+        union_ids = prev_ids | curr_ids
+        track_overlap = (len(prev_ids & curr_ids) / len(union_ids)) if union_ids else 1.0
+        track_churn = 1.0 - track_overlap
+        detection_count_delta = abs(
+            len(frame.get("detections", [])) - len(previous.get("detections", []))
+        )
+        detection_count_score = _clip01(detection_count_delta / 6.0)
+        visual_score = _clip01(visual_delta / DISCONTINUITY_VISUAL_DELTA_THRESHOLD)
+        churn_score = _clip01(track_churn / DISCONTINUITY_TRACK_CHURN_THRESHOLD)
+        discontinuity_score = (
+            0.60 * visual_score
+            + 0.30 * churn_score
+            + 0.10 * detection_count_score
+        )
+        is_discontinuous = (
+            discontinuity_score >= DISCONTINUITY_SCORE_THRESHOLD
+            or (
+                visual_delta >= DISCONTINUITY_VISUAL_DELTA_THRESHOLD
+                and track_churn >= 0.55
+            )
+        )
+
+        if is_discontinuous:
+            previous_segment_frames = frames[segment_start_idx:idx]
+            segments.append({
+                "segment_id": current_segment_id,
+                "start_frame": int(previous_segment_frames[0]["frame_idx"]),
+                "end_frame": int(previous_segment_frames[-1]["frame_idx"]),
+                "start_t_ms": int(previous_segment_frames[0]["t_ms"]),
+                "end_t_ms": int(previous_segment_frames[-1]["t_ms"]),
+                "frame_count": len(previous_segment_frames),
+            })
+            current_segment_id += 1
+            segment_start_idx = idx
+
+        frame["continuity_segment_id"] = current_segment_id
+        frame["discontinuity_score"] = round(float(discontinuity_score), 4)
+        frame["discontinuity_label"] = "discontinuity" if is_discontinuous else "continuous"
+        frame["discontinuity_reasons"] = {
+            "visual_delta": round(float(visual_delta), 4),
+            "track_churn": round(float(track_churn), 4),
+            "detection_count_delta": int(detection_count_delta),
+        }
+        for detection in frame.get("detections", []):
+            detection["continuity_segment_id"] = current_segment_id
+
+    final_segment_frames = frames[segment_start_idx:]
+    if final_segment_frames:
+        segments.append({
+            "segment_id": current_segment_id,
+            "start_frame": int(final_segment_frames[0]["frame_idx"]),
+            "end_frame": int(final_segment_frames[-1]["frame_idx"]),
+            "start_t_ms": int(final_segment_frames[0]["t_ms"]),
+            "end_t_ms": int(final_segment_frames[-1]["t_ms"]),
+            "frame_count": len(final_segment_frames),
+        })
+
+    for frame in frames:
+        frame.pop("_frame_visual_signature", None)
+
+    return {"segments": segments}
+
+
 def annotate_live_play(frames, video_meta=None):
     if not frames:
         return {"segments": []}
@@ -1053,6 +1217,7 @@ def _interpolate_detection(start_det, end_det, frame_idx, t_ms, alpha):
         "identity_jersey_number_source": start_det.get("identity_jersey_number_source"),
         "class_id": start_det.get("class_id"),
         "class_name": start_det.get("class_name"),
+        "continuity_segment_id": start_det.get("continuity_segment_id"),
         "confidence": round(_lerp(start_det.get("confidence", 0.0), end_det.get("confidence", 0.0), alpha), 4),
         "bbox_xyxy": [_lerp(a, b, alpha) for a, b in zip(start_det.get("bbox_xyxy", []), end_det.get("bbox_xyxy", []))],
         "bbox_xywh": [_lerp(a, b, alpha) for a, b in zip(start_det.get("bbox_xywh", []), end_det.get("bbox_xywh", []))],
@@ -1206,6 +1371,11 @@ def _find_identity_links(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP)
             if not successor_obs:
                 continue
             successor_first_frame, successor_first_det = successor_obs[0]
+            if (
+                RESET_IDENTITY_ON_DISCONTINUITY
+                and predecessor_last_det.get("continuity_segment_id") != successor_first_det.get("continuity_segment_id")
+            ):
+                continue
             gap_frames = successor_first_frame - predecessor_last_frame - 1
             if gap_frames <= 0 or gap_frames > max_gap:
                 continue
@@ -1247,7 +1417,154 @@ def _find_identity_links(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP)
     return list(links_by_successor.values())
 
 
-def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
+def _build_identity_hypothesis_summary(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
+    if not IDENTITY_HYPOTHESES_ENABLED:
+        return {"groups": [], "selected_links": [], "candidate_lookup": {}}
+
+    track_ids = sorted(track_frames)
+    candidates = []
+    candidate_id = 0
+    for predecessor_track_id in track_ids:
+        predecessor_obs = sorted(track_frames.get(predecessor_track_id, []), key=lambda item: item[0])
+        if not predecessor_obs:
+            continue
+        predecessor_last_frame, predecessor_last_det = predecessor_obs[-1]
+        for successor_track_id in track_ids:
+            if successor_track_id == predecessor_track_id:
+                continue
+            successor_obs = sorted(track_frames.get(successor_track_id, []), key=lambda item: item[0])
+            if not successor_obs:
+                continue
+            successor_first_frame, successor_first_det = successor_obs[0]
+            gap_frames = successor_first_frame - predecessor_last_frame - 1
+            if gap_frames <= 0 or gap_frames > max_gap:
+                continue
+            link = _score_identity_link(predecessor_last_det, successor_first_det, gap_frames, fps)
+            if link is None or link["score"] < IDENTITY_HYPOTHESIS_MIN_SCORE:
+                continue
+            candidates.append(
+                {
+                    "candidate_id": f"h{candidate_id}",
+                    "predecessor_track_id": predecessor_track_id,
+                    "successor_track_id": successor_track_id,
+                    "start_frame_idx": predecessor_last_frame,
+                    "end_frame_idx": successor_first_frame,
+                    "start_det": predecessor_last_det,
+                    "end_det": successor_first_det,
+                    **link,
+                }
+            )
+            candidate_id += 1
+
+    if not candidates:
+        return {"groups": [], "selected_links": [], "candidate_lookup": {}}
+
+    adjacency = {candidate["candidate_id"]: set() for candidate in candidates}
+    for idx, left in enumerate(candidates):
+        for right in candidates[idx + 1 :]:
+            if (
+                left["predecessor_track_id"] == right["predecessor_track_id"]
+                or left["successor_track_id"] == right["successor_track_id"]
+            ):
+                adjacency[left["candidate_id"]].add(right["candidate_id"])
+                adjacency[right["candidate_id"]].add(left["candidate_id"])
+
+    grouped_candidate_ids = []
+    seen = set()
+    for candidate in candidates:
+        candidate_id = candidate["candidate_id"]
+        if candidate_id in seen:
+            continue
+        stack = [candidate_id]
+        component = []
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            component.append(current)
+            stack.extend(adjacency[current] - seen)
+        grouped_candidate_ids.append(sorted(component))
+
+    candidate_lookup = {candidate["candidate_id"]: candidate for candidate in candidates}
+    selected_links = _find_identity_links(track_frames, fps, max_gap=max_gap)
+    selected_pairs = {
+        (link["predecessor_track_id"], link["successor_track_id"])
+        for link in selected_links
+    }
+
+    groups = []
+    for group_index, group_candidate_ids in enumerate(grouped_candidate_ids):
+        group_candidates = [candidate_lookup[candidate_id] for candidate_id in group_candidate_ids]
+        ranked = sorted(group_candidates, key=lambda item: (-item["score"], item["gap_frames"], item["successor_track_id"]))
+        best_score = ranked[0]["score"]
+        selected_in_group = [
+            candidate for candidate in ranked
+            if (candidate["predecessor_track_id"], candidate["successor_track_id"]) in selected_pairs
+        ]
+        if not selected_in_group:
+            group_status = "deferred"
+        else:
+            competing_scores = [
+                candidate["score"]
+                for candidate in ranked
+                if candidate not in selected_in_group
+            ]
+            best_competitor = max(competing_scores, default=0.0)
+            group_status = (
+                "ambiguous_selected"
+                if best_competitor >= best_score - IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN
+                else "selected"
+            )
+
+        serialized_candidates = []
+        for rank, candidate in enumerate(ranked[:IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP], start=1):
+            is_selected = (candidate["predecessor_track_id"], candidate["successor_track_id"]) in selected_pairs
+            candidate_status = "selected" if is_selected else ("alternate" if selected_in_group else "deferred")
+            serialized_candidates.append(
+                {
+                    "candidate_id": candidate["candidate_id"],
+                    "rank": rank,
+                    "status": candidate_status,
+                    "predecessor_track_id": candidate["predecessor_track_id"],
+                    "successor_track_id": candidate["successor_track_id"],
+                    "start_frame_idx": int(candidate["start_frame_idx"]),
+                    "end_frame_idx": int(candidate["end_frame_idx"]),
+                    "gap_frames": int(candidate["gap_frames"]),
+                    "score": round(float(candidate["score"]), 4),
+                    "score_margin_to_best": round(float(best_score - candidate["score"]), 4),
+                    "reasons": candidate["reasons"],
+                }
+            )
+
+        groups.append(
+            {
+                "group_id": f"g{group_index}",
+                "status": group_status,
+                "start_frame_idx": int(min(candidate["start_frame_idx"] for candidate in group_candidates)),
+                "end_frame_idx": int(max(candidate["end_frame_idx"] for candidate in group_candidates)),
+                "predecessor_track_ids": sorted({int(candidate["predecessor_track_id"]) for candidate in group_candidates}),
+                "successor_track_ids": sorted({int(candidate["successor_track_id"]) for candidate in group_candidates}),
+                "candidate_count": len(group_candidates),
+                "selected_candidate_count": len(selected_in_group),
+                "candidates": serialized_candidates,
+            }
+        )
+
+    return {
+        "groups": groups,
+        "selected_links": selected_links,
+        "candidate_lookup": candidate_lookup,
+    }
+
+
+def repair_short_track_gaps(
+    frames,
+    video_meta=None,
+    *,
+    max_gap=SHORT_GAP_REPAIR_MAX_GAP,
+    return_hypothesis_summary=False,
+):
     frame_index = {frame["frame_idx"]: frame for frame in frames}
     track_frames = {}
     fps = float((video_meta or {}).get("fps") or 30.0)
@@ -1261,7 +1578,16 @@ def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR
             detection["_t_ms"] = frame["t_ms"]
             track_frames.setdefault(track_id, []).append((frame["frame_idx"], detection))
 
-    identity_links = _find_identity_links(track_frames, fps, max_gap=max_gap)
+    hypothesis_summary = _build_identity_hypothesis_summary(track_frames, fps, max_gap=max_gap)
+    identity_links = hypothesis_summary["selected_links"]
+
+    for group in hypothesis_summary["groups"]:
+        for frame_idx in range(group["start_frame_idx"], group["end_frame_idx"] + 1):
+            frame = frame_index.get(frame_idx)
+            if frame is None:
+                continue
+            frame.setdefault("identity_hypothesis_group_ids", [])
+            frame["identity_hypothesis_group_ids"].append(group["group_id"])
 
     for link in identity_links:
         predecessor_track_id = link["predecessor_track_id"]
@@ -1286,6 +1612,13 @@ def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR
         for (start_idx, start_det), (end_idx, end_det) in zip(observations, observations[1:]):
             gap = end_idx - start_idx - 1
             if gap <= 0 or gap > max_gap:
+                continue
+            if (
+                RESET_IDENTITY_ON_DISCONTINUITY
+                and start_det.get("continuity_segment_id") != end_det.get("continuity_segment_id")
+            ):
+                continue
+            if not OCCLUSION_FIRST_WITHIN_SEGMENT:
                 continue
             if not start_det.get("active_player_candidate") or not end_det.get("active_player_candidate"):
                 continue
@@ -1347,6 +1680,7 @@ def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR
             frame.setdefault("detections", []).append(synthesized)
 
     for frame in frames:
+        frame["identity_hypothesis_group_ids"] = sorted(set(frame.get("identity_hypothesis_group_ids", [])))
         frame["detections"].sort(
             key=lambda detection: (
                 detection.get("identity_track_id") is None,
@@ -1359,6 +1693,15 @@ def repair_short_track_gaps(frames, video_meta=None, *, max_gap=SHORT_GAP_REPAIR
         for detection in frame.get("detections", []):
             detection.pop("_frame_idx", None)
             detection.pop("_t_ms", None)
+    if return_hypothesis_summary:
+        return frames, {
+            "kind": "bounded_identity_mht_v1",
+            "min_score": IDENTITY_HYPOTHESIS_MIN_SCORE,
+            "ambiguity_margin": IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN,
+            "group_count": len(hypothesis_summary["groups"]),
+            "selected_link_count": len(identity_links),
+            "groups": hypothesis_summary["groups"],
+        }
     return frames
 
 
@@ -1408,6 +1751,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "calibrated": h_matrix is not None,
             "detections": person_detections,
             "ball_detection": ball_detection,
+            "_frame_visual_signature": _frame_visual_signature(frame),
         })
         frame_idx += 1
 
@@ -1422,9 +1766,14 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     }
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
+    continuity = annotate_continuity_segments(frames)
     appearance_summary = annotate_team_appearance_consistency(frames)
     frames = annotate_active_players(frames, video_meta)
-    frames = repair_short_track_gaps(frames, video_meta)
+    frames, identity_hypotheses = repair_short_track_gaps(
+        frames,
+        video_meta,
+        return_hypothesis_summary=True,
+    )
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
     jersey_ocr = annotate_identity_jersey_numbers(frames)
@@ -1442,12 +1791,38 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "classes": ["person", "sports_ball"],
         },
         "postprocess": {
+            "identity_policy": {
+                "source": str(IDENTITY_POLICY_FILE.relative_to(REPO_ROOT)),
+                "version": IDENTITY_POLICY_VERSION,
+                "assumptions": {
+                    "player_set_persistence": IDENTITY_POLICY_ASSUMPTIONS.get("player_set_persistence"),
+                    "disappearance_default": IDENTITY_POLICY_ASSUMPTIONS.get("disappearance_default"),
+                    "continuity_default": IDENTITY_POLICY_ASSUMPTIONS.get("continuity_default"),
+                    "reset_condition": IDENTITY_POLICY_ASSUMPTIONS.get("reset_condition"),
+                },
+                "continuity": {
+                    "kind": CONTINUITY_POLICY.get("kind"),
+                    "reset_identity_on_discontinuity": RESET_IDENTITY_ON_DISCONTINUITY,
+                },
+                "identity": {
+                    "conservation_prior": IDENTITY_POLICY.get("conservation_prior"),
+                    "occlusion_first_within_segment": OCCLUSION_FIRST_WITHIN_SEGMENT,
+                    "hypotheses_enabled": IDENTITY_HYPOTHESES_ENABLED,
+                },
+            },
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
             "short_gap_repair_max_gap": SHORT_GAP_REPAIR_MAX_GAP,
             "identity_repair_score_threshold": IDENTITY_REPAIR_SCORE_THRESHOLD,
             "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,
             "track_motion_smoother": "kalman_constant_velocity_v1",
             "identity_repair": "trajectory_bridge_v1",
+            "identity_hypotheses": {
+                "kind": identity_hypotheses["kind"],
+                "min_score": identity_hypotheses["min_score"],
+                "ambiguity_margin": identity_hypotheses["ambiguity_margin"],
+                "group_count": identity_hypotheses["group_count"],
+                "selected_link_count": identity_hypotheses["selected_link_count"],
+            },
             "appearance_cue": {
                 "kind": "torso_rgb_quantized_histogram_v1",
                 "team_distance_threshold": APPEARANCE_TEAM_DISTANCE_THRESHOLD,
@@ -1468,6 +1843,13 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
                 "ball_min_confidence": BALL_MIN_LIVE_PLAY_CONFIDENCE,
                 "segment_count": len(live_play["segments"]),
             },
+            "continuity": {
+                "kind": "visual_and_track_churn_v1",
+                "visual_delta_threshold": DISCONTINUITY_VISUAL_DELTA_THRESHOLD,
+                "track_churn_threshold": DISCONTINUITY_TRACK_CHURN_THRESHOLD,
+                "score_threshold": DISCONTINUITY_SCORE_THRESHOLD,
+                "segment_count": len(continuity["segments"]),
+            },
             "jersey_ocr": {
                 "backend": "easyocr_v1",
                 "reader_available": jersey_ocr["reader_available"],
@@ -1484,6 +1866,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "type": calibration.get("type") if calibration else None,
         },
         "identity_jersey_consensus": jersey_ocr["identity_consensus"],
+        "identity_hypotheses": identity_hypotheses["groups"],
+        "continuity_segments": continuity["segments"],
         "live_play_segments": live_play["segments"],
         "frames": frames,
     }

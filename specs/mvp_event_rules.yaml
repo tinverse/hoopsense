@@ -1,0 +1,184 @@
+version: "1.0"
+kind: mvp_event_rules
+scope: constrained_basketball_stats_mvp
+
+assumptions:
+  supported_capture: constrained_single_camera
+  live_play_required_default: true
+  deterministic_counting: true
+  upstream_identity_requirement: stable_internal_player_identity
+
+events:
+  pass:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - team_in_possession_known
+    actors:
+      primary: passer
+      secondary: receiver
+    temporal:
+      max_event_duration_ms: 1200
+      expected_follow_up:
+        event: catch
+        max_gap_ms: 1200
+    counting:
+      stat_deltas: {}
+
+  catch:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+    actors:
+      primary: receiver
+    temporal:
+      max_event_duration_ms: 800
+    counting:
+      stat_deltas: {}
+
+  shot_attempt:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - ball_release_evidence
+      - shot_value_known
+    actors:
+      primary: shooter
+    temporal:
+      max_event_duration_ms: 1500
+      resolution_required:
+        allowed_events:
+          - made_shot
+          - missed_shot
+        max_gap_ms: 2500
+    counting:
+      stat_deltas:
+        two_point:
+          "2P FGA": 1
+        three_point:
+          "3P FGA": 1
+        free_throw:
+          "FTA": 1
+
+  made_shot:
+    prerequisites:
+      - preceding_shot_attempt
+      - actor_identity_known
+      - shot_value_known
+      - make_result_evidence
+    actors:
+      primary: shooter
+    temporal:
+      must_follow: shot_attempt
+      max_gap_ms: 2500
+    counting:
+      stat_deltas:
+        two_point:
+          "2P FGM": 1
+          "PTS": 2
+        three_point:
+          "3P FGM": 1
+          "PTS": 3
+        free_throw:
+          "FTM": 1
+          "PTS": 1
+
+  missed_shot:
+    prerequisites:
+      - preceding_shot_attempt
+      - actor_identity_known
+      - miss_result_evidence
+    actors:
+      primary: shooter
+    temporal:
+      must_follow: shot_attempt
+      max_gap_ms: 2500
+      expected_follow_up:
+        allowed_events:
+          - rebound_off
+          - rebound_def
+        max_gap_ms: 1800
+    counting:
+      stat_deltas: {}
+
+  rebound_off:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - preceding_missed_shot
+      - possession_change_evidence
+    actors:
+      primary: rebounder
+    temporal:
+      must_follow: missed_shot
+      max_gap_ms: 1800
+    counting:
+      stat_deltas:
+        "O. Reb.": 1
+        "T. Reb.": 1
+
+  rebound_def:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - preceding_missed_shot
+      - possession_change_evidence
+    actors:
+      primary: rebounder
+    temporal:
+      must_follow: missed_shot
+      max_gap_ms: 1800
+    counting:
+      stat_deltas:
+        "D. Reb.": 1
+        "T. Reb.": 1
+
+  turnover:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - loss_of_team_control_evidence
+    actors:
+      primary: offender
+      secondary: beneficiary_optional
+    temporal:
+      max_event_duration_ms: 1500
+      allowed_follow_up:
+        - steal
+        - pass
+        - catch
+    counting:
+      stat_deltas:
+        "TOs": 1
+
+  steal:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - possession_gain_evidence
+      - preceding_turnover_optional
+    actors:
+      primary: defender
+      secondary: offender_optional
+    temporal:
+      max_event_duration_ms: 1200
+    counting:
+      stat_deltas:
+        "Steals": 1
+
+  assist_candidate:
+    prerequisites:
+      - live_play
+      - actor_identity_known
+      - receiver_identity_known
+      - pass_then_made_shot_sequence
+    actors:
+      primary: passer
+      secondary: shooter
+    temporal:
+      must_follow: pass
+      required_terminal_event: made_shot
+      max_pass_to_make_gap_ms: 3000
+    counting:
+      stat_deltas:
+        "Assists": 1

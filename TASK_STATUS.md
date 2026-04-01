@@ -7,6 +7,8 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.70` make the first deterministic event-attribution path consume the checked-in MVP event rules
+- `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - `L3.64` add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - `L3.63` add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - `L3.62` add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
@@ -113,7 +115,12 @@ The current highest-priority frontier is:
 - [x] Add coarse light-versus-dark uniform bucket estimation to representative Layer 1 perception artifacts
 - [x] Add active-player scoring to suppress spectators and bench-side false positives in Layer 1 artifacts
 - [x] Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
+- [x] Refactor `extract_game_dna` into focused inference pipeline classes without changing output contract
+- [x] Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
+- [x] Check in an explicit Layer 1 identity-policy contract and machine-readable rules file
+- [x] Check in machine-readable MVP event-evidence rules and a loader for deterministic stat attribution
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
+- [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
@@ -147,6 +154,8 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Make the first deterministic event-attribution path consume the checked-in MVP event rules
+- [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
@@ -199,3 +208,4 @@ What is not yet true:
 - [ ] Slice-based evaluation report implemented
 - [x] Geometry readiness report artifact implemented
 - [ ] Initial CI workflow implemented
+- [x] Check in an explicit Layer 1 identity-policy contract and machine-readable rules file

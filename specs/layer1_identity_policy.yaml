@@ -1,0 +1,31 @@
+version: "1.0"
+kind: layer1_identity_policy
+scope: basketball_video_identity_continuity
+
+assumptions:
+  player_set_persistence: high_probability
+  disappearance_default: occlusion_or_detector_miss
+  continuity_default: conserved
+  reset_condition: detected_video_discontinuity
+
+continuity:
+  kind: visual_and_track_churn_v1
+  enabled: true
+  reset_identity_on_discontinuity: true
+  visual_delta_threshold: 0.28
+  track_churn_threshold: 0.8
+  score_threshold: 0.72
+
+identity:
+  conservation_prior: high
+  occlusion_first_within_segment: true
+  short_gap:
+    max_gap_frames: 3
+    repair_score_threshold: 0.72
+    max_court_distance: 260.0
+    max_center_distance_ratio: 1.35
+  hypotheses:
+    enabled: true
+    min_score: 0.55
+    max_candidates_per_group: 3
+    ambiguity_margin: 0.05
