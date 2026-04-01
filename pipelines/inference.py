@@ -503,6 +503,12 @@ class GameDNAExtractor:
                 t_ms = int(self.frame_idx / fps * 1000)
                 h_matrix = self.calibration.homography_for_frame(self.frame_idx)
                 self._process_frame(frame, t_ms, h_matrix, writer)
+            writer.write(
+                self.mvp_stat_accumulator.terminal_game_snapshot(
+                    game_id=Path(self.config.video_path).stem,
+                    t_ms=int(self.frame_idx / fps * 1000) if self.frame_idx else 0,
+                )
+            )
         capture.release()
         print(f"[INFO] Complete. Output: {output_path}")
 

@@ -46,3 +46,19 @@ class MvpStatAccumulator:
             "t_ms": int(t_ms) if t_ms is not None else None,
             "totals": deepcopy(totals),
         }
+
+    def terminal_game_snapshot(self, *, game_id=None, t_ms=None):
+        players = []
+        for player_id in sorted(self.player_totals):
+            players.append(
+                {
+                    "player_id": int(player_id),
+                    "totals": deepcopy(self.player_totals[player_id]),
+                }
+            )
+        return {
+            "kind": "game_stat_sheet",
+            "game_id": game_id,
+            "t_ms": int(t_ms) if t_ms is not None else None,
+            "players": players,
+        }

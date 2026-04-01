@@ -61,6 +61,33 @@ class MvpStatAccumulatorTest(unittest.TestCase):
         self.assertEqual(snapshot["player_id"], 7)
         self.assertEqual(snapshot["totals"]["TOs"], 1)
 
+    def test_terminal_game_snapshot_collects_all_players(self):
+        accumulator = MvpStatAccumulator()
+        accumulator.apply_attributed_event(
+            {
+                "kind": "attributed_event",
+                "event_type": "turnover",
+                "actor_id": 7,
+                "team_id": 1,
+                "t_ms": 1000,
+                "stat_deltas": {"TOs": 1},
+            }
+        )
+        accumulator.apply_attributed_event(
+            {
+                "kind": "attributed_event",
+                "event_type": "steal",
+                "actor_id": 14,
+                "team_id": 2,
+                "t_ms": 1200,
+                "stat_deltas": {"Steals": 1},
+            }
+        )
+        sheet = accumulator.terminal_game_snapshot(game_id="demo_game", t_ms=1200)
+        self.assertEqual(sheet["kind"], "game_stat_sheet")
+        self.assertEqual(sheet["game_id"], "demo_game")
+        self.assertEqual([row["player_id"] for row in sheet["players"]], [7, 14])
+
 
 if __name__ == "__main__":
     unittest.main()

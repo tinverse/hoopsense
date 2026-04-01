@@ -537,7 +537,7 @@ levels:
       parent: L2.14
       title: Emit a terminal per-game MVP stat sheet snapshot from accumulated deterministic totals
       owner: A0
-      status: in_progress
+      status: completed
     - id: L3.73
       parent: L2.18
       title: Remove stale legacy labeling from the active inference path while preserving explicit compatibility fallbacks
@@ -626,7 +626,6 @@ levels:
 
 priorities:
   current_frontier:
-    - L3.76
     - L3.72
     - L3.66
     - L3.64
