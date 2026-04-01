@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.75` emit per-player MVP stat snapshots from accumulated running totals in the inference pipeline
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - `L3.64` add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
@@ -122,6 +123,7 @@ The current highest-priority frontier is:
 - [x] Make the first deterministic event-attribution path consume the checked-in MVP event rules
 - [x] Emit first attributed MVP event payloads in the shape required by the deterministic event-rule engine
 - [x] Remove stale legacy labeling from the active inference path while preserving explicit compatibility fallbacks
+- [x] Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
@@ -157,6 +159,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Emit per-player MVP stat snapshots from accumulated running totals in the inference pipeline
 - [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating

@@ -10,6 +10,7 @@ import yaml
 from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
 from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
 from pipelines.mvp_event_engine import MvpEventRuleEngine
+from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
@@ -480,6 +481,7 @@ class GameDNAExtractor:
         self.tracks = {}
         self.possession_engine = PossessionEngine()
         self.mvp_event_adapter = MvpEventAdapter()
+        self.mvp_stat_accumulator = MvpStatAccumulator()
         self.last_ball_2d = np.array([0.0, 0.0])
         self.last_shot_attempt_t_ms_by_track = {}
 
@@ -550,6 +552,9 @@ class GameDNAExtractor:
             writer.write(event)
             for attributed_event in self.mvp_event_adapter.adapt(event, player_map):
                 writer.write(attributed_event)
+                stat_update = self.mvp_stat_accumulator.apply_attributed_event(attributed_event)
+                if stat_update is not None:
+                    writer.write(stat_update)
 
     def _write_player_events(self, player_map, h_matrix, t_ms, writer):
         """Emit one player-state row per currently visible tracked player."""
@@ -580,6 +585,9 @@ class GameDNAExtractor:
             )
             if shot_attempt is not None:
                 writer.write(shot_attempt)
+                stat_update = self.mvp_stat_accumulator.apply_attributed_event(shot_attempt)
+                if stat_update is not None:
+                    writer.write(stat_update)
 
     def _maybe_build_shot_attempt_candidate(self, *, tid, learned_label, has_possession, t_ms):
         """Emit a conservative unresolved shot-attempt payload when evidence aligns.

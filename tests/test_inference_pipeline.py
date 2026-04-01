@@ -13,6 +13,7 @@ from pipelines.inference import (
     InferenceConfig,
     MvpEventAdapter,
 )
+from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
 
 class _RecordingWriter:
@@ -157,6 +158,24 @@ class ShotAttemptCandidateTest(unittest.TestCase):
         )
         self.assertIsNotNone(first)
         self.assertIsNone(second)
+
+
+class RunningStatUpdateTest(unittest.TestCase):
+    def test_accumulator_emits_stat_update_for_counted_event(self):
+        accumulator = MvpStatAccumulator()
+        update = accumulator.apply_attributed_event(
+            {
+                "kind": "attributed_event",
+                "event_type": "turnover",
+                "actor_id": 7,
+                "team_id": 1,
+                "t_ms": 800,
+                "stat_deltas": {"TOs": 1},
+            }
+        )
+        self.assertEqual(update["kind"], "stat_update")
+        self.assertEqual(update["applied_deltas"]["TOs"], 1)
+        self.assertEqual(update["running_totals"]["TOs"], 1)
 
 
 if __name__ == "__main__":
