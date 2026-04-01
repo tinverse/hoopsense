@@ -43,12 +43,12 @@ class CalibrationResolverTest(unittest.TestCase):
             h_matrix = resolver.homography_for_frame(3)
             self.assertTrue(np.array_equal(h_matrix, np.array([[1, 0, 10], [0, 1, 20], [0, 0, 1]])))
 
-    def test_load_for_clip_falls_back_to_legacy_global_matrix(self):
+    def test_load_for_clip_falls_back_to_global_matrix(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            legacy_path = tmp / "calibration.json"
-            legacy_path.write_text(json.dumps({"h_matrix": [[2, 0, 0], [0, 2, 0], [0, 0, 1]]}))
-            resolver = CalibrationResolver(tmp / "missing.json", legacy_path).load_for_clip("demo_clip")
+            fallback_path = tmp / "calibration.json"
+            fallback_path.write_text(json.dumps({"h_matrix": [[2, 0, 0], [0, 2, 0], [0, 0, 1]]}))
+            resolver = CalibrationResolver(tmp / "missing.json", fallback_path).load_for_clip("demo_clip")
             h_matrix = resolver.homography_for_frame(1)
             self.assertTrue(np.array_equal(h_matrix, np.array([[2, 0, 0], [0, 2, 0], [0, 0, 1]])))
 

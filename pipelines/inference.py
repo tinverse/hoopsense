@@ -45,7 +45,7 @@ BALL_DEFAULT_Z = 50.0
 class KalmanFilter:
     """Minimal 1D Kalman filter used to smooth court-space x/y coordinates.
 
-    This is intentionally tiny: the legacy inference path only smooths the
+    This is intentionally tiny: the current runtime path only smooths the
     projected court center for each track before handing it to downstream game
     logic. More complex multi-dimensional smoothing now lives in the review
     pipeline, but this class preserves the existing runtime behavior.
@@ -171,7 +171,7 @@ class InferenceConfig:
     smoke_test: bool = False
     pose_model_name: str = "yolov8n-pose.pt"
     calibration_path: str = "data/training/camera_calibration.json"
-    legacy_calibration_path: str = "data/calibration.json"
+    fallback_calibration_path: str = "data/calibration.json"
     brain_path: str = "data/models/action_brain.pt"
     output_filename: str = "intelligent_game_dna.jsonl"
 
@@ -179,7 +179,7 @@ class InferenceConfig:
 class CalibrationResolver:
     """Resolve clip-specific homography data for the current video.
 
-    The legacy inference path supports two calibration storage shapes:
+    The active inference path supports two calibration storage shapes:
     - per-clip data under `data/training/camera_calibration.json`
     - a fallback single global matrix under `data/calibration.json`
 
@@ -187,9 +187,9 @@ class CalibrationResolver:
     interface.
     """
 
-    def __init__(self, calibration_path, legacy_calibration_path):
+    def __init__(self, calibration_path, fallback_calibration_path):
         self.calibration_path = Path(calibration_path)
-        self.legacy_calibration_path = Path(legacy_calibration_path)
+        self.fallback_calibration_path = Path(fallback_calibration_path)
         self.global_h = np.eye(3)
         self.h_sequence = None
 
@@ -211,10 +211,10 @@ class CalibrationResolver:
                     }
                 elif "h_matrix" in calibration:
                     self.global_h = np.array(calibration["h_matrix"])
-        elif self.legacy_calibration_path.exists():
-            with open(self.legacy_calibration_path, "r") as f:
-                legacy = json.load(f)
-            self.global_h = np.array(legacy.get("h_matrix", np.eye(3)))
+        elif self.fallback_calibration_path.exists():
+            with open(self.fallback_calibration_path, "r") as f:
+                fallback = json.load(f)
+            self.global_h = np.array(fallback.get("h_matrix", np.eye(3)))
         return self
 
     def homography_for_frame(self, frame_idx):
@@ -286,9 +286,9 @@ class JsonlEventWriter:
 
 
 class MvpEventAdapter:
-    """Translate legacy runtime events into MVP-attribution payloads.
+    """Translate runtime events into MVP-attribution payloads.
 
-    The legacy inference path already emits simple `pass` / `catch` / `steal`
+    The current inference path already emits simple `pass` / `catch` / `steal`
     events. This adapter preserves those rows and adds a parallel
     `attributed_event` contract shaped for the deterministic MVP event-rule
     engine.
@@ -415,7 +415,7 @@ class FrameResultAdapter:
 
     @staticmethod
     def extract_arrays(result):
-        """Extract the raw arrays needed by the rest of the legacy pipeline."""
+        """Extract the raw arrays needed by the rest of the runtime pipeline."""
         result0 = result[0]
         boxes_xywh = result0.boxes.xywh
         cls = result0.boxes.cls
@@ -647,7 +647,7 @@ def resolve_video_path(video_path):
 
 
 def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
-    """Backward-compatible entrypoint for the legacy inference pipeline.
+    """Backward-compatible entrypoint for the current inference pipeline.
 
     The refactor keeps this function as the public API and CLI target, but the
     actual work is delegated to focused helpers so the control flow is readable:
@@ -667,7 +667,7 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
     clip_id = Path(config.video_path).stem
     calibration = CalibrationResolver(
         config.calibration_path,
-        config.legacy_calibration_path,
+        config.fallback_calibration_path,
     ).load_for_clip(clip_id)
     extractor = GameDNAExtractor(config, models, calibration)
     extractor.run()

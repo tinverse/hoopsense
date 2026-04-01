@@ -121,6 +121,7 @@ The current highest-priority frontier is:
 - [x] Check in machine-readable MVP event-evidence rules and a loader for deterministic stat attribution
 - [x] Make the first deterministic event-attribution path consume the checked-in MVP event rules
 - [x] Emit first attributed MVP event payloads in the shape required by the deterministic event-rule engine
+- [x] Remove stale legacy labeling from the active inference path while preserving explicit compatibility fallbacks
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
