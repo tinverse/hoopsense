@@ -9,6 +9,8 @@ from pipelines.inference import (
     BALL_CLASS_ID,
     CalibrationResolver,
     FrameResultAdapter,
+    GameDNAExtractor,
+    InferenceConfig,
     MvpEventAdapter,
 )
 
@@ -109,6 +111,52 @@ class MvpEventAdapterTest(unittest.TestCase):
         self.assertEqual(steal["stat_deltas"]["Steals"], 1)
         self.assertEqual(turnover["rule_validation"], [])
         self.assertEqual(steal["rule_validation"], [])
+
+
+class ShotAttemptCandidateTest(unittest.TestCase):
+    def _extractor(self):
+        extractor = GameDNAExtractor(
+            InferenceConfig(video_path="dummy.mp4"),
+            models=type("Models", (), {"brain": None, "device": None})(),
+            calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+        )
+        extractor.tracks = {
+            4: type("Track", (), {"team": 1, "court_x": 0.0, "court_y": 0.0})(),
+        }
+        extractor.last_ball_2d = np.array([320.0, 180.0])
+        extractor.possession_engine.current_handler = 4
+        return extractor
+
+    def test_maybe_build_shot_attempt_candidate_emits_unresolved_payload(self):
+        extractor = self._extractor()
+        payload = extractor._maybe_build_shot_attempt_candidate(
+            tid=4,
+            learned_label="jump_shot",
+            has_possession=True,
+            t_ms=1200,
+        )
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["event_type"], "shot_attempt")
+        self.assertTrue(payload["candidate_only"])
+        self.assertIn("shot_value_known", payload["rule_validation"])
+        self.assertEqual(payload["stat_deltas"], {})
+
+    def test_maybe_build_shot_attempt_candidate_debounces_repeated_labels(self):
+        extractor = self._extractor()
+        first = extractor._maybe_build_shot_attempt_candidate(
+            tid=4,
+            learned_label="jump_shot",
+            has_possession=True,
+            t_ms=1200,
+        )
+        second = extractor._maybe_build_shot_attempt_candidate(
+            tid=4,
+            learned_label="jump_shot",
+            has_possession=True,
+            t_ms=1800,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
 
 
 if __name__ == "__main__":

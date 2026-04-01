@@ -341,6 +341,16 @@ class MvpEventAdapter:
             return outputs
         return []
 
+    def build_shot_attempt_candidate(self, *, track_id, team_id, t_ms, evidence, shot_value=None):
+        return self._build_and_count(
+            event_type="shot_attempt",
+            actor_id=track_id,
+            team_id=team_id,
+            t_ms=t_ms,
+            evidence=evidence,
+            shot_value=shot_value,
+        )
+
     def _build_and_count(
         self,
         *,
@@ -471,6 +481,7 @@ class GameDNAExtractor:
         self.possession_engine = PossessionEngine()
         self.mvp_event_adapter = MvpEventAdapter()
         self.last_ball_2d = np.array([0.0, 0.0])
+        self.last_shot_attempt_t_ms_by_track = {}
 
     def run(self):
         """Drive the frame loop and stream JSONL output for the whole video."""
@@ -561,6 +572,49 @@ class GameDNAExtractor:
                     "court_y": track.court_y,
                 }
             )
+            shot_attempt = self._maybe_build_shot_attempt_candidate(
+                tid=tid,
+                learned_label=learned_label,
+                has_possession=has_possession,
+                t_ms=t_ms,
+            )
+            if shot_attempt is not None:
+                writer.write(shot_attempt)
+
+    def _maybe_build_shot_attempt_candidate(self, *, tid, learned_label, has_possession, t_ms):
+        """Emit a conservative unresolved shot-attempt payload when evidence aligns.
+
+        This path does not overclaim made/missed outcomes. It only surfaces a
+        shot-attempt candidate in MVP event shape when the current runtime has:
+        - the same player as current ballhandler
+        - a shot-like Action Brain / declarative label
+        - recent ball visibility
+
+        The deterministic rule engine will explicitly report any remaining
+        unsatisfied constraints such as missing shot value.
+        """
+        if learned_label != "jump_shot":
+            return None
+        if not has_possession:
+            return None
+        last_emitted_t_ms = self.last_shot_attempt_t_ms_by_track.get(tid)
+        if last_emitted_t_ms is not None and (t_ms - last_emitted_t_ms) < 1200:
+            return None
+        ball_visible = bool(np.any(self.last_ball_2d))
+        evidence = {
+            "ball_release": ball_visible,
+            "action_label": learned_label,
+        }
+        payload = self.mvp_event_adapter.build_shot_attempt_candidate(
+            track_id=tid,
+            team_id=self.tracks[tid].team,
+            t_ms=t_ms,
+            evidence=evidence,
+            shot_value=None,
+        )
+        payload["candidate_only"] = True
+        self.last_shot_attempt_t_ms_by_track[tid] = t_ms
+        return payload
 
     def _infer_action_label(self, track, h_matrix):
         """Run Action Brain only when enough pose history is available."""
