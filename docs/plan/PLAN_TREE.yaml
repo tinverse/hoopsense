@@ -13,7 +13,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-03-31"
+  last_updated: "2026-04-01"
 
 levels:
   L0:
@@ -521,6 +521,16 @@ levels:
     - id: L3.72
       parent: L2.13
       title: Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
+      owner: A0
+      status: in_progress
+    - id: L3.77
+      parent: L2.13
+      title: Define a staged Stage-1 ball-state contract and implementation plan from primary-source review
+      owner: A0
+      status: completed
+    - id: L3.78
+      parent: L2.13
+      title: Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
       owner: A0
       status: in_progress
     - id: L3.74

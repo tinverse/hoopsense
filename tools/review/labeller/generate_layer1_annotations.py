@@ -43,6 +43,11 @@ APPEARANCE_TEAM_DISTANCE_THRESHOLD = 0.42
 APPEARANCE_LOW_MOTION_THRESHOLD_PX = 3.0
 BALL_CLASS_ID = 32
 BALL_MIN_LIVE_PLAY_CONFIDENCE = 0.35
+BALL_STATE_MIN_SCORE = 0.30
+BALL_STATE_MAX_JUMP_PX = 180.0
+BALL_STATE_MAX_GAP_FRAMES = 4
+BALL_STATE_MIN_SIZE_PX = 4.0
+BALL_STATE_MAX_SIZE_PX = 80.0
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
 
@@ -173,8 +178,151 @@ def _extract_best_ball_detection(detections):
     return ball_detection
 
 
+def _ball_size_score(detection):
+    bbox_xywh = detection.get("bbox_xywh") or []
+    if len(bbox_xywh) < 4:
+        return 0.0
+    diameter = max(float(bbox_xywh[2]), float(bbox_xywh[3]))
+    if diameter < BALL_STATE_MIN_SIZE_PX or diameter > BALL_STATE_MAX_SIZE_PX:
+        return 0.0
+    midpoint = 0.5 * (BALL_STATE_MIN_SIZE_PX + BALL_STATE_MAX_SIZE_PX)
+    spread = max(1.0, midpoint - BALL_STATE_MIN_SIZE_PX)
+    return max(0.0, 1.0 - abs(diameter - midpoint) / spread)
+
+
+def _ball_continuity_score(detection, previous_center_xy):
+    if previous_center_xy is None:
+        return 0.5
+    center_xy = detection.get("center_xy")
+    if not center_xy or len(center_xy) != 2:
+        return 0.0
+    distance = float(np.linalg.norm(np.array(center_xy, dtype=np.float32) - np.array(previous_center_xy, dtype=np.float32)))
+    if distance >= BALL_STATE_MAX_JUMP_PX:
+        return 0.0
+    return max(0.0, 1.0 - distance / BALL_STATE_MAX_JUMP_PX)
+
+
+def _score_ball_candidate(detection, previous_center_xy):
+    confidence = float(detection.get("confidence") or 0.0)
+    continuity = _ball_continuity_score(detection, previous_center_xy)
+    size_score = _ball_size_score(detection)
+    score = 0.65 * confidence + 0.25 * continuity + 0.10 * size_score
+    return {
+        "detection": detection,
+        "confidence": confidence,
+        "continuity_score": continuity,
+        "size_score": size_score,
+        "score": score,
+    }
+
+
+def annotate_ball_state(frames):
+    previous_center_xy = None
+    previous_velocity_xy = np.array([0.0, 0.0], dtype=np.float32)
+    previous_confidence = 0.0
+    missing_gap_frames = 0
+
+    for frame in frames:
+        raw_ball_detection = frame.get("ball_detection")
+        candidates = []
+        if raw_ball_detection is not None:
+            candidates.append(_score_ball_candidate(raw_ball_detection, previous_center_xy))
+
+        selected = max(candidates, key=lambda item: item["score"], default=None)
+        ball_state = None
+        if selected is not None and selected["score"] >= BALL_STATE_MIN_SCORE:
+            detection = selected["detection"]
+            center_xy = [round(float(v), 3) for v in (detection.get("center_xy") or [0.0, 0.0])]
+            if previous_center_xy is None:
+                velocity_xy = [0.0, 0.0]
+            else:
+                velocity_xy = [
+                    round(float(center_xy[0] - previous_center_xy[0]), 3),
+                    round(float(center_xy[1] - previous_center_xy[1]), 3),
+                ]
+            previous_center_xy = np.array(center_xy, dtype=np.float32)
+            previous_velocity_xy = np.array(velocity_xy, dtype=np.float32)
+            previous_confidence = float(detection.get("confidence") or 0.0)
+            missing_gap_frames = 0
+            ball_state = {
+                "state": "observed",
+                "confidence": round(previous_confidence, 4),
+                "center_xy": center_xy,
+                "bbox_xyxy": detection.get("bbox_xyxy"),
+                "bbox_xywh": detection.get("bbox_xywh"),
+                "court_xy": detection.get("court_xy"),
+                "velocity_xy": velocity_xy,
+                "speed_px": round(_vector_norm(velocity_xy), 3),
+                "missing_gap_frames": 0,
+                "source": "detector",
+                "candidate_count": len(candidates),
+                "candidate_scores": [
+                    {
+                        "score": round(float(candidate["score"]), 4),
+                        "confidence": round(float(candidate["confidence"]), 4),
+                    }
+                    for candidate in candidates[:3]
+                ],
+            }
+        elif previous_center_xy is not None and missing_gap_frames < BALL_STATE_MAX_GAP_FRAMES:
+            missing_gap_frames += 1
+            predicted_center = previous_center_xy + previous_velocity_xy
+            previous_center_xy = predicted_center
+            ball_state = {
+                "state": "predicted_short_gap",
+                "confidence": round(previous_confidence * 0.85, 4),
+                "center_xy": [round(float(predicted_center[0]), 3), round(float(predicted_center[1]), 3)],
+                "bbox_xyxy": None,
+                "bbox_xywh": None,
+                "court_xy": None,
+                "velocity_xy": [round(float(previous_velocity_xy[0]), 3), round(float(previous_velocity_xy[1]), 3)],
+                "speed_px": round(_vector_norm(previous_velocity_xy), 3),
+                "missing_gap_frames": int(missing_gap_frames),
+                "source": "smoothed_prediction",
+                "candidate_count": len(candidates),
+                "candidate_scores": [
+                    {
+                        "score": round(float(candidate["score"]), 4),
+                        "confidence": round(float(candidate["confidence"]), 4),
+                    }
+                    for candidate in candidates[:3]
+                ],
+            }
+        else:
+            missing_gap_frames = max(missing_gap_frames, BALL_STATE_MAX_GAP_FRAMES + 1)
+            ball_state = {
+                "state": "missing",
+                "confidence": 0.0,
+                "center_xy": None,
+                "bbox_xyxy": None,
+                "bbox_xywh": None,
+                "court_xy": None,
+                "velocity_xy": [0.0, 0.0],
+                "speed_px": 0.0,
+                "missing_gap_frames": int(missing_gap_frames),
+                "source": "smoothed_prediction",
+                "candidate_count": len(candidates),
+                "candidate_scores": [
+                    {
+                        "score": round(float(candidate["score"]), 4),
+                        "confidence": round(float(candidate["confidence"]), 4),
+                    }
+                    for candidate in candidates[:3]
+                ],
+            }
+        frame["ball_state"] = ball_state
+    return {
+        "kind": "single_candidate_short_gap_v1",
+        "min_score": BALL_STATE_MIN_SCORE,
+        "max_jump_px": BALL_STATE_MAX_JUMP_PX,
+        "max_gap_frames": BALL_STATE_MAX_GAP_FRAMES,
+    }
+
+
 def _vector_norm(vec):
-    if not vec or len(vec) < 2:
+    if vec is None:
+        return 0.0
+    if len(vec) < 2:
         return 0.0
     return float(np.linalg.norm([float(vec[0]), float(vec[1])]))
 
@@ -834,6 +982,7 @@ def annotate_team_appearance_consistency(frames):
 
 def score_live_play_frame(frame):
     detections = frame.get("detections", [])
+    ball_state = frame.get("ball_state")
     ball_detection = frame.get("ball_detection")
     active = [d for d in detections if d.get("active_player_candidate")]
     active_reasons = [d.get("active_player_reasons") or {} for d in active]
@@ -882,8 +1031,13 @@ def score_live_play_frame(frame):
     motion_median_score = _clip01(motion_energy_median / LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX)
     high_motion_score = _clip01(high_motion_count / 2.0)
     continuity_score = 1.0 - _clip01(track_churn_count / max(len(detections), 1))
-    ball_confidence = float(ball_detection.get("confidence") or 0.0) if ball_detection else 0.0
-    ball_signal_score = 1.0 if ball_confidence >= BALL_MIN_LIVE_PLAY_CONFIDENCE else 0.0
+    effective_ball = ball_state or ball_detection
+    if ball_state:
+        ball_confidence = float(ball_state.get("confidence") or 0.0)
+        ball_signal_score = 1.0 if ball_state.get("state") != "missing" and ball_confidence >= BALL_MIN_LIVE_PLAY_CONFIDENCE else 0.0
+    else:
+        ball_confidence = float(ball_detection.get("confidence") or 0.0) if ball_detection else 0.0
+        ball_signal_score = 1.0 if ball_confidence >= BALL_MIN_LIVE_PLAY_CONFIDENCE else 0.0
     motion_attenuation = max(0.05, 1.0 - 0.95 * camera_pan_pressure)
     motion_sum_score *= motion_attenuation
     motion_median_score *= motion_attenuation
@@ -933,7 +1087,8 @@ def score_live_play_frame(frame):
         "dead_ball_bias": round(dead_ball_bias, 4),
         "live_play_bias": round(live_play_bias, 4),
         "ball_signal_present": bool(ball_signal_score),
-        "ball_confidence": round(ball_confidence, 4) if ball_detection else None,
+        "ball_confidence": round(ball_confidence, 4) if effective_ball else None,
+        "ball_state": ball_state.get("state") if ball_state else ("observed" if ball_detection else "missing"),
     }
     return {
         "score": round(score, 4),
@@ -1767,6 +1922,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
     continuity = annotate_continuity_segments(frames)
+    ball_state_summary = annotate_ball_state(frames)
     appearance_summary = annotate_team_appearance_consistency(frames)
     frames = annotate_active_players(frames, video_meta)
     frames, identity_hypotheses = repair_short_track_gaps(
@@ -1829,6 +1985,12 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
                 "low_motion_threshold_px": APPEARANCE_LOW_MOTION_THRESHOLD_PX,
                 "prototype_count": appearance_summary["prototype_count"],
                 "prototype_buckets": appearance_summary["prototype_buckets"],
+            },
+            "ball_state": {
+                "kind": ball_state_summary["kind"],
+                "min_score": ball_state_summary["min_score"],
+                "max_jump_px": ball_state_summary["max_jump_px"],
+                "max_gap_frames": ball_state_summary["max_gap_frames"],
             },
             "live_play_gate": {
                 "kind": "heuristic_frame_and_segment_v1",

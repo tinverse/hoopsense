@@ -41,6 +41,11 @@ LABEL_MAP_INV = get_label_map()
 PERSON_CLASS_ID = 0
 BALL_CLASS_ID = 32
 BALL_DEFAULT_Z = 50.0
+BALL_MIN_OBSERVED_CONFIDENCE = 0.30
+BALL_MAX_PREDICT_GAP_FRAMES = 4
+BALL_MAX_JUMP_PX = 180.0
+BALL_MIN_SIZE_PX = 4.0
+BALL_MAX_SIZE_PX = 80.0
 
 
 class KalmanFilter:
@@ -115,6 +120,144 @@ class TrackManager:
 
     def is_ready(self):
         return len(self.kpt_history) == 30
+
+
+class BallStateTracker:
+    """Keep one conservative ball state through short detector misses.
+
+    Stage 1 intentionally does not attempt full multi-hypothesis ball tracking.
+    It selects at most one candidate per frame, applies simple continuity-aware
+    scoring, and predicts through only short gaps.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_observed_confidence=BALL_MIN_OBSERVED_CONFIDENCE,
+        max_predict_gap_frames=BALL_MAX_PREDICT_GAP_FRAMES,
+        max_jump_px=BALL_MAX_JUMP_PX,
+    ):
+        self.min_observed_confidence = float(min_observed_confidence)
+        self.max_predict_gap_frames = int(max_predict_gap_frames)
+        self.max_jump_px = float(max_jump_px)
+        self.center_xy = None
+        self.velocity_xy = np.array([0.0, 0.0], dtype=np.float32)
+        self.confidence = 0.0
+        self.missing_gap_frames = 0
+
+    def _size_score(self, bbox_xywh):
+        width = float(bbox_xywh[2]) if len(bbox_xywh) >= 3 else 0.0
+        height = float(bbox_xywh[3]) if len(bbox_xywh) >= 4 else 0.0
+        diameter = max(width, height)
+        if diameter < BALL_MIN_SIZE_PX or diameter > BALL_MAX_SIZE_PX:
+            return 0.0
+        midpoint = 0.5 * (BALL_MIN_SIZE_PX + BALL_MAX_SIZE_PX)
+        spread = max(1.0, midpoint - BALL_MIN_SIZE_PX)
+        return max(0.0, 1.0 - abs(diameter - midpoint) / spread)
+
+    def _continuity_score(self, candidate_center):
+        if self.center_xy is None:
+            return 0.5
+        distance = float(np.linalg.norm(candidate_center - self.center_xy))
+        if distance >= self.max_jump_px:
+            return 0.0
+        return max(0.0, 1.0 - distance / self.max_jump_px)
+
+    def _candidate_score(self, bbox_xywh, confidence):
+        candidate_center = np.array([float(bbox_xywh[0]), float(bbox_xywh[1])], dtype=np.float32)
+        confidence_score = max(0.0, min(1.0, float(confidence)))
+        continuity_score = self._continuity_score(candidate_center)
+        size_score = self._size_score(bbox_xywh)
+        score = 0.65 * confidence_score + 0.25 * continuity_score + 0.10 * size_score
+        return score, candidate_center, continuity_score, size_score
+
+    def update(self, boxes_xywh, cls, conf):
+        candidates = []
+        for bbox_xywh, class_id, confidence in zip(boxes_xywh, cls, conf):
+            if int(class_id) != BALL_CLASS_ID:
+                continue
+            score, center_xy, continuity_score, size_score = self._candidate_score(bbox_xywh, confidence)
+            candidates.append(
+                {
+                    "bbox_xywh": [float(v) for v in bbox_xywh],
+                    "center_xy": center_xy,
+                    "confidence": float(confidence),
+                    "score": float(score),
+                    "continuity_score": float(continuity_score),
+                    "size_score": float(size_score),
+                }
+            )
+
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        selected = candidates[0] if candidates else None
+        if selected and selected["score"] >= self.min_observed_confidence:
+            next_center = selected["center_xy"]
+            if self.center_xy is not None:
+                self.velocity_xy = next_center - self.center_xy
+            self.center_xy = next_center
+            self.confidence = float(selected["confidence"])
+            self.missing_gap_frames = 0
+            return {
+                "state": "observed",
+                "confidence": round(float(selected["confidence"]), 4),
+                "center_xy": [round(float(next_center[0]), 3), round(float(next_center[1]), 3)],
+                "bbox_xywh": [round(float(v), 3) for v in selected["bbox_xywh"]],
+                "velocity_xy": [round(float(self.velocity_xy[0]), 3), round(float(self.velocity_xy[1]), 3)],
+                "speed_px": round(float(np.linalg.norm(self.velocity_xy)), 3),
+                "missing_gap_frames": 0,
+                "source": "detector",
+                "candidate_count": len(candidates),
+                "candidate_scores": [
+                    {
+                        "confidence": round(float(candidate["confidence"]), 4),
+                        "score": round(float(candidate["score"]), 4),
+                    }
+                    for candidate in candidates[:3]
+                ],
+            }
+
+        if self.center_xy is not None and self.missing_gap_frames < self.max_predict_gap_frames:
+            self.missing_gap_frames += 1
+            self.center_xy = self.center_xy + self.velocity_xy
+            return {
+                "state": "predicted_short_gap",
+                "confidence": round(float(self.confidence * 0.85), 4),
+                "center_xy": [round(float(self.center_xy[0]), 3), round(float(self.center_xy[1]), 3)],
+                "bbox_xywh": None,
+                "velocity_xy": [round(float(self.velocity_xy[0]), 3), round(float(self.velocity_xy[1]), 3)],
+                "speed_px": round(float(np.linalg.norm(self.velocity_xy)), 3),
+                "missing_gap_frames": int(self.missing_gap_frames),
+                "source": "smoothed_prediction",
+                "candidate_count": len(candidates),
+                "candidate_scores": [
+                    {
+                        "confidence": round(float(candidate["confidence"]), 4),
+                        "score": round(float(candidate["score"]), 4),
+                    }
+                    for candidate in candidates[:3]
+                ],
+            }
+
+        self.missing_gap_frames = self.max_predict_gap_frames + 1
+        self.confidence = 0.0
+        return {
+            "state": "missing",
+            "confidence": 0.0,
+            "center_xy": None,
+            "bbox_xywh": None,
+            "velocity_xy": [0.0, 0.0],
+            "speed_px": 0.0,
+            "missing_gap_frames": int(self.missing_gap_frames),
+            "source": "smoothed_prediction",
+            "candidate_count": len(candidates),
+            "candidate_scores": [
+                {
+                    "confidence": round(float(candidate["confidence"]), 4),
+                    "score": round(float(candidate["score"]), 4),
+                }
+                for candidate in candidates[:3]
+            ],
+        }
 
 
 def construct_features_v2(
@@ -431,33 +574,30 @@ class FrameResultAdapter:
         return boxes_xywh, cls, conf, tids, classes, keypoints
 
     @staticmethod
-    def extract_ball_state(boxes_xywh, cls, conf, last_ball_2d, h_matrix, t_ms, writer):
-        """Update the last-seen ball state and emit the corresponding JSONL rows.
-
-        This preserves existing behavior: we treat every class-32 detection as a
-        fresh frame-level observation and keep only the most recent projected
-        center as the input to downstream player features.
-        """
+    def extract_ball_state(boxes_xywh, cls, conf, ball_tracker, h_matrix, t_ms, writer):
+        """Select one auditable ball state and emit it as the runtime ball row."""
+        ball_state = ball_tracker.update(boxes_xywh, cls, conf)
+        center_xy = ball_state.get("center_xy")
+        updated_ball_2d = np.array(center_xy, dtype=np.float32) if center_xy else np.array([0.0, 0.0], dtype=np.float32)
         ball_3d = None
-        updated_ball_2d = last_ball_2d
-        for bbox_xywh, class_id, confidence in zip(boxes_xywh, cls, conf):
-            if int(class_id) != BALL_CLASS_ID:
-                continue
-            updated_ball_2d = np.array([float(bbox_xywh[0]), float(bbox_xywh[1])])
-            ball_court_xy = project_pixel_to_court(
-                updated_ball_2d[0], updated_ball_2d[1], h_matrix
-            )
+        if center_xy:
+            ball_court_xy = project_pixel_to_court(updated_ball_2d[0], updated_ball_2d[1], h_matrix)
             ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], BALL_DEFAULT_Z])
-            writer.write(
-                {
-                    "kind": "ball",
-                    "t_ms": t_ms,
-                    "x": float(bbox_xywh[0]),
-                    "y": float(bbox_xywh[1]),
-                    "confidence_bps": int(confidence * 10000),
-                }
-            )
-        return updated_ball_2d, ball_3d
+            ball_state["court_xy"] = [round(float(ball_court_xy[0]), 3), round(float(ball_court_xy[1]), 3)]
+        writer.write(
+            {
+                "kind": "ball",
+                "t_ms": t_ms,
+                "state": ball_state["state"],
+                "confidence_bps": int(float(ball_state.get("confidence") or 0.0) * 10000),
+                "x": float(center_xy[0]) if center_xy else None,
+                "y": float(center_xy[1]) if center_xy else None,
+                "missing_gap_frames": int(ball_state.get("missing_gap_frames") or 0),
+                "candidate_count": int(ball_state.get("candidate_count") or 0),
+                "source": ball_state.get("source"),
+            }
+        )
+        return ball_state, updated_ball_2d, ball_3d
 
 
 class GameDNAExtractor:
@@ -482,6 +622,8 @@ class GameDNAExtractor:
         self.possession_engine = PossessionEngine()
         self.mvp_event_adapter = MvpEventAdapter()
         self.mvp_stat_accumulator = MvpStatAccumulator()
+        self.ball_tracker = BallStateTracker()
+        self.ball_state = None
         self.last_ball_2d = np.array([0.0, 0.0])
         self.last_shot_attempt_t_ms_by_track = {}
 
@@ -526,8 +668,8 @@ class GameDNAExtractor:
         boxes_xywh, cls, conf, tids, classes, keypoints = FrameResultAdapter.extract_arrays(result)
         # Ball state is updated before player features are built so Action Brain
         # sees the freshest available ball position for this frame.
-        self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
-            boxes_xywh, cls, conf, self.last_ball_2d, h_matrix, t_ms, writer
+        self.ball_state, self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
+            boxes_xywh, cls, conf, self.ball_tracker, h_matrix, t_ms, writer
         )
         player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
         self._write_possession_events(player_map, ball_3d, t_ms, writer)
@@ -628,7 +770,7 @@ class GameDNAExtractor:
         last_emitted_t_ms = self.last_shot_attempt_t_ms_by_track.get(tid)
         if last_emitted_t_ms is not None and (t_ms - last_emitted_t_ms) < 1200:
             return None
-        ball_visible = bool(np.any(self.last_ball_2d))
+        ball_visible = self.ball_state is not None and self.ball_state.get("state") != "missing"
         evidence = {
             "ball_release": ball_visible,
             "action_label": learned_label,

@@ -32,6 +32,7 @@ from tools.review.labeller.generate_layer1_annotations import (
     _score_identity_link,
     annotate_team_appearance_consistency,
     annotate_active_players,
+    annotate_ball_state,
     annotate_continuity_segments,
     annotate_identity_jersey_numbers,
     annotate_live_play,
@@ -190,6 +191,54 @@ class ActivePlayerScoreTest(unittest.TestCase):
         )
         self.assertGreater(baseline["reasons"]["appearance_penalty"], 0.0)
         self.assertEqual(moving["reasons"]["appearance_penalty"], 0.0)
+
+
+class BallStateTest(unittest.TestCase):
+    def test_annotate_ball_state_marks_observed_and_predicted_short_gap(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "ball_detection": {
+                    "confidence": 0.72,
+                    "bbox_xyxy": [290.0, 210.0, 302.0, 222.0],
+                    "bbox_xywh": [296.0, 216.0, 12.0, 12.0],
+                    "center_xy": [296.0, 216.0],
+                },
+            },
+            {
+                "frame_idx": 1,
+                "ball_detection": None,
+            },
+        ]
+        summary = annotate_ball_state(frames)
+        self.assertEqual(summary["kind"], "single_candidate_short_gap_v1")
+        self.assertEqual(frames[0]["ball_state"]["state"], "observed")
+        self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
+        self.assertEqual(frames[1]["ball_state"]["missing_gap_frames"], 1)
+
+    def test_annotate_ball_state_rejects_implausible_jump(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "ball_detection": {
+                    "confidence": 0.72,
+                    "bbox_xyxy": [290.0, 210.0, 302.0, 222.0],
+                    "bbox_xywh": [296.0, 216.0, 12.0, 12.0],
+                    "center_xy": [296.0, 216.0],
+                },
+            },
+            {
+                "frame_idx": 1,
+                "ball_detection": {
+                    "confidence": 0.31,
+                    "bbox_xyxy": [790.0, 610.0, 802.0, 622.0],
+                    "bbox_xywh": [796.0, 616.0, 12.0, 12.0],
+                    "center_xy": [796.0, 616.0],
+                },
+            },
+        ]
+        annotate_ball_state(frames)
+        self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
 
 
 class AppearanceConsistencyTest(unittest.TestCase):

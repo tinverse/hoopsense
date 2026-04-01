@@ -512,12 +512,15 @@ function drawDetectionOverlay(detection) {
 }
 
 function drawBallOverlay(ballDetection) {
-    if (!ballDetection || !ballDetection.bbox_xyxy) return;
-    const [x1, y1, x2, y2] = ballDetection.bbox_xyxy;
-    const center = ballDetection.center_xy || [((x1 + x2) / 2), ((y1 + y2) / 2)];
+    if (!ballDetection) return;
+    const bbox = ballDetection.bbox_xyxy || null;
+    const center = ballDetection.center_xy || (bbox ? [((bbox[0] + bbox[2]) / 2), ((bbox[1] + bbox[3]) / 2)] : null);
+    if (!center) return;
+    const [x1, y1, x2, y2] = bbox || [center[0] - 8, center[1] - 8, center[0] + 8, center[1] + 8];
     const confidence = Math.round((ballDetection.confidence || 0) * 100);
     const radius = Math.max(7, Math.min(18, Math.max(x2 - x1, y2 - y1) / 2));
-    const label = `BALL ${confidence}%`;
+    const stateLabel = ballDetection.state === 'predicted_short_gap' ? 'PRED' : 'BALL';
+    const label = `${stateLabel} ${confidence}%`;
     const labelWidth = Math.max(90, label.length * 10 + 16);
     const labelHeight = 24;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, center[0] - labelWidth / 2));
@@ -555,7 +558,7 @@ function redrawOverlay() {
     const frame = getCurrentPerceptionFrame();
     if (perceptionVisible && frame) {
         frame.detections.forEach(drawDetectionOverlay);
-        drawBallOverlay(frame.ball_detection);
+        drawBallOverlay(frame.ball_state || frame.ball_detection);
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
         const firstDetection = frame.detections.find(d => d.court_xy);
@@ -564,7 +567,7 @@ function redrawOverlay() {
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const jerseyCount = frame.detections.filter(d => !!getVisibleJerseyMetadata(d)).length;
         const identityHypothesisCount = Array.isArray(frame.identity_hypothesis_group_ids) ? frame.identity_hypothesis_group_ids.length : 0;
-        const ballDetection = frame.ball_detection || null;
+        const ballDetection = frame.ball_state || frame.ball_detection || null;
         const continuitySegment = frame.continuity_segment_id !== undefined && frame.continuity_segment_id !== null
             ? ` continuity segment ${frame.continuity_segment_id}`
             : '';
@@ -572,8 +575,9 @@ function redrawOverlay() {
         const discontinuityScore = frame.discontinuity_score !== undefined && frame.discontinuity_score !== null
             ? frame.discontinuity_score.toFixed(2)
             : 'n/a';
+        const ballStateLabel = ballDetection && ballDetection.state ? ` (${ballDetection.state})` : '';
         const ballText = ballDetection
-            ? ` Ball ${Math.round((ballDetection.confidence || 0) * 100)}%${ballDetection.court_xy ? ` @ (${ballDetection.court_xy[0].toFixed(1)}, ${ballDetection.court_xy[1].toFixed(1)})` : ''}.`
+            ? ` Ball${ballStateLabel} ${Math.round((ballDetection.confidence || 0) * 100)}%${ballDetection.court_xy ? ` @ (${ballDetection.court_xy[0].toFixed(1)}, ${ballDetection.court_xy[1].toFixed(1)})` : ''}.`
             : ' Ball not detected in this frame.';
         const livePlayLabel = frame.live_play_label || 'unknown';
         const livePlayScore = frame.live_play_score !== undefined && frame.live_play_score !== null
@@ -589,7 +593,7 @@ function redrawOverlay() {
             : '';
         explainerDescription.textContent =
             `Real Ultralytics detections and pose keypoints for frame ${frame.frame_idx}. ` +
-            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, yellow boxes are repaired track gaps, and orange circles mark the best ball detection. ` +
+            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, yellow boxes are repaired track gaps, and orange circles mark the selected ball state. ` +
             `Cyan skeletons show keypoints. Live-play gate: ${livePlayLabel} @ ${livePlayScore}.` +
             ` Continuity: ${discontinuityLabel} @ ${discontinuityScore}.${continuitySegment ? ` In${continuitySegment}.` : ''}` +
             (dominantSignal ? ` Dominant signal: ${dominantSignal}.` : '') +
@@ -597,7 +601,7 @@ function redrawOverlay() {
             ballText +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? Math.round((ballDetection.confidence || 0) * 100) + '%' : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? `${ballDetection.state || 'observed'} ${Math.round((ballDetection.confidence || 0) * 100)}%` : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
