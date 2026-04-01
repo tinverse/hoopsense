@@ -9,6 +9,7 @@ from pipelines.inference import (
     BALL_CLASS_ID,
     CalibrationResolver,
     FrameResultAdapter,
+    MvpEventAdapter,
 )
 
 
@@ -73,6 +74,41 @@ class FrameResultAdapterTest(unittest.TestCase):
         self.assertEqual(len(writer.rows), 1)
         self.assertEqual(writer.rows[0]["kind"], "ball")
         self.assertEqual(writer.rows[0]["t_ms"], 250)
+
+
+class MvpEventAdapterTest(unittest.TestCase):
+    def setUp(self):
+        self.adapter = MvpEventAdapter()
+        self.player_map = {
+            7: {"team": 1},
+            9: {"team": 1},
+            14: {"team": 2},
+        }
+
+    def test_adapt_pass_emits_attributed_event(self):
+        rows = self.adapter.adapt(
+            {"kind": "pass", "from": 7, "to": 9, "team_id": 1, "t_ms": 500},
+            self.player_map,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "attributed_event")
+        self.assertEqual(rows[0]["event_type"], "pass")
+        self.assertEqual(rows[0]["actor_id"], 7)
+        self.assertEqual(rows[0]["secondary_actor_id"], 9)
+        self.assertEqual(rows[0]["stat_deltas"], {})
+        self.assertEqual(rows[0]["rule_validation"], [])
+
+    def test_adapt_steal_emits_turnover_and_steal(self):
+        rows = self.adapter.adapt(
+            {"kind": "steal", "player_id": 14, "from": 7, "team_id": 2, "t_ms": 800},
+            self.player_map,
+        )
+        self.assertEqual([row["event_type"] for row in rows], ["turnover", "steal"])
+        turnover, steal = rows
+        self.assertEqual(turnover["stat_deltas"]["TOs"], 1)
+        self.assertEqual(steal["stat_deltas"]["Steals"], 1)
+        self.assertEqual(turnover["rule_validation"], [])
+        self.assertEqual(steal["rule_validation"], [])
 
 
 if __name__ == "__main__":

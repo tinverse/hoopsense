@@ -9,6 +9,7 @@ import yaml
 
 from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
 from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
+from pipelines.mvp_event_engine import MvpEventRuleEngine
 
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
@@ -284,6 +285,108 @@ class JsonlEventWriter:
         self._fh.write(json.dumps(payload) + "\n")
 
 
+class MvpEventAdapter:
+    """Translate legacy runtime events into MVP-attribution payloads.
+
+    The legacy inference path already emits simple `pass` / `catch` / `steal`
+    events. This adapter preserves those rows and adds a parallel
+    `attributed_event` contract shaped for the deterministic MVP event-rule
+    engine.
+    """
+
+    def __init__(self, rule_engine=None):
+        self.rule_engine = rule_engine or MvpEventRuleEngine()
+
+    def adapt(self, raw_event, player_map):
+        kind = raw_event.get("kind")
+        if kind == "catch":
+            return [self._build_and_count(
+                event_type="catch",
+                actor_id=raw_event.get("player_id"),
+                team_id=self._team_for(player_map, raw_event.get("player_id")),
+                t_ms=raw_event.get("t_ms"),
+                evidence={},
+            )]
+        if kind == "pass":
+            return [self._build_and_count(
+                event_type="pass",
+                actor_id=raw_event.get("from"),
+                secondary_actor_id=raw_event.get("to"),
+                team_id=raw_event.get("team_id") or self._team_for(player_map, raw_event.get("from")),
+                t_ms=raw_event.get("t_ms"),
+                next_event_type="catch",
+                evidence={},
+            )]
+        if kind == "steal":
+            outputs = []
+            offender_id = raw_event.get("from")
+            if offender_id is not None:
+                outputs.append(self._build_and_count(
+                    event_type="turnover",
+                    actor_id=offender_id,
+                    secondary_actor_id=raw_event.get("player_id"),
+                    team_id=self._team_for(player_map, offender_id),
+                    t_ms=raw_event.get("t_ms"),
+                    next_event_type="steal",
+                    evidence={"loss_of_team_control": True},
+                ))
+            outputs.append(self._build_and_count(
+                event_type="steal",
+                actor_id=raw_event.get("player_id"),
+                secondary_actor_id=offender_id,
+                team_id=raw_event.get("team_id") or self._team_for(player_map, raw_event.get("player_id")),
+                t_ms=raw_event.get("t_ms"),
+                evidence={"possession_gain": True},
+            ))
+            return outputs
+        return []
+
+    def _build_and_count(
+        self,
+        *,
+        event_type,
+        actor_id,
+        team_id,
+        t_ms,
+        evidence,
+        secondary_actor_id=None,
+        preceding_event_type=None,
+        next_event_type=None,
+        terminal_event_type=None,
+        shot_value=None,
+    ):
+        payload = {
+            "kind": "attributed_event",
+            "event_type": event_type,
+            "actor_id": int(actor_id) if actor_id is not None else None,
+            "secondary_actor_id": int(secondary_actor_id) if secondary_actor_id is not None else None,
+            "team_id": int(team_id) if team_id is not None else None,
+            "t_ms": int(t_ms) if t_ms is not None else None,
+            "live_play": True,
+            "preceding_event_type": preceding_event_type,
+            "next_event_type": next_event_type,
+            "terminal_event_type": terminal_event_type,
+            "shot_value": shot_value,
+            "evidence": evidence or {},
+        }
+        payload["rule_validation"] = self.rule_engine.validate_event(payload)
+        payload["stat_deltas"] = (
+            {}
+            if payload["rule_validation"]
+            else self.rule_engine.stat_deltas_for_event(payload)
+        )
+        return payload
+
+    @staticmethod
+    def _team_for(player_map, player_id):
+        if player_id is None:
+            return None
+        player_state = player_map.get(player_id)
+        if not player_state:
+            return None
+        return player_state.get("team")
+
+
 class FrameResultAdapter:
     """Translate raw Ultralytics frame results into pipeline-friendly pieces.
 
@@ -366,6 +469,7 @@ class GameDNAExtractor:
         self.frame_idx = 0
         self.tracks = {}
         self.possession_engine = PossessionEngine()
+        self.mvp_event_adapter = MvpEventAdapter()
         self.last_ball_2d = np.array([0.0, 0.0])
 
     def run(self):
@@ -433,6 +537,8 @@ class GameDNAExtractor:
         possession_events = self.possession_engine.update(player_map, ball_3d, t_ms)
         for event in possession_events:
             writer.write(event)
+            for attributed_event in self.mvp_event_adapter.adapt(event, player_map):
+                writer.write(attributed_event)
 
     def _write_player_events(self, player_map, h_matrix, t_ms, writer):
         """Emit one player-state row per currently visible tracked player."""

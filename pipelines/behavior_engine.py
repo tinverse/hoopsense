@@ -112,7 +112,7 @@ class PossessionEngine:
                         })
                     else:
                         events.append({
-                            "kind": "steal", "player_id": best_tid, "t_ms": t_ms,
+                            "kind": "steal", "player_id": best_tid, "from": self.current_handler, "t_ms": t_ms,
                             "x": float(ball_pos_3d[0]), "y": float(ball_pos_3d[1])
                         })
                 self.last_handler = self.current_handler

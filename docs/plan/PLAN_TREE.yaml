@@ -517,6 +517,11 @@ levels:
       parent: L2.13
       title: Emit first attributed MVP event payloads in the shape required by the deterministic event-rule engine
       owner: A0
+      status: completed
+    - id: L3.72
+      parent: L2.13
+      title: Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
+      owner: A0
       status: in_progress
     - id: L3.42
       parent: L2.32
@@ -601,7 +606,7 @@ levels:
 
 priorities:
   current_frontier:
-    - L3.71
+    - L3.72
     - L3.66
     - L3.64
     - L3.63
