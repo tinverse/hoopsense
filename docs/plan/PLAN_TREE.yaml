@@ -478,6 +478,11 @@ levels:
       title: Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
       owner: A0
       status: in_progress
+    - id: L3.64
+      parent: L2.3
+      title: Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
+      owner: A0
+      status: in_progress
     - id: L3.42
       parent: L2.32
       title: Add a structured perception-feedback workflow for false positives, misses, merges, and track errors in the labeller
@@ -561,6 +566,7 @@ levels:
 
 priorities:
   current_frontier:
+    - L3.64
     - L3.63
     - L3.62
     - L3.53

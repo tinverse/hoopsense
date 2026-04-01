@@ -511,6 +511,38 @@ function drawDetectionOverlay(detection) {
     }
 }
 
+function drawBallOverlay(ballDetection) {
+    if (!ballDetection || !ballDetection.bbox_xyxy) return;
+    const [x1, y1, x2, y2] = ballDetection.bbox_xyxy;
+    const center = ballDetection.center_xy || [((x1 + x2) / 2), ((y1 + y2) / 2)];
+    const confidence = Math.round((ballDetection.confidence || 0) * 100);
+    const radius = Math.max(7, Math.min(18, Math.max(x2 - x1, y2 - y1) / 2));
+    const label = `BALL ${confidence}%`;
+    const labelWidth = Math.max(90, label.length * 10 + 16);
+    const labelHeight = 24;
+    const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, center[0] - labelWidth / 2));
+    const labelY = Math.max(10, y1 - labelHeight - 6);
+
+    ctx.save();
+    ctx.strokeStyle = "#ffb000";
+    ctx.fillStyle = "rgba(255, 176, 0, 0.15)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(center[0], center[1], radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(51, 36, 0, 0.92)";
+    ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
+    ctx.fillStyle = "#fff2c7";
+    ctx.font = "bold 15px monospace";
+    ctx.fillText(label, labelX + 8, labelY + 16);
+    ctx.restore();
+}
+
 function redrawOverlay() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     calibrationPoints.forEach(p => {
@@ -523,6 +555,7 @@ function redrawOverlay() {
     const frame = getCurrentPerceptionFrame();
     if (perceptionVisible && frame) {
         frame.detections.forEach(drawDetectionOverlay);
+        drawBallOverlay(frame.ball_detection);
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
         const firstDetection = frame.detections.find(d => d.court_xy);
@@ -530,6 +563,10 @@ function redrawOverlay() {
         const synthCount = frame.detections.filter(d => d.synthesized).length;
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const jerseyCount = frame.detections.filter(d => !!getVisibleJerseyMetadata(d)).length;
+        const ballDetection = frame.ball_detection || null;
+        const ballText = ballDetection
+            ? ` Ball ${Math.round((ballDetection.confidence || 0) * 100)}%${ballDetection.court_xy ? ` @ (${ballDetection.court_xy[0].toFixed(1)}, ${ballDetection.court_xy[1].toFixed(1)})` : ''}.`
+            : ' Ball not detected in this frame.';
         const livePlayLabel = frame.live_play_label || 'unknown';
         const livePlayScore = frame.live_play_score !== undefined && frame.live_play_score !== null
             ? frame.live_play_score.toFixed(2)
@@ -544,13 +581,14 @@ function redrawOverlay() {
             : '';
         explainerDescription.textContent =
             `Real Ultralytics detections and pose keypoints for frame ${frame.frame_idx}. ` +
-            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, and yellow boxes are repaired track gaps. ` +
+            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, yellow boxes are repaired track gaps, and orange circles mark the best ball detection. ` +
             `Cyan skeletons show keypoints. Live-play gate: ${livePlayLabel} @ ${livePlayScore}.` +
             (dominantSignal ? ` Dominant signal: ${dominantSignal}.` : '') +
             segmentText +
+            ballText +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${jerseyCount} jersey-tagged // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${jerseyCount} jersey-tagged // ball ${ballDetection ? Math.round((ballDetection.confidence || 0) * 100) + '%' : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -675,7 +713,8 @@ function loadPerceptionOverlay(clip) {
                 const liveSegmentCount = livePlaySegments.filter(segment => segment.label === 'live_play').length;
                 const deadSegmentCount = livePlaySegments.filter(segment => segment.label === 'dead_ball').length;
                 const uncertainSegmentCount = livePlaySegments.filter(segment => segment.label === 'uncertain').length;
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
+                const ballReady = data.postprocess && data.postprocess.live_play_gate ? data.postprocess.live_play_gate.ball_signal_present : false;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // ball artifact ${ballReady ? 'enabled' : 'unavailable'} // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';

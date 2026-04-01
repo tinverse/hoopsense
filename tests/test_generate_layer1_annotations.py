@@ -491,6 +491,55 @@ class LivePlayGateTest(unittest.TestCase):
         self.assertLessEqual(live_info["score"], 0.38)
         self.assertEqual(live_info["label"], "dead_ball")
 
+    def test_score_live_play_frame_records_ball_signal_and_lifts_score_conservatively(self):
+        baseline = score_live_play_frame(
+            {
+                "frame_idx": 12,
+                "detections": [
+                    {
+                        "track_id": 1,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 24.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                    {
+                        "track_id": 2,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 19.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                ],
+            }
+        )
+        with_ball = score_live_play_frame(
+            {
+                "frame_idx": 12,
+                "detections": [
+                    {
+                        "track_id": 1,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 24.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                    {
+                        "track_id": 2,
+                        "active_player_candidate": True,
+                        "motion_speed_px": 19.0,
+                        "active_player_reasons": {"court_in_bounds": True, "edge_penalty": 0.0},
+                    },
+                ],
+                "ball_detection": {
+                    "confidence": 0.81,
+                    "bbox_xyxy": [310.0, 180.0, 326.0, 196.0],
+                    "bbox_xywh": [318.0, 188.0, 16.0, 16.0],
+                    "center_xy": [318.0, 188.0],
+                },
+            }
+        )
+        self.assertFalse(baseline["reasons"]["ball_signal_present"])
+        self.assertTrue(with_ball["reasons"]["ball_signal_present"])
+        self.assertGreater(with_ball["score"], baseline["score"])
+
     def test_annotate_live_play_stitches_segment_with_hysteresis(self):
         live_frame = {
             "detections": [

@@ -43,6 +43,8 @@ JERSEY_OCR_CONSENSUS_MIN_VOTES = 2
 JERSEY_OCR_CONSENSUS_MIN_SHARE = 0.62
 APPEARANCE_TEAM_DISTANCE_THRESHOLD = 0.42
 APPEARANCE_LOW_MOTION_THRESHOLD_PX = 3.0
+BALL_CLASS_ID = 32
+BALL_MIN_LIVE_PLAY_CONFIDENCE = 0.35
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
 
@@ -93,6 +95,34 @@ def _bbox_size_xy(detection):
         x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
         return max(1.0, x2 - x1), max(1.0, y2 - y1)
     return 1.0, 1.0
+
+
+def _is_ball_detection(detection):
+    if detection is None:
+        return False
+    class_id = detection.get("class_id")
+    class_name = str(detection.get("class_name") or "").lower().replace(" ", "_")
+    return class_id == BALL_CLASS_ID or class_name == "sports_ball"
+
+
+def _extract_best_ball_detection(detections):
+    ball_candidates = [detection for detection in detections if _is_ball_detection(detection)]
+    if not ball_candidates:
+        return None
+    best = max(ball_candidates, key=lambda detection: float(detection.get("confidence") or 0.0))
+    ball_detection = {
+        "track_id": best.get("track_id"),
+        "class_id": best.get("class_id"),
+        "class_name": best.get("class_name"),
+        "confidence": round(float(best.get("confidence") or 0.0), 4),
+        "bbox_xyxy": best.get("bbox_xyxy"),
+        "bbox_xywh": best.get("bbox_xywh"),
+        "center_xy": [round(float(best["bbox_xywh"][0]), 3), round(float(best["bbox_xywh"][1]), 3)],
+    }
+    court_xy = best.get("court_xy")
+    if court_xy is not None and len(court_xy) == 2:
+        ball_detection["court_xy"] = [round(float(court_xy[0]), 3), round(float(court_xy[1]), 3)]
+    return ball_detection
 
 
 def _vector_norm(vec):
@@ -606,7 +636,7 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
         "bbox_xywh": _to_float_list(boxes.xywh[det_idx].tolist()),
     }
 
-    if result.keypoints is not None and det_idx < len(result.keypoints):
+    if cls_id == 0 and result.keypoints is not None and det_idx < len(result.keypoints):
         keypoints_xy = result.keypoints.xy[det_idx].tolist()
         detection["keypoints_xy"] = [[float(x), float(y)] for x, y in keypoints_xy]
         if result.keypoints.conf is not None:
@@ -625,21 +655,22 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
         court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
         detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
 
-    uniform_stats = estimate_uniform_bucket(
-        frame,
-        detection["bbox_xyxy"],
-        keypoints_xy=detection.get("keypoints_xy"),
-        keypoints_conf=detection.get("keypoints_conf"),
-    )
-    detection["uniform_bucket"] = uniform_stats["bucket"]
-    detection["uniform_luma_mean"] = uniform_stats["luma_mean"]
-    jersey_crop, jersey_sharpness = _extract_jersey_crop(frame, detection)
-    if jersey_crop is not None:
-        detection["_jersey_crop_bgr"] = jersey_crop
-        detection["_jersey_crop_sharpness"] = jersey_sharpness
-        appearance_hist = estimate_torso_color_histogram(jersey_crop)
-        if appearance_hist is not None:
-            detection["appearance_histogram_rgbq"] = appearance_hist
+    if cls_id == 0:
+        uniform_stats = estimate_uniform_bucket(
+            frame,
+            detection["bbox_xyxy"],
+            keypoints_xy=detection.get("keypoints_xy"),
+            keypoints_conf=detection.get("keypoints_conf"),
+        )
+        detection["uniform_bucket"] = uniform_stats["bucket"]
+        detection["uniform_luma_mean"] = uniform_stats["luma_mean"]
+        jersey_crop, jersey_sharpness = _extract_jersey_crop(frame, detection)
+        if jersey_crop is not None:
+            detection["_jersey_crop_bgr"] = jersey_crop
+            detection["_jersey_crop_sharpness"] = jersey_sharpness
+            appearance_hist = estimate_torso_color_histogram(jersey_crop)
+            if appearance_hist is not None:
+                detection["appearance_histogram_rgbq"] = appearance_hist
 
     return detection
 
@@ -731,6 +762,7 @@ def annotate_team_appearance_consistency(frames):
 
 def score_live_play_frame(frame):
     detections = frame.get("detections", [])
+    ball_detection = frame.get("ball_detection")
     active = [d for d in detections if d.get("active_player_candidate")]
     active_reasons = [d.get("active_player_reasons") or {} for d in active]
     on_court_active = [
@@ -778,6 +810,8 @@ def score_live_play_frame(frame):
     motion_median_score = _clip01(motion_energy_median / LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX)
     high_motion_score = _clip01(high_motion_count / 2.0)
     continuity_score = 1.0 - _clip01(track_churn_count / max(len(detections), 1))
+    ball_confidence = float(ball_detection.get("confidence") or 0.0) if ball_detection else 0.0
+    ball_signal_score = 1.0 if ball_confidence >= BALL_MIN_LIVE_PLAY_CONFIDENCE else 0.0
     motion_attenuation = max(0.05, 1.0 - 0.95 * camera_pan_pressure)
     motion_sum_score *= motion_attenuation
     motion_median_score *= motion_attenuation
@@ -796,7 +830,8 @@ def score_live_play_frame(frame):
         + 0.25 * motion_sum_score
         + 0.20 * motion_median_score
         + 0.15 * high_motion_score
-        + 0.10 * continuity_score
+        + 0.08 * continuity_score
+        + 0.02 * ball_signal_score
     )
     dead_ball_bias = (
         0.25 * sparse_dead_score
@@ -825,7 +860,8 @@ def score_live_play_frame(frame):
         "camera_pan_pressure": round(camera_pan_pressure, 4),
         "dead_ball_bias": round(dead_ball_bias, 4),
         "live_play_bias": round(live_play_bias, 4),
-        "ball_signal_present": None,
+        "ball_signal_present": bool(ball_signal_score),
+        "ball_confidence": round(ball_confidence, 4) if ball_detection else None,
     }
     return {
         "score": round(score, 4),
@@ -852,8 +888,14 @@ def _window_count(values, predicate):
 def _dominant_live_play_signal(frames):
     if not frames:
         return "no_frames"
+    ball_present_count = sum(
+        1 for frame in frames
+        if (frame.get("live_play_reasons") or {}).get("ball_signal_present")
+    )
     labels = [frame.get("live_play_label") for frame in frames]
     if labels and all(label == "live_play" for label in labels):
+        if ball_present_count >= max(2, len(frames) // 3):
+            return "ball_and_on_court_motion"
         motion_total = sum((frame.get("live_play_reasons") or {}).get("motion_energy_sum", 0.0) for frame in frames)
         on_court_total = sum((frame.get("live_play_reasons") or {}).get("on_court_active_candidate_count", 0) for frame in frames)
         return "on_court_motion" if motion_total >= on_court_total * 20.0 else "stable_on_court_presence"
@@ -1345,7 +1387,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
         results = model.track(
             frame,
             persist=True,
-            classes=[0],
+            classes=[0, BALL_CLASS_ID],
             conf=conf_threshold,
             device=device,
             verbose=False,
@@ -1357,12 +1399,15 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             result = results[0]
             for det_idx in range(len(result.boxes)):
                 detections.append(build_detection(result, det_idx, model.names, frame, h_matrix=h_matrix))
+        ball_detection = _extract_best_ball_detection(detections)
+        person_detections = [detection for detection in detections if not _is_ball_detection(detection)]
 
         frames.append({
             "frame_idx": frame_idx,
             "t_ms": t_ms,
             "calibrated": h_matrix is not None,
-            "detections": detections,
+            "detections": person_detections,
+            "ball_detection": ball_detection,
         })
         frame_idx += 1
 
@@ -1394,7 +1439,7 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             "name": model_name,
             "task": "pose_track",
             "device": device,
-            "classes": ["person"],
+            "classes": ["person", "sports_ball"],
         },
         "postprocess": {
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
@@ -1419,7 +1464,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
                 "enter_min_positive": LIVE_PLAY_ENTER_MIN_POSITIVE,
                 "exit_window": LIVE_PLAY_EXIT_WINDOW,
                 "exit_min_negative": LIVE_PLAY_EXIT_MIN_NEGATIVE,
-                "ball_signal_present": False,
+                "ball_signal_present": True,
+                "ball_min_confidence": BALL_MIN_LIVE_PLAY_CONFIDENCE,
                 "segment_count": len(live_play["segments"]),
             },
             "jersey_ocr": {
