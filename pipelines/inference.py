@@ -1,36 +1,55 @@
 import json
-import numpy as np
 import os
-import yaml
 from collections import deque
-from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
-from pipelines.geometry import lift_keypoints_to_3d
-from pipelines.geometry import project_pixel_to_court
+from dataclasses import dataclass
+from pathlib import Path
 
-# Constants for Feature Schema V2
-LABEL_MAP_INV = {
-    0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"
-}
+import numpy as np
+import yaml
+
+from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
+from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
 
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
+    """Load the Action Brain output label map from the basketball spec.
+
+    The inference path emits the string label chosen by Action Brain, so we
+    resolve the integer-to-string mapping once at module load. When the spec is
+    missing, keep a small built-in default so local smoke runs still work.
+    """
     if not os.path.exists(spec_path):
         return {
-            0: "jump_shot", 1: "crossover", 2: "rebound", 3: "block", 4: "steal"
+            0: "jump_shot",
+            1: "crossover",
+            2: "rebound",
+            3: "block",
+            4: "steal",
         }
-    with open(spec_path, 'r') as f:
+    with open(spec_path, "r") as f:
         spec = yaml.safe_load(f)
     labels = []
-    for cat in spec.get('categories', []):
-        labels.extend(cat.get('rules', []))
+    for cat in spec.get("categories", []):
+        labels.extend(cat.get("rules", []))
     labels = sorted(list(set(labels)))
     return {i: label for i, label in enumerate(labels)}
 
 
 LABEL_MAP_INV = get_label_map()
+PERSON_CLASS_ID = 0
+BALL_CLASS_ID = 32
+BALL_DEFAULT_Z = 50.0
 
 
 class KalmanFilter:
+    """Minimal 1D Kalman filter used to smooth court-space x/y coordinates.
+
+    This is intentionally tiny: the legacy inference path only smooths the
+    projected court center for each track before handing it to downstream game
+    logic. More complex multi-dimensional smoothing now lives in the review
+    pipeline, but this class preserves the existing runtime behavior.
+    """
+
     def __init__(self, process_variance=1e-4, measurement_variance=1e-2):
         self.process_variance = process_variance
         self.measurement_variance = measurement_variance
@@ -52,6 +71,16 @@ class KalmanFilter:
 
 
 class TrackManager:
+    """State container for one tracked player across frames.
+
+    Responsibilities are deliberately narrow:
+    - smooth projected court position
+    - retain the last 30 pose frames for Action Brain
+    - maintain the local behavior state machine
+
+    It does not own possession logic or output writing.
+    """
+
     def __init__(self, tid):
         self.tid = tid
         self.kf_x = KalmanFilter()
@@ -68,33 +97,58 @@ class TrackManager:
         self.court_y = self.kf_y.update(y)
         return self.court_x, self.court_y
 
-    def add_keypoints(self, kpts, H):
+    def add_keypoints(self, kpts, h_matrix):
+        """Append normalized keypoints and keep a rough lifted 3D player anchor.
+
+        The lifted position is intentionally approximate: we average the hips so
+        possession logic can reason about coarse player locations without
+        building a richer skeletal model here.
+        """
         if kpts is not None:
             self.kpt_history.append(kpts)
             kpts_np = np.array(kpts)
             if np.any(kpts_np[11:13] > 0):
-                lifted = lift_keypoints_to_3d(kpts_np, H)
+                lifted = lift_keypoints_to_3d(kpts_np, h_matrix)
                 self.pos_3d = lifted[11:13].mean(axis=0)
 
     def is_ready(self):
         return len(self.kpt_history) == 30
 
 
-def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos,
-                          kpts_3d_approx, ball_3d_approx, device):
+def construct_features_v2(
+    kpt_history,
+    last_ball_2d,
+    h_matrix,
+    player_court_pos,
+    kpts_3d_approx,
+    ball_3d_approx,
+    device,
+):
+    """Build the fixed `(1, 30, 72)` Action Brain tensor for one player.
+
+    This remains the narrow neural contract:
+    - 2D pose
+    - first-order pose velocity
+    - wrist-to-ball distances
+    - coarse court position
+
+    Possession, event attribution, and stats are intentionally outside this
+    tensor and are handled in higher layers.
+    """
     import torch
+
     if len(kpt_history) < 30:
         return None
     kpts_2d = np.array(kpt_history)
     features = []
-    ball_court_xy = project_pixel_to_court(last_ball_2d[0], last_ball_2d[1], H)
+    ball_court_xy = project_pixel_to_court(last_ball_2d[0], last_ball_2d[1], h_matrix)
     ball_z = ball_3d_approx[2] if ball_3d_approx is not None else 100.0
     ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], ball_z])
     for t in range(30):
         pose = kpts_2d[t].flatten()
-        delta = kpts_2d[t] - kpts_2d[max(0, t-1)]
+        delta = kpts_2d[t] - kpts_2d[max(0, t - 1)]
         vel = delta.flatten() * 0.1
-        kpts_3d = lift_keypoints_to_3d(kpts_2d[t], H)
+        kpts_3d = lift_keypoints_to_3d(kpts_2d[t], h_matrix)
         dist_l = np.linalg.norm(kpts_3d[9] - ball_3d) * 0.01
         dist_r = np.linalg.norm(kpts_3d[10] - ball_3d) * 0.01
         court_context = player_court_pos * 0.001
@@ -103,139 +157,372 @@ def construct_features_v2(kpt_history, last_ball_2d, H, player_court_pos,
     return torch.FloatTensor(np.array(features)).unsqueeze(0).to(device)
 
 
-def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
-    import cv2
-    import torch
-    from ultralytics import YOLO
-    from core.vision.action_brain import ActionBrain
-    if video_path is None:
-        with open("hoops_config.yaml", "r") as f:
-            config = yaml.safe_load(f)
-        video_path = config.get("local_video_path", "data/sample.mp4")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    pose_model = YOLO('yolov8n-pose.pt')
-    if smoke_test:
+@dataclass
+class InferenceConfig:
+    """Runtime configuration for one inference invocation.
+
+    Kept as plain data so the top-level orchestration can be inspected and
+    tested without dragging model objects or file handles along with it.
+    """
+
+    video_path: str
+    output_dir: str = "data"
+    smoke_test: bool = False
+    pose_model_name: str = "yolov8n-pose.pt"
+    calibration_path: str = "data/training/camera_calibration.json"
+    legacy_calibration_path: str = "data/calibration.json"
+    brain_path: str = "data/models/action_brain.pt"
+    output_filename: str = "intelligent_game_dna.jsonl"
+
+
+class CalibrationResolver:
+    """Resolve clip-specific homography data for the current video.
+
+    The legacy inference path supports two calibration storage shapes:
+    - per-clip data under `data/training/camera_calibration.json`
+    - a fallback single global matrix under `data/calibration.json`
+
+    The resolver normalizes both into a single `homography_for_frame(...)`
+    interface.
+    """
+
+    def __init__(self, calibration_path, legacy_calibration_path):
+        self.calibration_path = Path(calibration_path)
+        self.legacy_calibration_path = Path(legacy_calibration_path)
+        self.global_h = np.eye(3)
+        self.h_sequence = None
+
+    def load_for_clip(self, clip_id):
+        """Load the best available calibration data for one clip id."""
+        self.global_h = np.eye(3)
+        self.h_sequence = None
+        if self.calibration_path.exists():
+            with open(self.calibration_path, "r") as f:
+                try:
+                    calibrations = json.load(f)
+                except Exception:
+                    calibrations = {}
+            calibration = calibrations.get(clip_id)
+            if calibration:
+                if "h_sequence" in calibration:
+                    self.h_sequence = {
+                        int(k): np.array(v) for k, v in calibration["h_sequence"].items()
+                    }
+                elif "h_matrix" in calibration:
+                    self.global_h = np.array(calibration["h_matrix"])
+        elif self.legacy_calibration_path.exists():
+            with open(self.legacy_calibration_path, "r") as f:
+                legacy = json.load(f)
+            self.global_h = np.array(legacy.get("h_matrix", np.eye(3)))
+        return self
+
+    def homography_for_frame(self, frame_idx):
+        """Return the per-frame homography if available, else the global one."""
+        if self.h_sequence:
+            return self.h_sequence.get(frame_idx, self.global_h)
+        return self.global_h
+
+
+class ModelBundle:
+    """Lazy owner of runtime ML resources used by inference.
+
+    Separating model loading from the frame loop keeps `extract_game_dna(...)`
+    readable and isolates optional Action Brain setup from the rest of the
+    pipeline.
+    """
+
+    def __init__(self, pose_model_name, brain_path, label_map):
+        self.pose_model_name = pose_model_name
+        self.brain_path = brain_path
+        self.label_map = label_map
+        self.device = None
+        self.pose_model = None
+        self.brain = None
+
+    def load(self):
+        """Load YOLO unconditionally and Action Brain only if a checkpoint exists."""
+        import torch
+        from ultralytics import YOLO
+        from core.vision.action_brain import ActionBrain
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.pose_model = YOLO(self.pose_model_name)
+        if os.path.exists(self.brain_path):
+            brain = ActionBrain(num_classes=len(self.label_map)).to(self.device)
+            brain.load_state_dict(torch.load(self.brain_path, map_location=self.device))
+            brain.eval()
+            self.brain = brain
+        return self
+
+    def smoke_test(self):
+        """Exercise YOLO initialization without running the full pipeline."""
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-        pose_model(dummy)
+        self.pose_model(dummy)
+
+
+class JsonlEventWriter:
+    """Small context-managed JSONL sink.
+
+    The existing output contract is append-one-record-per-line, so we preserve
+    that shape while moving file ownership out of the main loop.
+    """
+
+    def __init__(self, output_path):
+        self.output_path = output_path
+        self._fh = None
+
+    def __enter__(self):
+        self._fh = open(self.output_path, "w")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._fh:
+            self._fh.close()
+        return False
+
+    def write(self, payload):
+        self._fh.write(json.dumps(payload) + "\n")
+
+
+class FrameResultAdapter:
+    """Translate raw Ultralytics frame results into pipeline-friendly pieces.
+
+    This keeps the main extractor from having to know about the low-level YOLO
+    tensor layout and centralizes the ball-extraction policy.
+    """
+
+    @staticmethod
+    def has_track_ids(result):
+        """Guard the rest of the pipeline against empty/untracked detections."""
+        return (
+            result
+            and result[0].boxes is not None
+            and result[0].boxes.id is not None
+        )
+
+    @staticmethod
+    def extract_arrays(result):
+        """Extract the raw arrays needed by the rest of the legacy pipeline."""
+        result0 = result[0]
+        boxes_xywh = result0.boxes.xywh
+        cls = result0.boxes.cls
+        conf = result0.boxes.conf
+        tids = result0.boxes.id.int().cpu().numpy()
+        classes = result0.boxes.cls.int().cpu().numpy()
+        keypoints = (
+            result0.keypoints.xyn.cpu().numpy()
+            if result0.keypoints is not None
+            else None
+        )
+        return boxes_xywh, cls, conf, tids, classes, keypoints
+
+    @staticmethod
+    def extract_ball_state(boxes_xywh, cls, conf, last_ball_2d, h_matrix, t_ms, writer):
+        """Update the last-seen ball state and emit the corresponding JSONL rows.
+
+        This preserves existing behavior: we treat every class-32 detection as a
+        fresh frame-level observation and keep only the most recent projected
+        center as the input to downstream player features.
+        """
+        ball_3d = None
+        updated_ball_2d = last_ball_2d
+        for bbox_xywh, class_id, confidence in zip(boxes_xywh, cls, conf):
+            if int(class_id) != BALL_CLASS_ID:
+                continue
+            updated_ball_2d = np.array([float(bbox_xywh[0]), float(bbox_xywh[1])])
+            ball_court_xy = project_pixel_to_court(
+                updated_ball_2d[0], updated_ball_2d[1], h_matrix
+            )
+            ball_3d = np.array([ball_court_xy[0], ball_court_xy[1], BALL_DEFAULT_Z])
+            writer.write(
+                {
+                    "kind": "ball",
+                    "t_ms": t_ms,
+                    "x": float(bbox_xywh[0]),
+                    "y": float(bbox_xywh[1]),
+                    "confidence_bps": int(confidence * 10000),
+                }
+            )
+        return updated_ball_2d, ball_3d
+
+
+class GameDNAExtractor:
+    """Orchestrate one full game-DNA extraction run for a single video.
+
+    This class owns the mutable per-run state:
+    - frame counter
+    - live track table
+    - current possession engine
+    - last observed ball center
+
+    The goal is to make the frame pipeline explicit while keeping the original
+    output contract and high-level behavior intact.
+    """
+
+    def __init__(self, config, models, calibration):
+        self.config = config
+        self.models = models
+        self.calibration = calibration
+        self.frame_idx = 0
+        self.tracks = {}
+        self.possession_engine = PossessionEngine()
+        self.last_ball_2d = np.array([0.0, 0.0])
+
+    def run(self):
+        """Drive the frame loop and stream JSONL output for the whole video."""
+        import cv2
+
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        output_path = os.path.join(self.config.output_dir, self.config.output_filename)
+        capture = cv2.VideoCapture(self.config.video_path)
+        fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        with JsonlEventWriter(output_path) as writer:
+            while capture.isOpened():
+                success, frame = capture.read()
+                if not success:
+                    break
+                self.frame_idx += 1
+                # All downstream outputs are indexed by the same frame clock.
+                t_ms = int(self.frame_idx / fps * 1000)
+                h_matrix = self.calibration.homography_for_frame(self.frame_idx)
+                self._process_frame(frame, t_ms, h_matrix, writer)
+        capture.release()
+        print(f"[INFO] Complete. Output: {output_path}")
+
+    def _process_frame(self, frame, t_ms, h_matrix, writer):
+        """Run one frame through perception, tracking, logic, and writing."""
+        result = self.models.pose_model.track(
+            frame,
+            persist=True,
+            classes=[PERSON_CLASS_ID, BALL_CLASS_ID],
+            verbose=False,
+        )
+        if not FrameResultAdapter.has_track_ids(result):
+            return
+
+        boxes_xywh, cls, conf, tids, classes, keypoints = FrameResultAdapter.extract_arrays(result)
+        # Ball state is updated before player features are built so Action Brain
+        # sees the freshest available ball position for this frame.
+        self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
+            boxes_xywh, cls, conf, self.last_ball_2d, h_matrix, t_ms, writer
+        )
+        player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
+        self._write_possession_events(player_map, ball_3d, t_ms, writer)
+        self._write_player_events(player_map, h_matrix, t_ms, writer)
+
+    def _update_tracks(self, boxes_xywh, tids, classes, keypoints, h_matrix):
+        """Project and update all player tracks visible in the current frame."""
+        player_map = {}
+        for idx, tid in enumerate(tids):
+            if classes[idx] != PERSON_CLASS_ID:
+                continue
+            # Track objects are created lazily so stable tracker ids become the
+            # runtime identity handle for subsequent smoothing and history use.
+            track = self.tracks.setdefault(tid, TrackManager(tid))
+            court_xy = project_pixel_to_court(
+                float(boxes_xywh[idx][0]), float(boxes_xywh[idx][1]), h_matrix
+            )
+            track.update_position(court_xy[0], court_xy[1])
+            current_keypoints = keypoints[idx].tolist() if keypoints is not None else None
+            track.add_keypoints(current_keypoints, h_matrix)
+            player_map[tid] = {"pos_3d": track.pos_3d, "team": track.team}
+        return player_map
+
+    def _write_possession_events(self, player_map, ball_3d, t_ms, writer):
+        """Ask the possession engine for newly triggered events and stream them."""
+        possession_events = self.possession_engine.update(player_map, ball_3d, t_ms)
+        for event in possession_events:
+            writer.write(event)
+
+    def _write_player_events(self, player_map, h_matrix, t_ms, writer):
+        """Emit one player-state row per currently visible tracked player."""
+        for tid in player_map.keys():
+            track = self.tracks[tid]
+            learned_label = self._infer_action_label(track, h_matrix)
+            has_possession = self.possession_engine.current_handler == tid
+            track.state_machine.update(
+                track.kpt_history,
+                learned_label=learned_label,
+                context={"has_possession": has_possession},
+            )
+            writer.write(
+                {
+                    "kind": "player",
+                    "track_id": int(tid),
+                    "t_ms": t_ms,
+                    "action": track.state_machine.get_label(),
+                    "court_x": track.court_x,
+                    "court_y": track.court_y,
+                }
+            )
+
+    def _infer_action_label(self, track, h_matrix):
+        """Run Action Brain only when enough pose history is available."""
+        if not track.is_ready() or self.models.brain is None:
+            return None
+        import torch
+
+        player_court_pos = np.array([track.court_x, track.court_y])
+        feature_tensor = construct_features_v2(
+            track.kpt_history,
+            self.last_ball_2d,
+            h_matrix,
+            player_court_pos,
+            None,
+            None,
+            self.models.device,
+        )
+        with torch.no_grad():
+            output = self.models.brain(feature_tensor)
+            return LABEL_MAP_INV[int(torch.argmax(output))]
+
+
+def resolve_video_path(video_path):
+    """Resolve the requested video path, falling back to `hoops_config.yaml`."""
+    if video_path is not None:
+        return video_path
+    with open("hoops_config.yaml", "r") as f:
+        config = yaml.safe_load(f)
+    return config.get("local_video_path", "data/sample.mp4")
+
+
+def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
+    """Backward-compatible entrypoint for the legacy inference pipeline.
+
+    The refactor keeps this function as the public API and CLI target, but the
+    actual work is delegated to focused helpers so the control flow is readable:
+    config -> models -> calibration -> extractor -> JSONL output.
+    """
+    resolved_video_path = resolve_video_path(video_path)
+    config = InferenceConfig(
+        video_path=resolved_video_path,
+        output_dir=output_dir,
+        smoke_test=smoke_test,
+    )
+    models = ModelBundle(config.pose_model_name, config.brain_path, LABEL_MAP_INV).load()
+    if config.smoke_test:
+        models.smoke_test()
         return
-    # Load Calibration (Unified)
-    H_global = np.eye(3)
-    H_sequence = None
-    cal_path = "data/training/camera_calibration.json"
-    clip_id = os.path.basename(video_path).split('.')[0]
-    
-    if os.path.exists(cal_path):
-        with open(cal_path, 'r') as f:
-            try:
-                cals = json.load(f)
-                if clip_id in cals:
-                    cal = cals[clip_id]
-                    if "h_sequence" in cal:
-                        H_sequence = {int(k): np.array(v) for k, v in cal["h_sequence"].items()}
-                    elif "h_matrix" in cal:
-                        H_global = np.array(cal["h_matrix"])
-            except:
-                pass
-    elif os.path.exists("data/calibration.json"):
-        with open("data/calibration.json", 'r') as f:
-            H_global = np.array(json.load(f).get("h_matrix", np.eye(3)))
-    brain = None
-    brain_path = "data/models/action_brain.pt"
-    if os.path.exists(brain_path):
-        brain = ActionBrain(num_classes=len(LABEL_MAP_INV)).to(device)
-        brain.load_state_dict(torch.load(brain_path, map_location=device))
-        brain.eval()
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    os.makedirs(output_dir, exist_ok=True)
-    out_file = os.path.join(output_dir, "intelligent_game_dna.jsonl")
-    frame_idx, tracks = 0, {}
-    possession_engine = PossessionEngine()
-    last_ball_2d = np.array([0.0, 0.0])
-    with open(out_file, 'w') as f:
-        while cap.isOpened():
-            success, frame = cap.read()
-            if not success:
-                break
-            frame_idx += 1
-            t_ms = int(frame_idx/fps*1000)
-            
-            # Select Homography for current frame
-            H = H_sequence.get(frame_idx, H_global) if H_sequence else H_global
-            
-            res = pose_model.track(frame, persist=True, classes=[0, 32],
-                                   verbose=False)
-            if res[0].boxes.id is not None:
-                ball_3d = None
-                boxes_xywh = res[0].boxes.xywh
-                cls = res[0].boxes.cls
-                conf = res[0].boxes.conf
-                for b, c, cn in zip(boxes_xywh, cls, conf):
-                    if int(c) == 32:
-                        last_ball_2d = np.array([float(b[0]), float(b[1])])
-                        b_xy = project_pixel_to_court(last_ball_2d[0],
-                                                      last_ball_2d[1], H)
-                        ball_3d = np.array([b_xy[0], b_xy[1], 50.0])
-                        f.write(json.dumps({
-                            "kind": "ball", "t_ms": t_ms,
-                            "x": float(b[0]), "y": float(b[1]),
-                            "confidence_bps": int(cn*10000)}) + "\n")
-                boxes = res[0].boxes.xywh.cpu().numpy()
-                tids = res[0].boxes.id.int().cpu().numpy()
-                classes = res[0].boxes.cls.int().cpu().numpy()
-                keypoints = res[0].keypoints.xyn.cpu().numpy() \
-                    if res[0].keypoints is not None else None
-                player_map = {}
-                for i, tid in enumerate(tids):
-                    if classes[i] == 0:
-                        if tid not in tracks:
-                            tracks[tid] = TrackManager(tid)
-                        tm = tracks[tid]
-                        r_cp = project_pixel_to_court(float(boxes[i][0]),
-                                                      float(boxes[i][1]), H)
-                        tm.update_position(r_cp[0], r_cp[1])
-                        kpts = keypoints[i].tolist() \
-                            if keypoints is not None else None
-                        tm.add_keypoints(kpts, H)
-                        player_map[tid] = {'pos_3d': tm.pos_3d,
-                                           'team': tm.team}
-                pos_events = possession_engine.update(player_map, ball_3d, t_ms)
-                for ev in pos_events:
-                    f.write(json.dumps(ev) + "\n")
-                for tid in player_map.keys():
-                    tm = tracks[tid]
-                    learned_label = None
-                    if tm.is_ready() and brain:
-                        player_cp = np.array([tm.court_x, tm.court_y])
-                        feat = construct_features_v2(tm.kpt_history,
-                                                     last_ball_2d, H,
-                                                     player_cp, None,
-                                                     None, device)
-                        with torch.no_grad():
-                            out = brain(feat)
-                            learned_label = LABEL_MAP_INV[int(torch.argmax(out))]
-                    is_h = possession_engine.current_handler == tid
-                    context = {"has_possession": is_h}
-                    tm.state_machine.update(tm.kpt_history,
-                                            learned_label=learned_label,
-                                            context=context)
-                    f.write(json.dumps({
-                        "kind": "player", "track_id": int(tid), "t_ms": t_ms,
-                        "action": tm.state_machine.get_label(),
-                        "court_x": tm.court_x, "court_y": tm.court_y}) + "\n")
-    cap.release()
-    print(f"[INFO] Complete. Output: {out_file}")
+
+    clip_id = Path(config.video_path).stem
+    calibration = CalibrationResolver(
+        config.calibration_path,
+        config.legacy_calibration_path,
+    ).load_for_clip(clip_id)
+    extractor = GameDNAExtractor(config, models, calibration)
+    extractor.run()
 
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="HoopSense Inference Pipeline")
-    parser.add_argument("video_path", nargs='?', default=None,
-                        help="Path to input video file")
-    parser.add_argument("--smoke-test", action="store_true",
-                        help="Run a quick model initialization check")
-    parser.add_argument("--output-dir", default="data",
-                        help="Output directory for results")
+    parser.add_argument("video_path", nargs="?", default=None, help="Path to input video file")
+    parser.add_argument("--smoke-test", action="store_true", help="Run a quick model initialization check")
+    parser.add_argument("--output-dir", default="data", help="Output directory for results")
     args = parser.parse_args()
-    extract_game_dna(video_path=args.video_path, output_dir=args.output_dir,
-                     smoke_test=args.smoke_test)
+    extract_game_dna(
+        video_path=args.video_path,
+        output_dir=args.output_dir,
+        smoke_test=args.smoke_test,
+    )
