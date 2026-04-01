@@ -34,3 +34,15 @@ class MvpStatAccumulator:
             "applied_deltas": deepcopy(stat_deltas),
             "running_totals": deepcopy(totals),
         }
+
+    def snapshot_for_player(self, player_id, *, team_id=None, t_ms=None):
+        totals = self.player_totals.get(int(player_id))
+        if totals is None:
+            return None
+        return {
+            "kind": "stat_snapshot",
+            "player_id": int(player_id),
+            "team_id": int(team_id) if team_id is not None else None,
+            "t_ms": int(t_ms) if t_ms is not None else None,
+            "totals": deepcopy(totals),
+        }

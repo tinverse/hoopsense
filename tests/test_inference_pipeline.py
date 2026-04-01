@@ -177,6 +177,26 @@ class RunningStatUpdateTest(unittest.TestCase):
         self.assertEqual(update["applied_deltas"]["TOs"], 1)
         self.assertEqual(update["running_totals"]["TOs"], 1)
 
+    def test_accumulator_snapshot_matches_running_totals(self):
+        accumulator = MvpStatAccumulator()
+        update = accumulator.apply_attributed_event(
+            {
+                "kind": "attributed_event",
+                "event_type": "steal",
+                "actor_id": 14,
+                "team_id": 2,
+                "t_ms": 900,
+                "stat_deltas": {"Steals": 1},
+            }
+        )
+        snapshot = accumulator.snapshot_for_player(
+            update["player_id"],
+            team_id=update["team_id"],
+            t_ms=update["t_ms"],
+        )
+        self.assertEqual(snapshot["kind"], "stat_snapshot")
+        self.assertEqual(snapshot["totals"], update["running_totals"])
+
 
 if __name__ == "__main__":
     unittest.main()

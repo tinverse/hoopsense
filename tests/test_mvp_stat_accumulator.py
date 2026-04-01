@@ -44,6 +44,23 @@ class MvpStatAccumulatorTest(unittest.TestCase):
         )
         self.assertIsNone(update)
 
+    def test_snapshot_for_player_returns_current_totals(self):
+        accumulator = MvpStatAccumulator()
+        accumulator.apply_attributed_event(
+            {
+                "kind": "attributed_event",
+                "event_type": "turnover",
+                "actor_id": 7,
+                "team_id": 1,
+                "t_ms": 1000,
+                "stat_deltas": {"TOs": 1},
+            }
+        )
+        snapshot = accumulator.snapshot_for_player(7, team_id=1, t_ms=1000)
+        self.assertEqual(snapshot["kind"], "stat_snapshot")
+        self.assertEqual(snapshot["player_id"], 7)
+        self.assertEqual(snapshot["totals"]["TOs"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

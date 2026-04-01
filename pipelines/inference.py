@@ -555,6 +555,13 @@ class GameDNAExtractor:
                 stat_update = self.mvp_stat_accumulator.apply_attributed_event(attributed_event)
                 if stat_update is not None:
                     writer.write(stat_update)
+                    stat_snapshot = self.mvp_stat_accumulator.snapshot_for_player(
+                        stat_update["player_id"],
+                        team_id=stat_update.get("team_id"),
+                        t_ms=stat_update.get("t_ms"),
+                    )
+                    if stat_snapshot is not None:
+                        writer.write(stat_snapshot)
 
     def _write_player_events(self, player_map, h_matrix, t_ms, writer):
         """Emit one player-state row per currently visible tracked player."""
@@ -588,6 +595,13 @@ class GameDNAExtractor:
                 stat_update = self.mvp_stat_accumulator.apply_attributed_event(shot_attempt)
                 if stat_update is not None:
                     writer.write(stat_update)
+                    stat_snapshot = self.mvp_stat_accumulator.snapshot_for_player(
+                        stat_update["player_id"],
+                        team_id=stat_update.get("team_id"),
+                        t_ms=stat_update.get("t_ms"),
+                    )
+                    if stat_snapshot is not None:
+                        writer.write(stat_snapshot)
 
     def _maybe_build_shot_attempt_candidate(self, *, tid, learned_label, has_possession, t_ms):
         """Emit a conservative unresolved shot-attempt payload when evidence aligns.
