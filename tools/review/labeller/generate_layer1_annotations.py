@@ -1860,7 +1860,7 @@ def repair_short_track_gaps(
     return frames
 
 
-def annotate_clip(video_path, output_path, model_name, device, conf_threshold, calibration_file):
+def annotate_clip(video_path, output_path, model_name, ball_model_name, device, conf_threshold, calibration_file):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
@@ -1870,7 +1870,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    model = YOLO(model_name)
+    pose_model = YOLO(model_name)
+    ball_model = YOLO(ball_model_name)
     frames = []
     frame_idx = 0
     clip_id = video_path.stem
@@ -1882,21 +1883,32 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
             break
 
         t_ms = int((frame_idx / fps) * 1000)
-        results = model.track(
+        pose_results = pose_model.track(
             frame,
             persist=True,
-            classes=[0, BALL_CLASS_ID],
+            classes=[0],
             conf=conf_threshold,
+            device=device,
+            verbose=False,
+        )
+        ball_results = ball_model.predict(
+            frame,
+            classes=[BALL_CLASS_ID],
+            conf=0.05,
             device=device,
             verbose=False,
         )
 
         detections = []
         h_matrix = get_frame_homography(calibration, frame_idx)
-        if results and results[0].boxes is not None and len(results[0].boxes) > 0:
-            result = results[0]
+        if pose_results and pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
+            result = pose_results[0]
             for det_idx in range(len(result.boxes)):
-                detections.append(build_detection(result, det_idx, model.names, frame, h_matrix=h_matrix))
+                detections.append(build_detection(result, det_idx, pose_model.names, frame, h_matrix=h_matrix))
+        if ball_results and ball_results[0].boxes is not None and len(ball_results[0].boxes) > 0:
+            result = ball_results[0]
+            for det_idx in range(len(result.boxes)):
+                detections.append(build_detection(result, det_idx, ball_model.names, frame, h_matrix=h_matrix))
         ball_detection = _extract_best_ball_detection(detections)
         person_detections = [detection for detection in detections if not _is_ball_detection(detection)]
 
@@ -1942,7 +1954,8 @@ def annotate_clip(video_path, output_path, model_name, device, conf_threshold, c
         "video": video_meta,
         "model": {
             "name": model_name,
-            "task": "pose_track",
+            "ball_name": ball_model_name,
+            "task": "pose_track_plus_ball_detect",
             "device": device,
             "classes": ["person", "sports_ball"],
         },
@@ -2043,6 +2056,7 @@ def main():
     parser.add_argument("clip_path", help="Absolute or repo-relative path to the clip")
     parser.add_argument("--output", default=None, help="Output JSON path")
     parser.add_argument("--model", default="yolov8n-pose.pt", help="Ultralytics model name or path")
+    parser.add_argument("--ball-model", default="yolov8n.pt", help="Ultralytics detection model used for sports-ball proposals")
     parser.add_argument("--device", default="cuda:0", help="Ultralytics device selector")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument(
@@ -2062,6 +2076,7 @@ def main():
         video_path=clip_path,
         output_path=output_path,
         model_name=args.model,
+        ball_model_name=args.ball_model,
         device=args.device,
         conf_threshold=args.conf,
         calibration_file=calibration_file,

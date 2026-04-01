@@ -314,6 +314,7 @@ class InferenceConfig:
     output_dir: str = "data"
     smoke_test: bool = False
     pose_model_name: str = "yolov8n-pose.pt"
+    ball_model_name: str = "yolov8n.pt"
     calibration_path: str = "data/training/camera_calibration.json"
     fallback_calibration_path: str = "data/calibration.json"
     brain_path: str = "data/models/action_brain.pt"
@@ -376,12 +377,14 @@ class ModelBundle:
     pipeline.
     """
 
-    def __init__(self, pose_model_name, brain_path, label_map):
+    def __init__(self, pose_model_name, ball_model_name, brain_path, label_map):
         self.pose_model_name = pose_model_name
+        self.ball_model_name = ball_model_name
         self.brain_path = brain_path
         self.label_map = label_map
         self.device = None
         self.pose_model = None
+        self.ball_model = None
         self.brain = None
 
     def load(self):
@@ -392,6 +395,7 @@ class ModelBundle:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.pose_model = YOLO(self.pose_model_name)
+        self.ball_model = YOLO(self.ball_model_name)
         if os.path.exists(self.brain_path):
             brain = ActionBrain(num_classes=len(self.label_map)).to(self.device)
             brain.load_state_dict(torch.load(self.brain_path, map_location=self.device))
@@ -403,6 +407,7 @@ class ModelBundle:
         """Exercise YOLO initialization without running the full pipeline."""
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         self.pose_model(dummy)
+        self.ball_model(dummy)
 
 
 class JsonlEventWriter:
@@ -574,6 +579,17 @@ class FrameResultAdapter:
         return boxes_xywh, cls, conf, tids, classes, keypoints
 
     @staticmethod
+    def extract_ball_arrays(result):
+        """Extract raw ball detector arrays from a detection-model result."""
+        if not result or result[0].boxes is None or len(result[0].boxes) == 0:
+            return [], [], []
+        result0 = result[0]
+        boxes_xywh = result0.boxes.xywh.cpu().numpy()
+        cls = result0.boxes.cls.int().cpu().numpy()
+        conf = result0.boxes.conf.cpu().numpy()
+        return boxes_xywh, cls, conf
+
+    @staticmethod
     def extract_ball_state(boxes_xywh, cls, conf, ball_tracker, h_matrix, t_ms, writer):
         """Select one auditable ball state and emit it as the runtime ball row."""
         ball_state = ball_tracker.update(boxes_xywh, cls, conf)
@@ -659,17 +675,28 @@ class GameDNAExtractor:
         result = self.models.pose_model.track(
             frame,
             persist=True,
-            classes=[PERSON_CLASS_ID, BALL_CLASS_ID],
+            classes=[PERSON_CLASS_ID],
             verbose=False,
         )
+        ball_result = self.models.ball_model.predict(
+            frame,
+            classes=[BALL_CLASS_ID],
+            conf=0.05,
+            device=self.models.device,
+            verbose=False,
+        )
+        ball_boxes_xywh, ball_cls, ball_conf = FrameResultAdapter.extract_ball_arrays(ball_result)
         if not FrameResultAdapter.has_track_ids(result):
+            self.ball_state, self.last_ball_2d, _ = FrameResultAdapter.extract_ball_state(
+                ball_boxes_xywh, ball_cls, ball_conf, self.ball_tracker, h_matrix, t_ms, writer
+            )
             return
 
         boxes_xywh, cls, conf, tids, classes, keypoints = FrameResultAdapter.extract_arrays(result)
         # Ball state is updated before player features are built so Action Brain
         # sees the freshest available ball position for this frame.
         self.ball_state, self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
-            boxes_xywh, cls, conf, self.ball_tracker, h_matrix, t_ms, writer
+            ball_boxes_xywh, ball_cls, ball_conf, self.ball_tracker, h_matrix, t_ms, writer
         )
         player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
         self._write_possession_events(player_map, ball_3d, t_ms, writer)
@@ -829,7 +856,12 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
         output_dir=output_dir,
         smoke_test=smoke_test,
     )
-    models = ModelBundle(config.pose_model_name, config.brain_path, LABEL_MAP_INV).load()
+    models = ModelBundle(
+        config.pose_model_name,
+        config.ball_model_name,
+        config.brain_path,
+        LABEL_MAP_INV,
+    ).load()
     if config.smoke_test:
         models.smoke_test()
         return
