@@ -7,9 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.81` add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
-- `L3.79` introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
-- `L3.78` materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
+- `L3.83` port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - `L3.64` add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
@@ -129,11 +127,12 @@ The current highest-priority frontier is:
 - [x] Emit per-player MVP stat snapshots from accumulated running totals in the inference pipeline
 - [x] Emit a terminal per-game MVP stat sheet snapshot from accumulated deterministic totals
 - [x] Define a staged Stage-1 ball-state contract and implementation plan from primary-source review
-- [ ] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
-- [ ] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
+- [x] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
+- [x] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
 - [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
 - [x] Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
 - [x] Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
+- [ ] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
@@ -169,8 +168,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
-- [ ] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
-- [ ] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
+- [ ] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
 - [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating

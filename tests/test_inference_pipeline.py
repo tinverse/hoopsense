@@ -13,6 +13,7 @@ from pipelines.inference import (
     GameDNAExtractor,
     InferenceConfig,
     MvpEventAdapter,
+    RuntimeDiscontinuityDetector,
 )
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
@@ -107,6 +108,91 @@ class FrameResultAdapterTest(unittest.TestCase):
         self.assertTrue(np.array_equal(last_ball_2d, np.array([300.0, 220.0], dtype=np.float32)))
         self.assertIsNotNone(ball_3d)
         self.assertEqual(writer.rows[-1]["state"], "predicted_short_gap")
+
+    def test_extract_ball_state_uses_bootstrap_foreground_prior(self):
+        writer = _RecordingWriter()
+        tracker = BallStateTracker(min_observed_confidence=0.09)
+        bootstrap_context = {
+            "enabled": True,
+            "mask_shape": [2, 2],
+            "mask_grid": [[1, 0], [0, 0]],
+            "image_width": 200,
+            "image_height": 200,
+        }
+        ball_state, _, _ = FrameResultAdapter.extract_ball_state(
+            boxes_xywh=[np.array([20.0, 20.0, 12.0, 12.0])],
+            cls=[BALL_CLASS_ID],
+            conf=[0.05],
+            ball_tracker=tracker,
+            h_matrix=np.eye(3),
+            t_ms=100,
+            writer=writer,
+            bootstrap_context=bootstrap_context,
+            bootstrap_segment_id=3,
+        )
+        self.assertEqual(ball_state["state"], "observed")
+        self.assertEqual(writer.rows[-1]["bootstrap_segment_id"], 3)
+        self.assertTrue(writer.rows[-1]["bootstrap_enabled"])
+        self.assertGreater(ball_state["candidate_scores"][0]["foreground_prior"], 0.0)
+
+
+class RuntimeBootstrapTest(unittest.TestCase):
+    def test_discontinuity_detector_triggers_on_large_brightness_change(self):
+        detector = RuntimeDiscontinuityDetector(threshold=10.0)
+        dark = np.zeros((16, 16, 3), dtype=np.uint8)
+        bright = np.full((16, 16, 3), 255, dtype=np.uint8)
+        first = detector.update(dark)
+        second = detector.update(bright)
+        self.assertFalse(first["triggered"])
+        self.assertTrue(second["triggered"])
+        self.assertGreater(second["score"], 10.0)
+
+    def test_game_dna_extractor_rebootstraps_on_discontinuity(self):
+        import pipelines.inference as inference_module
+
+        original_bootstrapper = inference_module.Dinov3Bootstrapper
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, device):
+                self.model_name = model_name
+                self.device = device
+
+            def run_on_frame(self, frame, frame_idx=0):
+                payload = {
+                    "enabled": True,
+                    "status": "ready",
+                    "backend": "fake_dino",
+                    "model_name": self.model_name,
+                    "frame_idx": frame_idx,
+                    "foreground_ratio": 0.25,
+                }
+                return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
+
+        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        try:
+            extractor = GameDNAExtractor(
+                InferenceConfig(
+                    video_path="dummy.mp4",
+                    bootstrap_foreground_backend="dinov3",
+                    bootstrap_discontinuity_threshold=10.0,
+                ),
+                models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
+                calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+            )
+            writer = _RecordingWriter()
+            extractor.frame_idx = 1
+            extractor._maybe_refresh_bootstrap_context(np.zeros((16, 16, 3), dtype=np.uint8), 33, writer)
+            extractor.frame_idx = 2
+            extractor._maybe_refresh_bootstrap_context(np.full((16, 16, 3), 255, dtype=np.uint8), 66, writer)
+        finally:
+            inference_module.Dinov3Bootstrapper = original_bootstrapper
+
+        bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
+        self.assertEqual(len(bootstrap_rows), 2)
+        self.assertEqual(bootstrap_rows[0]["reason"], "initial")
+        self.assertEqual(bootstrap_rows[1]["reason"], "discontinuity")
+        self.assertEqual(extractor.bootstrap_state.segment_id, 2)
+        self.assertEqual(extractor.bootstrap_state.context["status"], "ready")
 
 
 class MvpEventAdapterTest(unittest.TestCase):

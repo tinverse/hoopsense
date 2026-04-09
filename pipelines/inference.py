@@ -12,6 +12,17 @@ from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
 from pipelines.mvp_event_engine import MvpEventRuleEngine
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
+DEFAULT_DINOV3_MODEL = "facebook/dinov3-vits16-pretrain-lvd1689m"
+try:
+    from tools.review.labeller.dinov3_bootstrap import (
+        DEFAULT_DINOV3_MODEL as _IMPORTED_DINOV3_MODEL,
+        Dinov3Bootstrapper,
+    )
+
+    DEFAULT_DINOV3_MODEL = _IMPORTED_DINOV3_MODEL
+except Exception:  # pragma: no cover - fail-closed when optional deps are missing
+    Dinov3Bootstrapper = None
+
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
     """Load the Action Brain output label map from the basketball spec.
@@ -46,6 +57,25 @@ BALL_MAX_PREDICT_GAP_FRAMES = 4
 BALL_MAX_JUMP_PX = 180.0
 BALL_MIN_SIZE_PX = 4.0
 BALL_MAX_SIZE_PX = 80.0
+BOOTSTRAP_DISCONTINUITY_THRESHOLD = 22.0
+
+
+def foreground_prior_for_point(summary, x, y):
+    """Return a soft foreground prior for a point using a downsampled mask grid."""
+    if not summary:
+        return 0.0
+    mask_grid = summary.get("mask_grid")
+    mask_shape = summary.get("mask_shape")
+    if not mask_grid or not mask_shape or len(mask_shape) != 2:
+        return 0.0
+    height, width = int(mask_shape[0]), int(mask_shape[1])
+    if height <= 0 or width <= 0:
+        return 0.0
+    image_width = max(float(summary.get("image_width", width)), 1.0)
+    image_height = max(float(summary.get("image_height", height)), 1.0)
+    gx = min(width - 1, max(0, int((float(x) / image_width) * width)))
+    gy = min(height - 1, max(0, int((float(y) / image_height) * height)))
+    return float(mask_grid[gy][gx])
 
 
 class KalmanFilter:
@@ -163,20 +193,36 @@ class BallStateTracker:
             return 0.0
         return max(0.0, 1.0 - distance / self.max_jump_px)
 
-    def _candidate_score(self, bbox_xywh, confidence):
+    def _candidate_score(self, bbox_xywh, confidence, bootstrap_context=None):
         candidate_center = np.array([float(bbox_xywh[0]), float(bbox_xywh[1])], dtype=np.float32)
         confidence_score = max(0.0, min(1.0, float(confidence)))
         continuity_score = self._continuity_score(candidate_center)
         size_score = self._size_score(bbox_xywh)
-        score = 0.65 * confidence_score + 0.25 * continuity_score + 0.10 * size_score
-        return score, candidate_center, continuity_score, size_score
+        foreground_prior = 0.0
+        if bootstrap_context and bootstrap_context.get("enabled"):
+            foreground_prior = foreground_prior_for_point(
+                bootstrap_context,
+                candidate_center[0],
+                candidate_center[1],
+            )
+        score = (
+            0.60 * confidence_score
+            + 0.20 * continuity_score
+            + 0.10 * size_score
+            + 0.10 * foreground_prior
+        )
+        return score, candidate_center, continuity_score, size_score, foreground_prior
 
-    def update(self, boxes_xywh, cls, conf):
+    def update(self, boxes_xywh, cls, conf, bootstrap_context=None):
         candidates = []
         for bbox_xywh, class_id, confidence in zip(boxes_xywh, cls, conf):
             if int(class_id) != BALL_CLASS_ID:
                 continue
-            score, center_xy, continuity_score, size_score = self._candidate_score(bbox_xywh, confidence)
+            score, center_xy, continuity_score, size_score, foreground_prior = self._candidate_score(
+                bbox_xywh,
+                confidence,
+                bootstrap_context=bootstrap_context,
+            )
             candidates.append(
                 {
                     "bbox_xywh": [float(v) for v in bbox_xywh],
@@ -185,6 +231,7 @@ class BallStateTracker:
                     "score": float(score),
                     "continuity_score": float(continuity_score),
                     "size_score": float(size_score),
+                    "foreground_prior": float(foreground_prior),
                 }
             )
 
@@ -211,6 +258,7 @@ class BallStateTracker:
                     {
                         "confidence": round(float(candidate["confidence"]), 4),
                         "score": round(float(candidate["score"]), 4),
+                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -233,6 +281,7 @@ class BallStateTracker:
                     {
                         "confidence": round(float(candidate["confidence"]), 4),
                         "score": round(float(candidate["score"]), 4),
+                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -254,10 +303,42 @@ class BallStateTracker:
                 {
                     "confidence": round(float(candidate["confidence"]), 4),
                     "score": round(float(candidate["score"]), 4),
+                    "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                 }
                 for candidate in candidates[:3]
             ],
         }
+
+
+class RuntimeDiscontinuityDetector:
+    """Detect abrupt scene shifts that should invalidate runtime bootstrap priors."""
+
+    def __init__(self, threshold=BOOTSTRAP_DISCONTINUITY_THRESHOLD):
+        self.threshold = float(threshold)
+        self.last_signature = None
+
+    def update(self, frame):
+        frame_np = np.asarray(frame, dtype=np.float32)
+        if frame_np.ndim == 3:
+            signature = float(frame_np.mean(axis=2).mean())
+        else:
+            signature = float(frame_np.mean())
+        score = 0.0 if self.last_signature is None else abs(signature - self.last_signature)
+        triggered = self.last_signature is not None and score >= self.threshold
+        self.last_signature = signature
+        return {
+            "score": round(float(score), 4),
+            "triggered": bool(triggered),
+            "signature": round(float(signature), 4),
+        }
+
+
+@dataclass
+class RuntimeBootstrapState:
+    """Mutable segment-scoped runtime bootstrap context."""
+
+    segment_id: int = 0
+    context: dict | None = None
 
 
 def construct_features_v2(
@@ -319,6 +400,9 @@ class InferenceConfig:
     fallback_calibration_path: str = "data/calibration.json"
     brain_path: str = "data/models/action_brain.pt"
     output_filename: str = "intelligent_game_dna.jsonl"
+    bootstrap_foreground_backend: str = "none"
+    bootstrap_foreground_model: str = DEFAULT_DINOV3_MODEL
+    bootstrap_discontinuity_threshold: float = BOOTSTRAP_DISCONTINUITY_THRESHOLD
 
 
 class CalibrationResolver:
@@ -590,9 +674,24 @@ class FrameResultAdapter:
         return boxes_xywh, cls, conf
 
     @staticmethod
-    def extract_ball_state(boxes_xywh, cls, conf, ball_tracker, h_matrix, t_ms, writer):
+    def extract_ball_state(
+        boxes_xywh,
+        cls,
+        conf,
+        ball_tracker,
+        h_matrix,
+        t_ms,
+        writer,
+        bootstrap_context=None,
+        bootstrap_segment_id=None,
+    ):
         """Select one auditable ball state and emit it as the runtime ball row."""
-        ball_state = ball_tracker.update(boxes_xywh, cls, conf)
+        ball_state = ball_tracker.update(
+            boxes_xywh,
+            cls,
+            conf,
+            bootstrap_context=bootstrap_context,
+        )
         center_xy = ball_state.get("center_xy")
         updated_ball_2d = np.array(center_xy, dtype=np.float32) if center_xy else np.array([0.0, 0.0], dtype=np.float32)
         ball_3d = None
@@ -611,6 +710,8 @@ class FrameResultAdapter:
                 "missing_gap_frames": int(ball_state.get("missing_gap_frames") or 0),
                 "candidate_count": int(ball_state.get("candidate_count") or 0),
                 "source": ball_state.get("source"),
+                "bootstrap_segment_id": int(bootstrap_segment_id) if bootstrap_segment_id is not None else None,
+                "bootstrap_enabled": bool(bootstrap_context and bootstrap_context.get("enabled")),
             }
         )
         return ball_state, updated_ball_2d, ball_3d
@@ -642,6 +743,11 @@ class GameDNAExtractor:
         self.ball_state = None
         self.last_ball_2d = np.array([0.0, 0.0])
         self.last_shot_attempt_t_ms_by_track = {}
+        self.bootstrap_state = RuntimeBootstrapState()
+        self.discontinuity_detector = RuntimeDiscontinuityDetector(
+            threshold=self.config.bootstrap_discontinuity_threshold
+        )
+        self.bootstrapper = None
 
     def run(self):
         """Drive the frame loop and stream JSONL output for the whole video."""
@@ -672,6 +778,7 @@ class GameDNAExtractor:
 
     def _process_frame(self, frame, t_ms, h_matrix, writer):
         """Run one frame through perception, tracking, logic, and writing."""
+        self._maybe_refresh_bootstrap_context(frame, t_ms, writer)
         result = self.models.pose_model.track(
             frame,
             persist=True,
@@ -688,7 +795,15 @@ class GameDNAExtractor:
         ball_boxes_xywh, ball_cls, ball_conf = FrameResultAdapter.extract_ball_arrays(ball_result)
         if not FrameResultAdapter.has_track_ids(result):
             self.ball_state, self.last_ball_2d, _ = FrameResultAdapter.extract_ball_state(
-                ball_boxes_xywh, ball_cls, ball_conf, self.ball_tracker, h_matrix, t_ms, writer
+                ball_boxes_xywh,
+                ball_cls,
+                ball_conf,
+                self.ball_tracker,
+                h_matrix,
+                t_ms,
+                writer,
+                bootstrap_context=self.bootstrap_state.context,
+                bootstrap_segment_id=self.bootstrap_state.segment_id,
             )
             return
 
@@ -696,11 +811,68 @@ class GameDNAExtractor:
         # Ball state is updated before player features are built so Action Brain
         # sees the freshest available ball position for this frame.
         self.ball_state, self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
-            ball_boxes_xywh, ball_cls, ball_conf, self.ball_tracker, h_matrix, t_ms, writer
+            ball_boxes_xywh,
+            ball_cls,
+            ball_conf,
+            self.ball_tracker,
+            h_matrix,
+            t_ms,
+            writer,
+            bootstrap_context=self.bootstrap_state.context,
+            bootstrap_segment_id=self.bootstrap_state.segment_id,
         )
         player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
         self._write_possession_events(player_map, ball_3d, t_ms, writer)
         self._write_player_events(player_map, h_matrix, t_ms, writer)
+
+    def _maybe_refresh_bootstrap_context(self, frame, t_ms, writer):
+        """Run the optional bootstrap pre-pass only on the first frame or after cuts."""
+        discontinuity = self.discontinuity_detector.update(frame)
+        reason = None
+        if self.bootstrap_state.context is None:
+            reason = "initial"
+        elif discontinuity["triggered"]:
+            reason = "discontinuity"
+        if reason is None:
+            return
+        self.bootstrap_state.segment_id += 1
+        self.bootstrap_state.context = self._run_bootstrap(frame, t_ms, reason, discontinuity, writer)
+
+    def _run_bootstrap(self, frame, t_ms, reason, discontinuity, writer):
+        payload = {
+            "enabled": False,
+            "status": "disabled",
+            "backend": self.config.bootstrap_foreground_backend,
+            "model_name": self.config.bootstrap_foreground_model,
+            "frame_idx": int(self.frame_idx),
+        }
+        if self.config.bootstrap_foreground_backend == "dinov3":
+            if Dinov3Bootstrapper is None:
+                payload["status"] = "bootstrap_unavailable"
+            elif self.bootstrapper is None:
+                self.bootstrapper = Dinov3Bootstrapper(
+                    model_name=self.config.bootstrap_foreground_model,
+                    device=str(self.models.device),
+                )
+            if self.bootstrapper is not None:
+                payload = self.bootstrapper.run_on_frame(frame, frame_idx=self.frame_idx).to_payload()
+        payload["segment_id"] = int(self.bootstrap_state.segment_id)
+        payload["reason"] = reason
+        payload["discontinuity_score"] = round(float(discontinuity.get("score") or 0.0), 4)
+        writer.write(
+            {
+                "kind": "bootstrap_context",
+                "t_ms": int(t_ms),
+                "segment_id": int(self.bootstrap_state.segment_id),
+                "reason": reason,
+                "enabled": bool(payload.get("enabled")),
+                "status": payload.get("status"),
+                "backend": payload.get("backend"),
+                "foreground_ratio": payload.get("foreground_ratio"),
+                "discontinuity_score": payload["discontinuity_score"],
+            }
+        )
+        return payload
 
     def _update_tracks(self, boxes_xywh, tids, classes, keypoints, h_matrix):
         """Project and update all player tracks visible in the current frame."""
@@ -757,6 +929,7 @@ class GameDNAExtractor:
                     "action": track.state_machine.get_label(),
                     "court_x": track.court_x,
                     "court_y": track.court_y,
+                    "bootstrap_segment_id": int(self.bootstrap_state.segment_id),
                 }
             )
             shot_attempt = self._maybe_build_shot_attempt_candidate(
@@ -843,7 +1016,13 @@ def resolve_video_path(video_path):
     return config.get("local_video_path", "data/sample.mp4")
 
 
-def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
+def extract_game_dna(
+    video_path=None,
+    output_dir="data",
+    smoke_test=False,
+    bootstrap_foreground_backend="none",
+    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+):
     """Backward-compatible entrypoint for the current inference pipeline.
 
     The refactor keeps this function as the public API and CLI target, but the
@@ -855,6 +1034,8 @@ def extract_game_dna(video_path=None, output_dir="data", smoke_test=False):
         video_path=resolved_video_path,
         output_dir=output_dir,
         smoke_test=smoke_test,
+        bootstrap_foreground_backend=bootstrap_foreground_backend,
+        bootstrap_foreground_model=bootstrap_foreground_model,
     )
     models = ModelBundle(
         config.pose_model_name,
@@ -882,9 +1063,22 @@ if __name__ == "__main__":
     parser.add_argument("video_path", nargs="?", default=None, help="Path to input video file")
     parser.add_argument("--smoke-test", action="store_true", help="Run a quick model initialization check")
     parser.add_argument("--output-dir", default="data", help="Output directory for results")
+    parser.add_argument(
+        "--bootstrap-foreground-backend",
+        choices=["none", "dinov3"],
+        default="none",
+        help="Optional runtime bootstrap foreground prior backend",
+    )
+    parser.add_argument(
+        "--bootstrap-foreground-model",
+        default=DEFAULT_DINOV3_MODEL,
+        help="Model name for runtime DINOv3 bootstrap pre-pass",
+    )
     args = parser.parse_args()
     extract_game_dna(
         video_path=args.video_path,
         output_dir=args.output_dir,
         smoke_test=args.smoke_test,
+        bootstrap_foreground_backend=args.bootstrap_foreground_backend,
+        bootstrap_foreground_model=args.bootstrap_foreground_model,
     )
