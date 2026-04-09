@@ -14,7 +14,9 @@ from pipelines.inference import (
     InferenceConfig,
     MvpEventAdapter,
     RuntimeDiscontinuityDetector,
+    RuntimePanDriftDetector,
 )
+from pipelines.geometry import geometry_evidence_gate
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
 
@@ -134,6 +136,8 @@ class FrameResultAdapterTest(unittest.TestCase):
         self.assertEqual(writer.rows[-1]["bootstrap_segment_id"], 3)
         self.assertTrue(writer.rows[-1]["bootstrap_enabled"])
         self.assertGreater(ball_state["candidate_scores"][0]["foreground_prior"], 0.0)
+        self.assertGreater(writer.rows[-1]["play_region_prior"], 0.0)
+        self.assertTrue(writer.rows[-1]["geometry_region_ok"])
 
 
 class RuntimeBootstrapTest(unittest.TestCase):
@@ -193,6 +197,155 @@ class RuntimeBootstrapTest(unittest.TestCase):
         self.assertEqual(bootstrap_rows[1]["reason"], "discontinuity")
         self.assertEqual(extractor.bootstrap_state.segment_id, 2)
         self.assertEqual(extractor.bootstrap_state.context["status"], "ready")
+
+    def test_pan_drift_detector_triggers_on_coherent_track_shift(self):
+        detector = RuntimePanDriftDetector(
+            min_shared_tracks=2,
+            median_displacement_px=20.0,
+            alignment_spread_px=5.0,
+        )
+        first = detector.update(
+            boxes_xywh=np.array([[100.0, 100.0, 10.0, 10.0], [200.0, 200.0, 10.0, 10.0]]),
+            tids=np.array([1, 2]),
+            classes=np.array([0, 0]),
+        )
+        second = detector.update(
+            boxes_xywh=np.array([[140.0, 100.0, 10.0, 10.0], [240.0, 201.0, 10.0, 10.0]]),
+            tids=np.array([1, 2]),
+            classes=np.array([0, 0]),
+        )
+        self.assertFalse(first["triggered"])
+        self.assertTrue(second["triggered"])
+        self.assertGreaterEqual(second["median_displacement_px"], 20.0)
+
+    def test_game_dna_extractor_rebootstraps_on_pan_drift(self):
+        import pipelines.inference as inference_module
+
+        original_bootstrapper = inference_module.Dinov3Bootstrapper
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, device):
+                self.model_name = model_name
+                self.device = device
+
+            def run_on_frame(self, frame, frame_idx=0):
+                payload = {
+                    "enabled": True,
+                    "status": "ready",
+                    "backend": "fake_dino",
+                    "model_name": self.model_name,
+                    "frame_idx": frame_idx,
+                    "foreground_ratio": 0.25,
+                }
+                return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
+
+        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        try:
+            extractor = GameDNAExtractor(
+                InferenceConfig(
+                    video_path="dummy.mp4",
+                    bootstrap_foreground_backend="dinov3",
+                    bootstrap_pan_recompute_cooldown_frames=0,
+                ),
+                models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
+                calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+            )
+            writer = _RecordingWriter()
+            extractor.frame_idx = 1
+            extractor._maybe_refresh_bootstrap_context(np.zeros((16, 16, 3), dtype=np.uint8), 33, writer)
+            extractor._maybe_refresh_bootstrap_context_after_tracking(
+                np.zeros((16, 16, 3), dtype=np.uint8),
+                33,
+                writer,
+                np.array([[100.0, 100.0, 10.0, 10.0], [200.0, 200.0, 10.0, 10.0], [300.0, 300.0, 10.0, 10.0], [400.0, 400.0, 10.0, 10.0]]),
+                np.array([1, 2, 3, 4]),
+                np.array([0, 0, 0, 0]),
+            )
+            extractor.frame_idx = 2
+            extractor._maybe_refresh_bootstrap_context_after_tracking(
+                np.zeros((16, 16, 3), dtype=np.uint8),
+                66,
+                writer,
+                np.array([[170.0, 100.0, 10.0, 10.0], [270.0, 200.0, 10.0, 10.0], [370.0, 300.0, 10.0, 10.0], [470.0, 400.0, 10.0, 10.0]]),
+                np.array([1, 2, 3, 4]),
+                np.array([0, 0, 0, 0]),
+            )
+        finally:
+            inference_module.Dinov3Bootstrapper = original_bootstrapper
+
+        bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
+        self.assertEqual(len(bootstrap_rows), 2)
+        self.assertEqual(bootstrap_rows[1]["reason"], "pan_drift")
+        self.assertEqual(extractor.bootstrap_state.segment_id, 2)
+
+    def test_pan_drift_marks_context_stale_during_cooldown(self):
+        import pipelines.inference as inference_module
+
+        original_bootstrapper = inference_module.Dinov3Bootstrapper
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, device):
+                self.model_name = model_name
+                self.device = device
+
+            def run_on_frame(self, frame, frame_idx=0):
+                payload = {
+                    "enabled": True,
+                    "status": "ready",
+                    "backend": "fake_dino",
+                    "model_name": self.model_name,
+                    "frame_idx": frame_idx,
+                    "foreground_ratio": 0.25,
+                }
+                return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
+
+        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        try:
+            extractor = GameDNAExtractor(
+                InferenceConfig(video_path="dummy.mp4", bootstrap_foreground_backend="dinov3"),
+                models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
+                calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+            )
+            writer = _RecordingWriter()
+            extractor.frame_idx = 1
+            extractor._maybe_refresh_bootstrap_context(np.zeros((16, 16, 3), dtype=np.uint8), 33, writer)
+            extractor.frame_idx = 2
+            extractor._maybe_refresh_bootstrap_context_after_tracking(
+                np.zeros((16, 16, 3), dtype=np.uint8),
+                66,
+                writer,
+                np.array([[100.0, 100.0, 10.0, 10.0], [200.0, 200.0, 10.0, 10.0], [300.0, 300.0, 10.0, 10.0], [400.0, 400.0, 10.0, 10.0]]),
+                np.array([1, 2, 3, 4]),
+                np.array([0, 0, 0, 0]),
+            )
+            extractor.frame_idx = 3
+            extractor._maybe_refresh_bootstrap_context_after_tracking(
+                np.zeros((16, 16, 3), dtype=np.uint8),
+                99,
+                writer,
+                np.array([[170.0, 100.0, 10.0, 10.0], [270.0, 200.0, 10.0, 10.0], [370.0, 300.0, 10.0, 10.0], [470.0, 400.0, 10.0, 10.0]]),
+                np.array([1, 2, 3, 4]),
+                np.array([0, 0, 0, 0]),
+            )
+        finally:
+            inference_module.Dinov3Bootstrapper = original_bootstrapper
+
+        bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
+        self.assertEqual(len(bootstrap_rows), 1)
+        self.assertTrue(extractor.bootstrap_state.context["bootstrap_stale"])
+
+
+class GeometryGateTest(unittest.TestCase):
+    def test_geometry_evidence_gate_marks_points_inside_play_region(self):
+        summary = {
+            "mask_shape": [2, 2],
+            "mask_grid": [[1, 0], [0, 0]],
+            "image_width": 200,
+            "image_height": 200,
+        }
+        gate = geometry_evidence_gate(summary, 10, 10, min_prior=0.5)
+        self.assertTrue(gate["geometry_region_ok"])
+        self.assertEqual(gate["play_region_prior"], 1.0)
 
 
 class MvpEventAdapterTest(unittest.TestCase):

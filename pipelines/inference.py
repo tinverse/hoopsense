@@ -8,7 +8,12 @@ import numpy as np
 import yaml
 
 from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
-from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
+from pipelines.geometry import (
+    geometry_evidence_gate,
+    lift_keypoints_to_3d,
+    play_region_prior_for_point,
+    project_pixel_to_court,
+)
 from pipelines.mvp_event_engine import MvpEventRuleEngine
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
@@ -58,24 +63,11 @@ BALL_MAX_JUMP_PX = 180.0
 BALL_MIN_SIZE_PX = 4.0
 BALL_MAX_SIZE_PX = 80.0
 BOOTSTRAP_DISCONTINUITY_THRESHOLD = 22.0
-
-
-def foreground_prior_for_point(summary, x, y):
-    """Return a soft foreground prior for a point using a downsampled mask grid."""
-    if not summary:
-        return 0.0
-    mask_grid = summary.get("mask_grid")
-    mask_shape = summary.get("mask_shape")
-    if not mask_grid or not mask_shape or len(mask_shape) != 2:
-        return 0.0
-    height, width = int(mask_shape[0]), int(mask_shape[1])
-    if height <= 0 or width <= 0:
-        return 0.0
-    image_width = max(float(summary.get("image_width", width)), 1.0)
-    image_height = max(float(summary.get("image_height", height)), 1.0)
-    gx = min(width - 1, max(0, int((float(x) / image_width) * width)))
-    gy = min(height - 1, max(0, int((float(y) / image_height) * height)))
-    return float(mask_grid[gy][gx])
+PAN_DRIFT_MIN_SHARED_TRACKS = 4
+PAN_DRIFT_MEDIAN_DISPLACEMENT_PX = 55.0
+PAN_DRIFT_ALIGNMENT_SPREAD_PX = 22.0
+PLAY_REGION_GEOMETRY_MIN_PRIOR = 0.5
+BOOTSTRAP_PAN_RECOMPUTE_COOLDOWN_FRAMES = 30
 
 
 class KalmanFilter:
@@ -128,6 +120,8 @@ class TrackManager:
         self.court_y = 0.0
         self.pos_3d = np.zeros(3)
         self.team = 1  # Default to Home for now
+        self.play_region_prior = 0.0
+        self.geometry_region_ok = True
 
     def update_position(self, x, y):
         self.court_x = self.kf_x.update(x)
@@ -200,7 +194,7 @@ class BallStateTracker:
         size_score = self._size_score(bbox_xywh)
         foreground_prior = 0.0
         if bootstrap_context and bootstrap_context.get("enabled"):
-            foreground_prior = foreground_prior_for_point(
+            foreground_prior = play_region_prior_for_point(
                 bootstrap_context,
                 candidate_center[0],
                 candidate_center[1],
@@ -333,6 +327,66 @@ class RuntimeDiscontinuityDetector:
         }
 
 
+class RuntimePanDriftDetector:
+    """Detect coherent track motion that likely reflects camera pan/layout drift."""
+
+    def __init__(
+        self,
+        *,
+        min_shared_tracks=PAN_DRIFT_MIN_SHARED_TRACKS,
+        median_displacement_px=PAN_DRIFT_MEDIAN_DISPLACEMENT_PX,
+        alignment_spread_px=PAN_DRIFT_ALIGNMENT_SPREAD_PX,
+    ):
+        self.min_shared_tracks = int(min_shared_tracks)
+        self.median_displacement_px = float(median_displacement_px)
+        self.alignment_spread_px = float(alignment_spread_px)
+        self.previous_centers = {}
+
+    def update(self, boxes_xywh, tids, classes):
+        current_centers = {}
+        for bbox_xywh, tid, class_id in zip(boxes_xywh, tids, classes):
+            if int(class_id) != PERSON_CLASS_ID:
+                continue
+            current_centers[int(tid)] = np.array(
+                [float(bbox_xywh[0]), float(bbox_xywh[1])],
+                dtype=np.float32,
+            )
+
+        shared_ids = sorted(set(self.previous_centers).intersection(current_centers))
+        if len(shared_ids) < self.min_shared_tracks:
+            self.previous_centers = current_centers
+            return {
+                "triggered": False,
+                "shared_track_count": int(len(shared_ids)),
+                "median_displacement_px": 0.0,
+                "alignment_spread_px": 0.0,
+                "median_dx": 0.0,
+                "median_dy": 0.0,
+            }
+
+        displacements = np.asarray(
+            [current_centers[tid] - self.previous_centers[tid] for tid in shared_ids],
+            dtype=np.float32,
+        )
+        median_vector = np.median(displacements, axis=0)
+        residuals = displacements - median_vector
+        median_displacement = float(np.linalg.norm(median_vector))
+        alignment_spread = float(np.median(np.linalg.norm(residuals, axis=1)))
+        triggered = (
+            median_displacement >= self.median_displacement_px
+            and alignment_spread <= self.alignment_spread_px
+        )
+        self.previous_centers = current_centers
+        return {
+            "triggered": bool(triggered),
+            "shared_track_count": int(len(shared_ids)),
+            "median_displacement_px": round(median_displacement, 4),
+            "alignment_spread_px": round(alignment_spread, 4),
+            "median_dx": round(float(median_vector[0]), 4),
+            "median_dy": round(float(median_vector[1]), 4),
+        }
+
+
 @dataclass
 class RuntimeBootstrapState:
     """Mutable segment-scoped runtime bootstrap context."""
@@ -403,6 +457,8 @@ class InferenceConfig:
     bootstrap_foreground_backend: str = "none"
     bootstrap_foreground_model: str = DEFAULT_DINOV3_MODEL
     bootstrap_discontinuity_threshold: float = BOOTSTRAP_DISCONTINUITY_THRESHOLD
+    play_region_geometry_min_prior: float = PLAY_REGION_GEOMETRY_MIN_PRIOR
+    bootstrap_pan_recompute_cooldown_frames: int = BOOTSTRAP_PAN_RECOMPUTE_COOLDOWN_FRAMES
 
 
 class CalibrationResolver:
@@ -684,6 +740,7 @@ class FrameResultAdapter:
         writer,
         bootstrap_context=None,
         bootstrap_segment_id=None,
+        play_region_geometry_min_prior=PLAY_REGION_GEOMETRY_MIN_PRIOR,
     ):
         """Select one auditable ball state and emit it as the runtime ball row."""
         ball_state = ball_tracker.update(
@@ -712,6 +769,18 @@ class FrameResultAdapter:
                 "source": ball_state.get("source"),
                 "bootstrap_segment_id": int(bootstrap_segment_id) if bootstrap_segment_id is not None else None,
                 "bootstrap_enabled": bool(bootstrap_context and bootstrap_context.get("enabled")),
+                "play_region_prior": round(
+                    play_region_prior_for_point(bootstrap_context, center_xy[0], center_xy[1]),
+                    4,
+                ) if center_xy is not None else 0.0,
+                "geometry_region_ok": bool(
+                    geometry_evidence_gate(
+                        bootstrap_context,
+                        center_xy[0],
+                        center_xy[1],
+                        min_prior=play_region_geometry_min_prior,
+                    )["geometry_region_ok"]
+                ) if center_xy is not None else False,
             }
         )
         return ball_state, updated_ball_2d, ball_3d
@@ -747,7 +816,9 @@ class GameDNAExtractor:
         self.discontinuity_detector = RuntimeDiscontinuityDetector(
             threshold=self.config.bootstrap_discontinuity_threshold
         )
+        self.pan_drift_detector = RuntimePanDriftDetector()
         self.bootstrapper = None
+        self.last_bootstrap_frame_idx = None
 
     def run(self):
         """Drive the frame loop and stream JSONL output for the whole video."""
@@ -804,10 +875,19 @@ class GameDNAExtractor:
                 writer,
                 bootstrap_context=self.bootstrap_state.context,
                 bootstrap_segment_id=self.bootstrap_state.segment_id,
+                play_region_geometry_min_prior=self.config.play_region_geometry_min_prior,
             )
             return
 
         boxes_xywh, cls, conf, tids, classes, keypoints = FrameResultAdapter.extract_arrays(result)
+        self._maybe_refresh_bootstrap_context_after_tracking(
+            frame,
+            t_ms,
+            writer,
+            boxes_xywh,
+            tids,
+            classes,
+        )
         # Ball state is updated before player features are built so Action Brain
         # sees the freshest available ball position for this frame.
         self.ball_state, self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
@@ -820,6 +900,7 @@ class GameDNAExtractor:
             writer,
             bootstrap_context=self.bootstrap_state.context,
             bootstrap_segment_id=self.bootstrap_state.segment_id,
+            play_region_geometry_min_prior=self.config.play_region_geometry_min_prior,
         )
         player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
         self._write_possession_events(player_map, ball_3d, t_ms, writer)
@@ -859,6 +940,8 @@ class GameDNAExtractor:
         payload["segment_id"] = int(self.bootstrap_state.segment_id)
         payload["reason"] = reason
         payload["discontinuity_score"] = round(float(discontinuity.get("score") or 0.0), 4)
+        payload["source_frame_idx"] = int(self.frame_idx)
+        self.last_bootstrap_frame_idx = int(self.frame_idx)
         writer.write(
             {
                 "kind": "bootstrap_context",
@@ -870,9 +953,41 @@ class GameDNAExtractor:
                 "backend": payload.get("backend"),
                 "foreground_ratio": payload.get("foreground_ratio"),
                 "discontinuity_score": payload["discontinuity_score"],
+                "source_frame_idx": payload["source_frame_idx"],
             }
         )
         return payload
+
+    def _maybe_refresh_bootstrap_context_after_tracking(
+        self,
+        frame,
+        t_ms,
+        writer,
+        boxes_xywh,
+        tids,
+        classes,
+    ):
+        """Invalidate stale play-region priors when coherent camera pan is detected."""
+        pan_drift = self.pan_drift_detector.update(boxes_xywh, tids, classes)
+        if not self.bootstrap_state.context or not pan_drift["triggered"]:
+            return
+        cooldown = int(self.config.bootstrap_pan_recompute_cooldown_frames)
+        if (
+            self.last_bootstrap_frame_idx is not None
+            and (self.frame_idx - self.last_bootstrap_frame_idx) < cooldown
+        ):
+            self.bootstrap_state.context["bootstrap_stale"] = True
+            self.bootstrap_state.context["pan_drift"] = pan_drift
+            return
+        self.bootstrap_state.segment_id += 1
+        self.bootstrap_state.context = self._run_bootstrap(
+            frame,
+            t_ms,
+            "pan_drift",
+            {"score": pan_drift["median_displacement_px"]},
+            writer,
+        )
+        self.bootstrap_state.context["pan_drift"] = pan_drift
 
     def _update_tracks(self, boxes_xywh, tids, classes, keypoints, h_matrix):
         """Project and update all player tracks visible in the current frame."""
@@ -883,13 +998,26 @@ class GameDNAExtractor:
             # Track objects are created lazily so stable tracker ids become the
             # runtime identity handle for subsequent smoothing and history use.
             track = self.tracks.setdefault(tid, TrackManager(tid))
+            geometry_gate = geometry_evidence_gate(
+                self.bootstrap_state.context,
+                float(boxes_xywh[idx][0]),
+                float(boxes_xywh[idx][1]),
+                min_prior=self.config.play_region_geometry_min_prior,
+            )
             court_xy = project_pixel_to_court(
                 float(boxes_xywh[idx][0]), float(boxes_xywh[idx][1]), h_matrix
             )
             track.update_position(court_xy[0], court_xy[1])
+            track.play_region_prior = float(geometry_gate["play_region_prior"])
+            track.geometry_region_ok = bool(geometry_gate["geometry_region_ok"])
             current_keypoints = keypoints[idx].tolist() if keypoints is not None else None
             track.add_keypoints(current_keypoints, h_matrix)
-            player_map[tid] = {"pos_3d": track.pos_3d, "team": track.team}
+            player_map[tid] = {
+                "pos_3d": track.pos_3d,
+                "team": track.team,
+                "play_region_prior": track.play_region_prior,
+                "geometry_region_ok": track.geometry_region_ok,
+            }
         return player_map
 
     def _write_possession_events(self, player_map, ball_3d, t_ms, writer):
@@ -930,6 +1058,8 @@ class GameDNAExtractor:
                     "court_x": track.court_x,
                     "court_y": track.court_y,
                     "bootstrap_segment_id": int(self.bootstrap_state.segment_id),
+                    "play_region_prior": round(float(track.play_region_prior), 4),
+                    "geometry_region_ok": bool(track.geometry_region_ok),
                 }
             )
             shot_attempt = self._maybe_build_shot_attempt_candidate(

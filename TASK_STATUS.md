@@ -7,7 +7,8 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.83` port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
+- `L3.84` make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- `L3.85` feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - `L3.64` add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
@@ -132,7 +133,9 @@ The current highest-priority frontier is:
 - [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
 - [x] Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
 - [x] Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
-- [ ] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
+- [x] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
+- [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
@@ -168,7 +171,8 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
-- [ ] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
+- [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating

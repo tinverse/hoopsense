@@ -45,3 +45,40 @@ def homography_sanity(h_matrix: np.ndarray) -> Dict[str, Union[float, bool]]:
         "determinant": float(det),
         "invertible": bool(abs(det) > 1e-6)
     }
+
+
+def play_region_prior_for_point(
+    play_region_summary: Dict[str, object] | None,
+    u: float,
+    v: float,
+) -> float:
+    """Score whether an image-space point falls inside the current play-region prior."""
+    if not play_region_summary:
+        return 0.0
+    mask_grid = play_region_summary.get("mask_grid")
+    mask_shape = play_region_summary.get("mask_shape")
+    if not mask_grid or not mask_shape or len(mask_shape) != 2:
+        return 0.0
+    height, width = int(mask_shape[0]), int(mask_shape[1])
+    if height <= 0 or width <= 0:
+        return 0.0
+    image_width = max(float(play_region_summary.get("image_width", width)), 1.0)
+    image_height = max(float(play_region_summary.get("image_height", height)), 1.0)
+    gx = min(width - 1, max(0, int((float(u) / image_width) * width)))
+    gy = min(height - 1, max(0, int((float(v) / image_height) * height)))
+    return float(mask_grid[gy][gx])
+
+
+def geometry_evidence_gate(
+    play_region_summary: Dict[str, object] | None,
+    u: float,
+    v: float,
+    *,
+    min_prior: float = 0.5,
+) -> Dict[str, Union[float, bool]]:
+    """Return whether a point is supported enough to count as in-play geometry evidence."""
+    prior = play_region_prior_for_point(play_region_summary, u, v)
+    return {
+        "play_region_prior": round(float(prior), 4),
+        "geometry_region_ok": bool(prior >= float(min_prior)),
+    }
