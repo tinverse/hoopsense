@@ -538,6 +538,11 @@ levels:
       title: Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
       owner: A0
       status: in_progress
+    - id: L3.80
+      parent: L2.17
+      title: Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
+      owner: A0
+      status: completed
     - id: L3.74
       parent: L2.14
       title: Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline

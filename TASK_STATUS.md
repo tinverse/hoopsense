@@ -130,6 +130,7 @@ The current highest-priority frontier is:
 - [x] Define a staged Stage-1 ball-state contract and implementation plan from primary-source review
 - [ ] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
 - [ ] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
+- [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller

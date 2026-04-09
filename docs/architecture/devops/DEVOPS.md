@@ -28,6 +28,7 @@ What is implemented:
 - `scripts/generate_layer1_annotations.sh` for GPU-backed perception artifact generation
 - `Dockerfile` for cloud-oriented packaging
 - `tools/infra/cloud_train_wrapper.sh` and `vertex_job.yaml` for cloud training entrypoints
+- cloud `Dockerfile` now makes `facebookresearch/dinov3` available for later bootstrap foreground/background segmentation experiments
 
 What is not implemented yet:
 - checked-in CI workflows
@@ -110,6 +111,13 @@ Use cloud for:
 - larger training runs
 - longer evaluations
 - repeatable artifact publication
+- research dependencies that are not yet part of the native Orin runtime path, such as `DINOv3`
+
+Current DINOv3 boundary:
+- `Dockerfile` clones `facebookresearch/dinov3` into `/opt/dinov3`
+- the cloud image installs it in editable mode with `--no-deps`
+- this is intentionally a cloud/x86 packaging feature only
+- `Dockerfile.orin` is unchanged; DINOv3 is not yet part of the Jetson runtime contract
 
 ## Reproducibility Strategy
 
