@@ -4,6 +4,7 @@ from unittest import mock
 import numpy as np
 import sys
 import types
+from types import SimpleNamespace
 
 cv2_stub = types.ModuleType("cv2")
 cv2_stub.COLOR_BGR2RGB = 0
@@ -48,6 +49,65 @@ class Dinov3BootstrapperTest(unittest.TestCase):
         payload = result.to_payload()
         self.assertFalse(payload["enabled"])
         self.assertEqual(payload["status"], "cuda_unavailable")
+
+    @mock.patch("tools.review.labeller.dinov3_bootstrap._is_transformers_available", return_value=True)
+    @mock.patch.object(Dinov3Bootstrapper, "_gpu_ready", return_value=True)
+    @mock.patch.object(Dinov3Bootstrapper, "load", side_effect=RuntimeError("401 Unauthorized gated repo"))
+    def test_run_on_frame_reports_gated_repo_instead_of_raising(self, _load, _gpu_ready, _available):
+        bootstrapper = Dinov3Bootstrapper(device="cuda:0")
+        result = bootstrapper.run_on_frame(np.zeros((32, 32, 3), dtype=np.uint8), frame_idx=4)
+        payload = result.to_payload()
+        self.assertFalse(payload["enabled"])
+        self.assertEqual(payload["status"], "gated_repo")
+        self.assertEqual(payload["frame_idx"], 4)
+
+    def test_dense_features_skips_cls_and_register_tokens(self):
+        bootstrapper = Dinov3Bootstrapper(device="cuda:0")
+
+        class _Tensor:
+            def __init__(self, array):
+                self.array = array
+
+            def __getitem__(self, index):
+                return _Tensor(self.array[index])
+
+            def to(self, _device):
+                return self
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return self.array
+
+        class _Model:
+            device = "cpu"
+            config = SimpleNamespace(num_register_tokens=4)
+
+            def __call__(self, **kwargs):
+                tokens = np.zeros((1, 201, 8), dtype=np.float32)
+                return SimpleNamespace(last_hidden_state=_Tensor(tokens))
+
+        bootstrapper.model = _Model()
+        bootstrapper.processor = lambda images, return_tensors: {
+            "pixel_values": _Tensor(np.zeros((1, 3, 224, 224), dtype=np.float32))
+        }
+
+        class _InferenceMode:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_torch = types.SimpleNamespace(inference_mode=lambda: _InferenceMode())
+        with mock.patch.dict(sys.modules, {"torch": fake_torch}):
+            features = bootstrapper.dense_features(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(features.shape, (14, 14, 8))
 
 
 if __name__ == "__main__":

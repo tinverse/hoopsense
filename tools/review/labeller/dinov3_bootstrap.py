@@ -149,6 +149,15 @@ class Dinov3Bootstrapper:
         self.model.eval()
         return self
 
+    @staticmethod
+    def _status_for_exception(exc):
+        text = str(exc).lower()
+        if "gated repo" in text or "restricted" in text or "401" in text:
+            return "gated_repo"
+        if "out of memory" in text or "cuda out of memory" in text:
+            return "oom"
+        return "load_failed"
+
     def _gpu_ready(self):
         if not str(self.device).startswith("cuda"):
             return False
@@ -171,9 +180,10 @@ class Dinov3Bootstrapper:
         with torch.inference_mode():
             outputs = self.model(**inputs)
         tokens = outputs.last_hidden_state[0].detach().cpu().numpy()
-        if tokens.shape[0] <= 1:
+        num_special_tokens = 1 + int(getattr(self.model.config, "num_register_tokens", 0) or 0)
+        if tokens.shape[0] <= num_special_tokens:
             raise RuntimeError("DINOv3 output did not produce dense patch tokens")
-        patch_tokens = tokens[1:]
+        patch_tokens = tokens[num_special_tokens:]
         grid_size = int(math.sqrt(patch_tokens.shape[0]))
         if grid_size * grid_size != patch_tokens.shape[0]:
             raise RuntimeError("DINOv3 patch token count is not a perfect square")
@@ -198,17 +208,27 @@ class Dinov3Bootstrapper:
                 frame_idx=frame_idx,
                 summary=None,
             )
-        self.load()
-        features = self.dense_features(frame_bgr)
-        mask = foreground_mask_from_dense_features(features)
-        summary = summarize_foreground_mask(mask)
-        summary["image_height"] = int(frame_bgr.shape[0])
-        summary["image_width"] = int(frame_bgr.shape[1])
-        return Dinov3BootstrapResult(
-            enabled=True,
-            status="ready",
-            backend="dinov3_transformers_v1",
-            model_name=self.model_name,
-            frame_idx=frame_idx,
-            summary=summary,
-        )
+        try:
+            self.load()
+            features = self.dense_features(frame_bgr)
+            mask = foreground_mask_from_dense_features(features)
+            summary = summarize_foreground_mask(mask)
+            summary["image_height"] = int(frame_bgr.shape[0])
+            summary["image_width"] = int(frame_bgr.shape[1])
+            return Dinov3BootstrapResult(
+                enabled=True,
+                status="ready",
+                backend="dinov3_transformers_v1",
+                model_name=self.model_name,
+                frame_idx=frame_idx,
+                summary=summary,
+            )
+        except Exception as exc:
+            return Dinov3BootstrapResult(
+                enabled=False,
+                status=self._status_for_exception(exc),
+                backend="dinov3_transformers_v1",
+                model_name=self.model_name,
+                frame_idx=frame_idx,
+                summary=None,
+            )

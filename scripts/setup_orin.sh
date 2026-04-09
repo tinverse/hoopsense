@@ -83,6 +83,11 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install \
 env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --no-deps ultralytics
 env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --index-url "${JETSON_PYPI_INDEX}" --no-deps --force-reinstall "torchvision==${TORCHVISION_VERSION}"
 env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install --no-deps easyocr
+env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install \
+  huggingface-hub \
+  safetensors \
+  tokenizers \
+  transformers
 
 if [ -d "${ORIN_CV2_SRC}" ]; then
     rm -rf "${ORIN_CV2_DST}"
