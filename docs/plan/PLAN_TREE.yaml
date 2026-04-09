@@ -548,6 +548,11 @@ levels:
       title: Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
       owner: A0
       status: completed
+    - id: L3.82
+      parent: L2.32
+      title: Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
+      owner: A0
+      status: completed
     - id: L3.74
       parent: L2.14
       title: Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline

@@ -9,6 +9,10 @@ import yaml
 from ultralytics import YOLO
 
 from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
+from tools.review.labeller.dinov3_bootstrap import (
+    DEFAULT_DINOV3_MODEL,
+    Dinov3Bootstrapper,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1860,7 +1864,18 @@ def repair_short_track_gaps(
     return frames
 
 
-def annotate_clip(video_path, output_path, model_name, ball_model_name, device, conf_threshold, calibration_file):
+def annotate_clip(
+    video_path,
+    output_path,
+    model_name,
+    ball_model_name,
+    device,
+    conf_threshold,
+    calibration_file,
+    *,
+    bootstrap_foreground_backend="none",
+    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
@@ -1876,6 +1891,13 @@ def annotate_clip(video_path, output_path, model_name, ball_model_name, device, 
     frame_idx = 0
     clip_id = video_path.stem
     calibration = load_calibration(clip_id, calibration_file)
+    bootstrap_payload = {
+        "enabled": False,
+        "status": "disabled",
+        "backend": bootstrap_foreground_backend,
+        "model_name": None,
+        "frame_idx": None,
+    }
 
     while True:
         ok, frame = cap.read()
@@ -1920,6 +1942,12 @@ def annotate_clip(video_path, output_path, model_name, ball_model_name, device, 
             "ball_detection": ball_detection,
             "_frame_visual_signature": _frame_visual_signature(frame),
         })
+        if frame_idx == 0 and bootstrap_foreground_backend == "dinov3":
+            bootstrapper = Dinov3Bootstrapper(
+                model_name=bootstrap_foreground_model,
+                device=device,
+            )
+            bootstrap_payload = bootstrapper.run_on_frame(frame, frame_idx=frame_idx).to_payload()
         frame_idx += 1
 
     cap.release()
@@ -2044,6 +2072,7 @@ def annotate_clip(video_path, output_path, model_name, ball_model_name, device, 
         "identity_hypotheses": identity_hypotheses["groups"],
         "continuity_segments": continuity["segments"],
         "live_play_segments": live_play["segments"],
+        "bootstrap_foreground": bootstrap_payload,
         "frames": frames,
     }
 
@@ -2057,6 +2086,17 @@ def main():
     parser.add_argument("--output", default=None, help="Output JSON path")
     parser.add_argument("--model", default="yolov8n-pose.pt", help="Ultralytics model name or path")
     parser.add_argument("--ball-model", default="yolov8n.pt", help="Ultralytics detection model used for sports-ball proposals")
+    parser.add_argument(
+        "--bootstrap-foreground-backend",
+        choices=["none", "dinov3"],
+        default="none",
+        help="Optional bootstrap foreground/background pre-pass backend",
+    )
+    parser.add_argument(
+        "--bootstrap-foreground-model",
+        default=DEFAULT_DINOV3_MODEL,
+        help="Model id used when the DINOv3 bootstrap foreground backend is enabled",
+    )
     parser.add_argument("--device", default="cuda:0", help="Ultralytics device selector")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument(
@@ -2080,6 +2120,8 @@ def main():
         device=args.device,
         conf_threshold=args.conf,
         calibration_file=calibration_file,
+        bootstrap_foreground_backend=args.bootstrap_foreground_backend,
+        bootstrap_foreground_model=args.bootstrap_foreground_model,
     )
     print(output_path)
 

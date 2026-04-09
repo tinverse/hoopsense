@@ -92,6 +92,20 @@ Layer 1 review path:
 ./scripts/generate_layer1_annotations.sh data/raw_clips/youth/DSC_4951_sample_0.mp4
 ```
 
+Optional DINOv3 bootstrap pre-pass for Layer 1 artifacts:
+
+```bash
+./scripts/generate_layer1_annotations.sh \
+  data/raw_clips/youth/DSC_4951_sample_0.mp4 \
+  --bootstrap-foreground-backend dinov3 \
+  --bootstrap-foreground-model facebook/dinov3-vits16-pretrain-lvd1689m
+```
+
+Notes:
+- this bootstrap path is optional and artifact-oriented
+- it runs ahead of geometry/perception and emits a coarse foreground/background summary
+- it requires a CUDA-capable environment with DINOv3 support available
+
 ### Mode C: Cloud Training
 
 Cloud is the scale-out path after Orin is green.

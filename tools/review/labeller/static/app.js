@@ -729,7 +729,11 @@ function loadPerceptionOverlay(clip) {
                 const deadSegmentCount = livePlaySegments.filter(segment => segment.label === 'dead_ball').length;
                 const uncertainSegmentCount = livePlaySegments.filter(segment => segment.label === 'uncertain').length;
                 const ballReady = data.postprocess && data.postprocess.live_play_gate ? data.postprocess.live_play_gate.ball_signal_present : false;
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // ${hypothesisCount} identity-hyp groups // ${continuityCount} continuity segments // ball artifact ${ballReady ? 'enabled' : 'unavailable'} // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}`;
+                const bootstrap = data.bootstrap_foreground || null;
+                const bootstrapText = bootstrap
+                    ? ` // bootstrap ${bootstrap.backend || 'unknown'} ${bootstrap.status}${bootstrap.enabled && bootstrap.foreground_ratio !== undefined ? ` // fg ${Math.round(bootstrap.foreground_ratio * 100)}%` : ''}`
+                    : '';
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // ${hypothesisCount} identity-hyp groups // ${continuityCount} continuity segments // ball artifact ${ballReady ? 'enabled' : 'unavailable'} // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}${bootstrapText}`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
             } else {
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';

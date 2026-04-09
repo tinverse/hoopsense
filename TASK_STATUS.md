@@ -133,6 +133,7 @@ The current highest-priority frontier is:
 - [ ] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
 - [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
 - [x] Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
+- [x] Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
