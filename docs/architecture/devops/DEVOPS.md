@@ -119,6 +119,16 @@ Current DINOv3 boundary:
 - this is intentionally a cloud/x86 packaging feature only
 - `Dockerfile.orin` is unchanged; DINOv3 is not yet part of the Jetson runtime contract
 
+Rollback-safe experimental Orin path:
+- `Dockerfile.orin` remains the stable Jetson baseline
+- `Dockerfile.orin.dinov3` is a separate experimental variant for DINOv3 availability
+- rollback is operationally trivial:
+  - keep using `Dockerfile.orin`
+  - or stop tagging/publishing the experimental image
+- recommended image naming:
+  - stable: `hoopsense-orin:stable`
+  - experimental: `hoopsense-orin:dinov3-exp1`
+
 ## Reproducibility Strategy
 
 HoopSense uses this priority order:

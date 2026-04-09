@@ -1,0 +1,52 @@
+# HoopSense Orin Dockerfile (Experimental DINOv3 Variant)
+#
+# This file intentionally leaves Dockerfile.orin untouched.
+# Use this image only for experimental bootstrap segmentation work that needs
+# DINOv3 on Jetson/ARM64. Rollback is simply: keep using Dockerfile.orin.
+
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    curl \
+    ca-certificates \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/root/.rustup
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --default-toolchain stable
+
+RUN python3 -m pip install --upgrade pip
+
+# Keep Jetson's native OpenCV stack and avoid pip OpenCV wheels, which conflict with L4T.
+RUN pip3 install --no-cache-dir \
+    numpy==1.24.4 \
+    lap \
+    pyyaml \
+    matplotlib==3.7.5 \
+    psutil \
+    polars \
+    ultralytics-thop \
+    scipy
+RUN pip3 install --no-cache-dir --no-deps ultralytics
+
+# Experimental DINOv3 layer for future bootstrap foreground/background segmentation.
+# This is kept in a separate Dockerfile so the stable Orin image remains unchanged.
+ARG DINOV3_REF=main
+ENV HOOPSENSE_DINOV3_DIR=/opt/dinov3
+RUN git clone --depth 1 --branch "${DINOV3_REF}" https://github.com/facebookresearch/dinov3.git "${HOOPSENSE_DINOV3_DIR}" \
+    && pip3 install --no-cache-dir --no-deps -e "${HOOPSENSE_DINOV3_DIR}" \
+    && python3 -c "import dinov3; print('DINOv3 experimental Orin environment ready')"
+
+WORKDIR /app
+ENV PYTHONPATH="/app:${HOOPSENSE_DINOV3_DIR}:${PYTHONPATH}"
+
+CMD ["/bin/bash"]

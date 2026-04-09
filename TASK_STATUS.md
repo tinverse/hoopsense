@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.81` add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
 - `L3.79` introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
 - `L3.78` materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
@@ -131,6 +132,7 @@ The current highest-priority frontier is:
 - [ ] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
 - [ ] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
 - [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
+- [x] Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
