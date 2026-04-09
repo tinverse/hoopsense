@@ -105,6 +105,7 @@ Notes:
 - this bootstrap path is optional and artifact-oriented
 - it runs ahead of geometry/perception and emits a coarse foreground/background summary
 - it requires a CUDA-capable environment with DINOv3 support available
+- the artifact now carries a segment-oriented `bootstrap_context` handoff so continuity segments can re-bootstrap after detected discontinuities
 
 ### Mode C: Cloud Training
 

@@ -33,6 +33,7 @@ from tools.review.labeller.generate_layer1_annotations import (
     annotate_team_appearance_consistency,
     annotate_active_players,
     annotate_ball_state,
+    annotate_bootstrap_contexts,
     annotate_continuity_segments,
     annotate_identity_jersey_numbers,
     annotate_live_play,
@@ -239,6 +240,72 @@ class BallStateTest(unittest.TestCase):
         ]
         annotate_ball_state(frames)
         self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
+
+
+class BootstrapContextTest(unittest.TestCase):
+    def test_annotate_bootstrap_contexts_reuses_context_within_segment(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "continuity_segment_id": 0,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+            {
+                "frame_idx": 1,
+                "continuity_segment_id": 0,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+            {
+                "frame_idx": 2,
+                "continuity_segment_id": 1,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+        ]
+
+        class _FakeResult:
+            def __init__(self, frame_idx):
+                self.frame_idx = frame_idx
+
+            def to_payload(self):
+                return {
+                    "enabled": True,
+                    "status": "ready",
+                    "backend": "dinov3",
+                    "model_name": "fake",
+                    "frame_idx": self.frame_idx,
+                    "foreground_ratio": 0.5,
+                    "mask_shape": [2, 2],
+                    "mask_grid": [[1, 1], [0, 0]],
+                    "image_width": 8,
+                    "image_height": 8,
+                }
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, device):
+                self.model_name = model_name
+                self.device = device
+
+            def run_on_frame(self, frame, frame_idx=0):
+                return _FakeResult(frame_idx)
+
+        import tools.review.labeller.generate_layer1_annotations as module
+
+        original = module.Dinov3Bootstrapper
+        module.Dinov3Bootstrapper = _FakeBootstrapper
+        try:
+            summary = annotate_bootstrap_contexts(
+                frames,
+                bootstrap_foreground_backend="dinov3",
+                bootstrap_foreground_model="fake",
+                device="cuda:0",
+            )
+        finally:
+            module.Dinov3Bootstrapper = original
+
+        self.assertEqual(len(summary["contexts"]), 2)
+        self.assertEqual(frames[0]["bootstrap_context"]["frame_idx"], 0)
+        self.assertEqual(frames[1]["bootstrap_context"]["frame_idx"], 0)
+        self.assertEqual(frames[2]["bootstrap_context"]["frame_idx"], 2)
 
 
 class AppearanceConsistencyTest(unittest.TestCase):

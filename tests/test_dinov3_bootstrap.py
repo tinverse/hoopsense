@@ -13,6 +13,7 @@ sys.modules.setdefault("cv2", cv2_stub)
 from tools.review.labeller.dinov3_bootstrap import (
     Dinov3Bootstrapper,
     foreground_mask_from_dense_features,
+    foreground_prior_for_point,
     summarize_foreground_mask,
 )
 
@@ -30,9 +31,13 @@ class Dinov3BootstrapMaskTest(unittest.TestCase):
         mask = np.zeros((4, 4), dtype=np.uint8)
         mask[1:3, 1:3] = 1
         summary = summarize_foreground_mask(mask)
+        summary["image_width"] = 40
+        summary["image_height"] = 40
         self.assertEqual(summary["mask_shape"], [4, 4])
         self.assertEqual(summary["foreground_bbox_xyxy"], [1, 1, 2, 2])
         self.assertAlmostEqual(summary["foreground_ratio"], 0.25, places=4)
+        self.assertEqual(foreground_prior_for_point(summary, 15, 15), 1.0)
+        self.assertEqual(foreground_prior_for_point(summary, 2, 2), 0.0)
 
 
 class Dinov3BootstrapperTest(unittest.TestCase):

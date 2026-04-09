@@ -12,6 +12,7 @@ from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
 from tools.review.labeller.dinov3_bootstrap import (
     DEFAULT_DINOV3_MODEL,
     Dinov3Bootstrapper,
+    foreground_prior_for_point,
 )
 
 
@@ -228,9 +229,21 @@ def annotate_ball_state(frames):
 
     for frame in frames:
         raw_ball_detection = frame.get("ball_detection")
+        bootstrap_context = frame.get("bootstrap_context")
         candidates = []
         if raw_ball_detection is not None:
-            candidates.append(_score_ball_candidate(raw_ball_detection, previous_center_xy))
+            candidate = _score_ball_candidate(raw_ball_detection, previous_center_xy)
+            foreground_prior = 0.0
+            if bootstrap_context and bootstrap_context.get("enabled"):
+                center_xy = raw_ball_detection.get("center_xy") or [0.0, 0.0]
+                foreground_prior = foreground_prior_for_point(
+                    bootstrap_context,
+                    center_xy[0],
+                    center_xy[1],
+                )
+                candidate["score"] += 0.10 * foreground_prior
+            candidate["foreground_prior"] = foreground_prior
+            candidates.append(candidate)
 
         selected = max(candidates, key=lambda item: item["score"], default=None)
         ball_state = None
@@ -264,6 +277,7 @@ def annotate_ball_state(frames):
                     {
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
+                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -288,6 +302,7 @@ def annotate_ball_state(frames):
                     {
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
+                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -310,6 +325,7 @@ def annotate_ball_state(frames):
                     {
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
+                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -749,6 +765,7 @@ def score_active_player(
     frame_width,
     frame_height,
     track_frame_count=1,
+    bootstrap_context=None,
 ):
     confidence = float(detection.get("confidence") or 0.0)
     bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
@@ -798,6 +815,16 @@ def score_active_player(
     motion_score = _clip01(motion_speed / MOTION_SCORE_THRESHOLD_PX)
     reasons["motion_speed_px"] = round(motion_speed, 3)
     score += 0.15 * motion_score
+
+    foreground_prior = 0.0
+    if bootstrap_context and bootstrap_context.get("enabled"):
+        foreground_prior = foreground_prior_for_point(
+            bootstrap_context,
+            bbox_cx,
+            bbox_cy,
+        )
+        score += 0.08 * foreground_prior
+    reasons["bootstrap_foreground_prior"] = round(float(foreground_prior), 4)
 
     appearance_distance = detection.get("appearance_team_distance")
     reasons["appearance_team_distance"] = round(float(appearance_distance), 4) if appearance_distance is not None else None
@@ -917,12 +944,14 @@ def annotate_active_players(frames, video_meta):
     frame_width = int(video_meta["width"])
     frame_height = int(video_meta["height"])
     for frame in frames:
+        bootstrap_context = frame.get("bootstrap_context")
         for detection in frame.get("detections", []):
             score_info = score_active_player(
                 detection,
                 frame_width=frame_width,
                 frame_height=frame_height,
                 track_frame_count=track_counts.get(detection.get("track_id"), 1),
+                bootstrap_context=bootstrap_context,
             )
             detection["active_player_score"] = score_info["score"]
             detection["active_player_candidate"] = score_info["candidate"]
@@ -1227,6 +1256,63 @@ def annotate_continuity_segments(frames):
         frame.pop("_frame_visual_signature", None)
 
     return {"segments": segments}
+
+
+def annotate_bootstrap_contexts(
+    frames,
+    *,
+    bootstrap_foreground_backend="none",
+    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+    device="cpu",
+):
+    if not frames:
+        return {"backend": bootstrap_foreground_backend, "contexts": []}
+
+    contexts = []
+    context_by_segment_id = {}
+    for frame in frames:
+        segment_id = frame.get("continuity_segment_id")
+        if segment_id in context_by_segment_id:
+            frame["bootstrap_context"] = context_by_segment_id[segment_id]
+            continue
+
+        if bootstrap_foreground_backend == "dinov3":
+            source_frame = frame.get("_frame_bgr")
+            if source_frame is not None:
+                bootstrapper = Dinov3Bootstrapper(
+                    model_name=bootstrap_foreground_model,
+                    device=device,
+                )
+                payload = bootstrapper.run_on_frame(
+                    source_frame,
+                    frame_idx=frame.get("frame_idx", 0),
+                ).to_payload()
+            else:
+                payload = {
+                    "enabled": False,
+                    "status": "frame_unavailable",
+                    "backend": bootstrap_foreground_backend,
+                    "model_name": bootstrap_foreground_model,
+                    "frame_idx": frame.get("frame_idx", 0),
+                }
+        else:
+            payload = {
+                "enabled": False,
+                "status": "disabled",
+                "backend": bootstrap_foreground_backend,
+                "model_name": None,
+                "frame_idx": frame.get("frame_idx", 0),
+            }
+
+        payload["continuity_segment_id"] = segment_id
+        context_by_segment_id[segment_id] = payload
+        frame["bootstrap_context"] = payload
+        contexts.append(payload)
+
+    return {
+        "backend": bootstrap_foreground_backend,
+        "contexts": contexts,
+    }
 
 
 def annotate_live_play(frames, video_meta=None):
@@ -1891,14 +1977,6 @@ def annotate_clip(
     frame_idx = 0
     clip_id = video_path.stem
     calibration = load_calibration(clip_id, calibration_file)
-    bootstrap_payload = {
-        "enabled": False,
-        "status": "disabled",
-        "backend": bootstrap_foreground_backend,
-        "model_name": None,
-        "frame_idx": None,
-    }
-
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -1941,13 +2019,8 @@ def annotate_clip(
             "detections": person_detections,
             "ball_detection": ball_detection,
             "_frame_visual_signature": _frame_visual_signature(frame),
+            "_frame_bgr": frame.copy(),
         })
-        if frame_idx == 0 and bootstrap_foreground_backend == "dinov3":
-            bootstrapper = Dinov3Bootstrapper(
-                model_name=bootstrap_foreground_model,
-                device=device,
-            )
-            bootstrap_payload = bootstrapper.run_on_frame(frame, frame_idx=frame_idx).to_payload()
         frame_idx += 1
 
     cap.release()
@@ -1962,6 +2035,12 @@ def annotate_clip(
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
     continuity = annotate_continuity_segments(frames)
+    bootstrap_summary = annotate_bootstrap_contexts(
+        frames,
+        bootstrap_foreground_backend=bootstrap_foreground_backend,
+        bootstrap_foreground_model=bootstrap_foreground_model,
+        device=device,
+    )
     ball_state_summary = annotate_ball_state(frames)
     appearance_summary = annotate_team_appearance_consistency(frames)
     frames = annotate_active_players(frames, video_meta)
@@ -2072,9 +2151,16 @@ def annotate_clip(
         "identity_hypotheses": identity_hypotheses["groups"],
         "continuity_segments": continuity["segments"],
         "live_play_segments": live_play["segments"],
-        "bootstrap_foreground": bootstrap_payload,
+        "bootstrap_foreground": {
+            "backend": bootstrap_summary["backend"],
+            "contexts": bootstrap_summary["contexts"],
+        },
         "frames": frames,
     }
+
+    for frame in artifact["frames"]:
+        frame.pop("_frame_visual_signature", None)
+        frame.pop("_frame_bgr", None)
 
     with open(output_path, "w") as f:
         json.dump(artifact, f, indent=2)

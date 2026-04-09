@@ -77,6 +77,22 @@ def summarize_foreground_mask(mask):
     }
 
 
+def foreground_prior_for_point(summary, x, y):
+    """Return a soft foreground prior for a point in image space."""
+    if not summary:
+        return 0.0
+    mask_grid = summary.get("mask_grid")
+    mask_shape = summary.get("mask_shape")
+    if not mask_grid or not mask_shape or len(mask_shape) != 2:
+        return 0.0
+    height, width = int(mask_shape[0]), int(mask_shape[1])
+    if height <= 0 or width <= 0:
+        return 0.0
+    gx = min(width - 1, max(0, int((float(x) / max(float(summary.get("image_width", width)), 1.0)) * width)))
+    gy = min(height - 1, max(0, int((float(y) / max(float(summary.get("image_height", height)), 1.0)) * height)))
+    return float(mask_grid[gy][gx])
+
+
 def _is_transformers_available():
     return importlib.util.find_spec("transformers") is not None
 
@@ -185,11 +201,14 @@ class Dinov3Bootstrapper:
         self.load()
         features = self.dense_features(frame_bgr)
         mask = foreground_mask_from_dense_features(features)
+        summary = summarize_foreground_mask(mask)
+        summary["image_height"] = int(frame_bgr.shape[0])
+        summary["image_width"] = int(frame_bgr.shape[1])
         return Dinov3BootstrapResult(
             enabled=True,
             status="ready",
             backend="dinov3_transformers_v1",
             model_name=self.model_name,
             frame_idx=frame_idx,
-            summary=summarize_foreground_mask(mask),
+            summary=summary,
         )
