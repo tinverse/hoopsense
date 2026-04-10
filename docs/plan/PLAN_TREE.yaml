@@ -578,6 +578,11 @@ levels:
       title: Discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
       owner: A0
       status: in_progress
+    - id: L3.88
+      parent: L2.32
+      title: Split labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
+      owner: A0
+      status: in_progress
     - id: L3.74
       parent: L2.14
       title: Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline

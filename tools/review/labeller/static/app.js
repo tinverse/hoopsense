@@ -459,6 +459,9 @@ function drawSkeleton(detection) {
 
 function drawDetectionOverlay(detection) {
     const [x1, y1, x2, y2] = detection.bbox_xyxy;
+    const onCourtCandidate = !!detection.on_court_candidate;
+    const activeCandidate = !!detection.active_player_candidate;
+    const demotedDetection = !onCourtCandidate;
     const trackLabel = detection.track_id !== null && detection.track_id !== undefined
         ? `P${detection.track_id}`
         : detection.class_name;
@@ -476,6 +479,9 @@ function drawDetectionOverlay(detection) {
         ? ` ${detection.uniform_bucket.toUpperCase()}`
         : '';
     const confLabel = `${Math.round((detection.confidence || 0) * 100)}%`;
+    const onCourtScore = detection.on_court_score !== undefined && detection.on_court_score !== null
+        ? ` C${Math.round(detection.on_court_score * 100)}`
+        : '';
     const activeScore = detection.active_player_score !== undefined && detection.active_player_score !== null
         ? ` A${Math.round(detection.active_player_score * 100)}`
         : '';
@@ -483,25 +489,32 @@ function drawDetectionOverlay(detection) {
         ? ` M${detection.motion_speed_px.toFixed(1)}`
         : '';
     const repairLabel = detection.synthesized ? ' SYN' : '';
-    const candidateColor = detection.active_player_candidate ? "#35f28b" : "#ff8f70";
+    const statusLabel = activeCandidate ? ' ACTIVE' : (onCourtCandidate ? ' COURT' : ' RAW');
+    const candidateColor = activeCandidate ? "#35f28b" : (onCourtCandidate ? "#69d2ff" : "#ff8f70");
+    const boxStroke = detection.synthesized ? "#ffd166" : (activeCandidate ? "#35f28b" : (onCourtCandidate ? "#69d2ff" : "rgba(255, 143, 112, 0.75)"));
+    const labelFill = demotedDetection ? "rgba(48, 24, 19, 0.76)" : "rgba(15, 39, 48, 0.92)";
+    const textColor = demotedDetection ? "#ffd5c8" : (detection.synthesized ? "#ffe3a3" : "#cfffff");
 
     ctx.save();
-    ctx.strokeStyle = detection.synthesized ? "#ffd166" : "#3ed8ff";
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = boxStroke;
+    ctx.lineWidth = demotedDetection ? 2 : 4;
+    ctx.setLineDash(demotedDetection ? [10, 6] : []);
+    ctx.globalAlpha = demotedDetection ? 0.7 : 1.0;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-    const label = `${trackLabel}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} ${confLabel}${activeScore}${motionLabel}${repairLabel}`;
+    const label = `${trackLabel}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel}${statusLabel} ${confLabel}${onCourtScore}${activeScore}${motionLabel}${repairLabel}`;
     const labelWidth = Math.max(120, label.length * 10 + 20);
     const labelHeight = 26;
     const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
     const labelY = Math.max(10, y1 - labelHeight - 6);
 
-    ctx.fillStyle = "rgba(15, 39, 48, 0.92)";
+    ctx.fillStyle = labelFill;
     ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
     ctx.strokeStyle = candidateColor;
     ctx.lineWidth = 2;
+    ctx.setLineDash([]);
     ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
-    ctx.fillStyle = detection.synthesized ? "#ffe3a3" : "#cfffff";
+    ctx.fillStyle = textColor;
     ctx.font = "bold 16px monospace";
     ctx.fillText(label, labelX + 10, labelY + 17);
     ctx.restore();
@@ -563,6 +576,8 @@ function redrawOverlay() {
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
         const firstDetection = frame.detections.find(d => d.court_xy);
         const activeCount = frame.detections.filter(d => d.active_player_candidate).length;
+        const onCourtCount = frame.detections.filter(d => d.on_court_candidate).length;
+        const demotedCount = frame.detections.length - onCourtCount;
         const synthCount = frame.detections.filter(d => d.synthesized).length;
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const jerseyCount = frame.detections.filter(d => !!getVisibleJerseyMetadata(d)).length;
@@ -593,7 +608,7 @@ function redrawOverlay() {
             : '';
         explainerDescription.textContent =
             `Real Ultralytics detections and pose keypoints for frame ${frame.frame_idx}. ` +
-            `Green labels mark active-player candidates, orange labels mark likely sidelines/spectators, yellow boxes are repaired track gaps, and orange circles mark the selected ball state. ` +
+            `Green labels mark promoted active-player candidates, blue labels mark plausible on-court but inactive detections, orange dashed labels mark demoted raw detections kept visible for review, yellow boxes are repaired track gaps, and orange circles mark the selected ball state. ` +
             `Cyan skeletons show keypoints. Live-play gate: ${livePlayLabel} @ ${livePlayScore}.` +
             ` Continuity: ${discontinuityLabel} @ ${discontinuityScore}.${continuitySegment ? ` In${continuitySegment}.` : ''}` +
             (dominantSignal ? ` Dominant signal: ${dominantSignal}.` : '') +
@@ -601,7 +616,7 @@ function redrawOverlay() {
             ballText +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${activeCount} active candidates // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? `${ballDetection.state || 'observed'} ${Math.round((ballDetection.confidence || 0) * 100)}%` : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${onCourtCount} on-court // ${activeCount} active // ${demotedCount} demoted raw // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? `${ballDetection.state || 'observed'} ${Math.round((ballDetection.confidence || 0) * 100)}%` : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -646,6 +661,9 @@ function populateFeedbackTrackList() {
         const activeLabel = detection.active_player_score !== undefined && detection.active_player_score !== null
             ? ` // active ${Math.round(detection.active_player_score * 100)}`
             : '';
+        const onCourtLabel = detection.on_court_score !== undefined && detection.on_court_score !== null
+            ? ` // court ${Math.round(detection.on_court_score * 100)}`
+            : '';
         const motionText = detection.motion_speed_px !== undefined && detection.motion_speed_px !== null
             ? ` // motion ${detection.motion_speed_px.toFixed(1)}`
             : '';
@@ -653,7 +671,10 @@ function populateFeedbackTrackList() {
             ? ` // teamdist ${detection.appearance_team_distance.toFixed(2)}`
             : '';
         const synthLabel = detection.synthesized ? ' // repaired' : '';
-        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel} // ${Math.round((detection.confidence || 0) * 100)}%${activeLabel}${motionText}${appearanceText}${synthLabel}`;
+        const stateLabel = detection.active_player_candidate
+            ? ' // ACTIVE'
+            : (detection.on_court_candidate ? ' // COURT' : ' // RAW');
+        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel}${stateLabel} // ${Math.round((detection.confidence || 0) * 100)}%${onCourtLabel}${activeLabel}${motionText}${appearanceText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }
