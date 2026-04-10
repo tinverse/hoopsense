@@ -214,6 +214,39 @@ def _score_merge_risk(detection, *, frame_width, frame_height, pose_info):
     }
 
 
+def _estimate_frame_motion_context(detections):
+    vectors = []
+    for detection in detections:
+        velocity = detection.get("smoothed_velocity_xy") or [0.0, 0.0]
+        if len(velocity) < 2:
+            continue
+        vectors.append([float(velocity[0]), float(velocity[1])])
+
+    if not vectors:
+        return {
+            "coherent_velocity_xy": [0.0, 0.0],
+            "coherent_speed_px": 0.0,
+            "shared_motion": False,
+            "sample_count": 0,
+        }
+
+    vectors_np = np.array(vectors, dtype=float)
+    coherent = np.median(vectors_np, axis=0)
+    residuals = np.linalg.norm(vectors_np - coherent, axis=1)
+    coherent_speed = float(np.linalg.norm(coherent))
+    shared_motion = bool(
+        len(vectors) >= 3
+        and coherent_speed >= MOTION_SCORE_THRESHOLD_PX
+        and float(np.median(residuals)) <= max(6.0, coherent_speed * 0.35)
+    )
+    return {
+        "coherent_velocity_xy": [float(coherent[0]), float(coherent[1])],
+        "coherent_speed_px": coherent_speed,
+        "shared_motion": shared_motion,
+        "sample_count": len(vectors),
+    }
+
+
 def _clip01(value):
     return max(0.0, min(1.0, float(value)))
 
@@ -854,6 +887,7 @@ def score_active_player(
     frame_height,
     track_frame_count=1,
     bootstrap_context=None,
+    frame_motion_context=None,
 ):
     confidence = float(detection.get("confidence") or 0.0)
     bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
@@ -888,7 +922,7 @@ def score_active_player(
 
     court_ground_xy = detection.get("court_foot_xy") or detection.get("court_xy")
     court_in_bounds = None
-    grounding_score = 0.45
+    grounding_score = 0.20
     if court_ground_xy is not None and len(court_ground_xy) == 2:
         cx, cy = float(court_ground_xy[0]), float(court_ground_xy[1])
         court_in_bounds = (
@@ -907,8 +941,26 @@ def score_active_player(
     reasons["track_frame_count"] = int(track_frame_count)
 
     motion_speed = float(detection.get("motion_speed_px") or 0.0)
-    motion_score = _clip01(motion_speed / MOTION_SCORE_THRESHOLD_PX)
+    coherent_velocity = (
+        (frame_motion_context or {}).get("coherent_velocity_xy")
+        or [0.0, 0.0]
+    )
+    coherent_speed = float((frame_motion_context or {}).get("coherent_speed_px") or 0.0)
+    shared_motion = bool((frame_motion_context or {}).get("shared_motion"))
+    smoothed_velocity = detection.get("smoothed_velocity_xy")
+    if smoothed_velocity is not None and len(smoothed_velocity) >= 2:
+        relative_velocity = [
+            float(smoothed_velocity[0]) - float(coherent_velocity[0]),
+            float(smoothed_velocity[1]) - float(coherent_velocity[1]),
+        ]
+        relative_motion_speed = float(np.linalg.norm(relative_velocity))
+    else:
+        relative_motion_speed = motion_speed
+    motion_score = _clip01(relative_motion_speed / MOTION_SCORE_THRESHOLD_PX)
     reasons["motion_speed_px"] = round(motion_speed, 3)
+    reasons["relative_motion_speed_px"] = round(relative_motion_speed, 3)
+    reasons["frame_coherent_motion_px"] = round(coherent_speed, 3)
+    reasons["frame_shared_motion"] = shared_motion
 
     center_foreground_prior = 0.0
     foot_foreground_prior = 0.0
@@ -960,6 +1012,12 @@ def score_active_player(
 
     geometry_prior = max(float(grounding_score), float(foot_foreground_prior), float(center_foreground_prior) * 0.7)
     reasons["geometry_prior"] = round(float(geometry_prior), 4)
+    ungrounded_shared_motion_penalty = 0.0
+    if float(geometry_prior) <= 0.45 and shared_motion and relative_motion_speed <= MOTION_SCORE_THRESHOLD_PX:
+        ungrounded_shared_motion_penalty = 0.14 * _clip01(
+            (coherent_speed - relative_motion_speed) / max(MOTION_SCORE_THRESHOLD_PX * 2.0, 1e-6)
+        )
+    reasons["ungrounded_shared_motion_penalty"] = round(float(ungrounded_shared_motion_penalty), 4)
     on_court_score = (
         0.18 * confidence_score
         + 0.12 * height_score
@@ -972,6 +1030,7 @@ def score_active_player(
         - 0.55 * float(edge_penalty)
         - 0.10 * float(merge_info["score"])
         - 0.55 * float(appearance_penalty)
+        - float(ungrounded_shared_motion_penalty)
     )
     spectator_risk = _clip01(
         0.32 * _clip01(edge_penalty / 0.20)
@@ -1100,6 +1159,7 @@ def annotate_active_players(frames, video_meta):
     frame_height = int(video_meta["height"])
     for frame in frames:
         bootstrap_context = frame.get("bootstrap_context")
+        frame_motion_context = _estimate_frame_motion_context(frame.get("detections", []))
         for detection in frame.get("detections", []):
             score_info = score_active_player(
                 detection,
@@ -1107,6 +1167,7 @@ def annotate_active_players(frames, video_meta):
                 frame_height=frame_height,
                 track_frame_count=track_counts.get(detection.get("track_id"), 1),
                 bootstrap_context=bootstrap_context,
+                frame_motion_context=frame_motion_context,
             )
             detection["active_player_score"] = score_info["score"]
             detection["on_court_score"] = score_info["on_court_score"]

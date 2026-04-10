@@ -27,6 +27,7 @@ cv2_stub.resize = lambda image, dsize, interpolation=None: np.resize(image, (dsi
 sys.modules.setdefault("cv2", cv2_stub)
 
 from tools.review.labeller.generate_layer1_annotations import (
+    ON_COURT_SCORE_THRESHOLD,
     _normalize_jersey_text,
     _resolve_identity_jersey_consensus,
     _score_identity_link,
@@ -246,6 +247,29 @@ class ActivePlayerScoreTest(unittest.TestCase):
         )
         self.assertGreater(score_info["reasons"]["merge_risk"], 0.45)
         self.assertLess(score_info["on_court_score"], 0.6)
+
+    def test_score_active_player_discounts_shared_pan_motion_without_grounding(self):
+        score_info = score_active_player(
+            {
+                "confidence": 0.82,
+                "bbox_xyxy": [190.0, 500.0, 296.0, 686.0],
+                "motion_speed_px": 166.0,
+                "smoothed_velocity_xy": [166.0, 0.0],
+                "keypoints_xy": [[10.0, 10.0] for _ in range(17)],
+                "keypoints_conf": [0.95 for _ in range(17)],
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=37,
+            frame_motion_context={
+                "coherent_velocity_xy": [160.0, 0.0],
+                "coherent_speed_px": 160.0,
+                "shared_motion": True,
+            },
+        )
+        self.assertTrue(score_info["reasons"]["frame_shared_motion"])
+        self.assertGreater(score_info["reasons"]["ungrounded_shared_motion_penalty"], 0.0)
+        self.assertLess(score_info["on_court_score"], ON_COURT_SCORE_THRESHOLD)
 
 
 class BallStateTest(unittest.TestCase):

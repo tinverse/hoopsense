@@ -7,6 +7,7 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.87` discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - `L3.86` add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
 - `L3.84` make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - `L3.85` feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
@@ -172,6 +173,7 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - [ ] Add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
 - [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
