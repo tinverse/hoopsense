@@ -26,6 +26,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 COURT_X_RANGE = (-50.0, 2890.0)
 COURT_Y_RANGE = (-50.0, 1575.0)
 ACTIVE_PLAYER_SCORE_THRESHOLD = 0.55
+ON_COURT_SCORE_THRESHOLD = 0.48
 MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
 MOTION_SCORE_THRESHOLD_PX = 6.0
@@ -124,6 +125,93 @@ def _interpolate_point_list(points_a, points_b, alpha):
             return None
         interpolated.append([_lerp(a, b, alpha) for a, b in zip(pt_a, pt_b)])
     return interpolated
+
+
+def _estimate_detection_footpoint(detection):
+    bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    keypoints_xy = detection.get("keypoints_xy") or []
+    keypoints_conf = detection.get("keypoints_conf") or []
+
+    ankle_points = []
+    for idx in (15, 16):
+        if idx < len(keypoints_xy):
+            conf = float(keypoints_conf[idx]) if idx < len(keypoints_conf) else 1.0
+            if conf >= 0.2:
+                ankle_points.append((float(keypoints_xy[idx][0]), float(keypoints_xy[idx][1]), conf))
+    if ankle_points:
+        xs = [point[0] for point in ankle_points]
+        ys = [point[1] for point in ankle_points]
+        return {
+            "xy": [float(sum(xs) / len(xs)), float(sum(ys) / len(ys))],
+            "source": "ankles",
+            "confidence": round(float(sum(point[2] for point in ankle_points) / len(ankle_points)), 4),
+        }
+
+    return {
+        "xy": [float((x1 + x2) * 0.5), float(y2)],
+        "source": "bbox_bottom",
+        "confidence": 0.25,
+    }
+
+
+def _score_pose_coherence(detection):
+    keypoints_xy = detection.get("keypoints_xy") or []
+    keypoints_conf = detection.get("keypoints_conf") or []
+    if not keypoints_xy:
+        return {
+            "score": 0.35,
+            "visible_count": 0,
+            "torso_visible_count": 0,
+            "lower_visible_count": 0,
+            "symmetric_pair_count": 0,
+        }
+
+    visible = {idx for idx in range(len(keypoints_xy)) if float(keypoints_conf[idx]) >= 0.2} if keypoints_conf else set(range(len(keypoints_xy)))
+    torso_indices = {5, 6, 11, 12}
+    lower_indices = {13, 14, 15, 16}
+    symmetric_pairs = [(5, 6), (11, 12), (13, 14), (15, 16)]
+
+    visible_count = len(visible)
+    torso_visible_count = len(visible & torso_indices)
+    lower_visible_count = len(visible & lower_indices)
+    symmetric_pair_count = sum(1 for left, right in symmetric_pairs if left in visible and right in visible)
+
+    score = (
+        0.35 * _clip01(visible_count / 9.0)
+        + 0.30 * _clip01(torso_visible_count / 4.0)
+        + 0.20 * _clip01(lower_visible_count / 4.0)
+        + 0.15 * _clip01(symmetric_pair_count / 4.0)
+    )
+    return {
+        "score": round(_clip01(score), 4),
+        "visible_count": int(visible_count),
+        "torso_visible_count": int(torso_visible_count),
+        "lower_visible_count": int(lower_visible_count),
+        "symmetric_pair_count": int(symmetric_pair_count),
+    }
+
+
+def _score_merge_risk(detection, *, frame_width, frame_height, pose_info):
+    bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    bbox_w = max(0.0, x2 - x1)
+    bbox_h = max(0.0, y2 - y1)
+    frame_area = max(float(frame_width * frame_height), 1.0)
+    area_ratio = (bbox_w * bbox_h) / frame_area
+    aspect_ratio = bbox_w / max(bbox_h, 1.0)
+    visible_count = int(pose_info.get("visible_count") or 0)
+
+    wide_risk = _clip01((aspect_ratio - 0.62) / 0.40)
+    huge_risk = _clip01((area_ratio - 0.10) / 0.12)
+    sparse_pose_risk = _clip01((5.0 - visible_count) / 5.0)
+
+    score = 0.45 * wide_risk + 0.25 * huge_risk + 0.30 * sparse_pose_risk * max(wide_risk, huge_risk)
+    return {
+        "score": round(_clip01(score), 4),
+        "aspect_ratio": round(float(aspect_ratio), 4),
+        "area_ratio": round(float(area_ratio), 4),
+    }
 
 
 def _clip01(value):
@@ -775,15 +863,13 @@ def score_active_player(
     bbox_cy = (y1 + y2) * 0.5
 
     reasons = {}
-    score = 0.0
 
     reasons["confidence"] = round(confidence, 4)
-    score += 0.35 * _clip01(confidence)
+    confidence_score = _clip01(confidence)
 
     height_ratio = bbox_h / max(float(frame_height), 1.0)
     height_score = _clip01((height_ratio - MIN_PLAYER_BBOX_HEIGHT_RATIO) / 0.18)
     reasons["height_ratio"] = round(height_ratio, 4)
-    score += 0.20 * height_score
 
     edge_margin_x = frame_width * EDGE_MARGIN_RATIO
     edge_margin_y = frame_height * EDGE_MARGIN_RATIO
@@ -793,38 +879,69 @@ def score_active_player(
     if y1 < edge_margin_y or y2 > frame_height - edge_margin_y:
         edge_penalty += 0.05
     reasons["edge_penalty"] = round(edge_penalty, 4)
-    score -= edge_penalty
 
-    court_xy = detection.get("court_xy")
-    if court_xy is not None and len(court_xy) == 2:
-        cx, cy = float(court_xy[0]), float(court_xy[1])
-        in_bounds = (
+    footpoint = _estimate_detection_footpoint(detection)
+    footpoint_xy = footpoint["xy"]
+    reasons["footpoint_xy"] = [round(float(footpoint_xy[0]), 2), round(float(footpoint_xy[1]), 2)]
+    reasons["footpoint_source"] = footpoint["source"]
+    reasons["footpoint_confidence"] = round(float(footpoint["confidence"]), 4)
+
+    court_ground_xy = detection.get("court_foot_xy") or detection.get("court_xy")
+    court_in_bounds = None
+    grounding_score = 0.45
+    if court_ground_xy is not None and len(court_ground_xy) == 2:
+        cx, cy = float(court_ground_xy[0]), float(court_ground_xy[1])
+        court_in_bounds = (
             COURT_X_RANGE[0] <= cx <= COURT_X_RANGE[1]
             and COURT_Y_RANGE[0] <= cy <= COURT_Y_RANGE[1]
         )
-        reasons["court_in_bounds"] = in_bounds
-        score += 0.20 if in_bounds else -0.20
-    else:
-        reasons["court_in_bounds"] = None
+        grounding_score = 1.0 if court_in_bounds else 0.0
+    reasons["court_in_bounds"] = court_in_bounds
+    reasons["court_ground_xy"] = (
+        [round(float(court_ground_xy[0]), 2), round(float(court_ground_xy[1]), 2)]
+        if court_ground_xy is not None and len(court_ground_xy) == 2
+        else None
+    )
 
     persistence_score = min(track_frame_count, 5) / 5.0
     reasons["track_frame_count"] = int(track_frame_count)
-    score += 0.10 * persistence_score
 
     motion_speed = float(detection.get("motion_speed_px") or 0.0)
     motion_score = _clip01(motion_speed / MOTION_SCORE_THRESHOLD_PX)
     reasons["motion_speed_px"] = round(motion_speed, 3)
-    score += 0.15 * motion_score
 
-    foreground_prior = 0.0
+    center_foreground_prior = 0.0
+    foot_foreground_prior = 0.0
     if bootstrap_context and bootstrap_context.get("enabled"):
-        foreground_prior = foreground_prior_for_point(
+        center_foreground_prior = foreground_prior_for_point(
             bootstrap_context,
             bbox_cx,
             bbox_cy,
         )
-        score += 0.08 * foreground_prior
-    reasons["bootstrap_foreground_prior"] = round(float(foreground_prior), 4)
+        foot_foreground_prior = foreground_prior_for_point(
+            bootstrap_context,
+            float(footpoint_xy[0]),
+            float(footpoint_xy[1]),
+        )
+    reasons["bootstrap_foreground_prior"] = round(float(center_foreground_prior), 4)
+    reasons["bootstrap_foot_prior"] = round(float(foot_foreground_prior), 4)
+
+    pose_info = _score_pose_coherence(detection)
+    reasons["pose_visible_count"] = int(pose_info["visible_count"])
+    reasons["pose_torso_visible_count"] = int(pose_info["torso_visible_count"])
+    reasons["pose_lower_visible_count"] = int(pose_info["lower_visible_count"])
+    reasons["pose_symmetric_pair_count"] = int(pose_info["symmetric_pair_count"])
+    reasons["pose_coherence"] = round(float(pose_info["score"]), 4)
+
+    merge_info = _score_merge_risk(
+        detection,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        pose_info=pose_info,
+    )
+    reasons["merge_risk"] = round(float(merge_info["score"]), 4)
+    reasons["bbox_aspect_ratio"] = round(float(merge_info["aspect_ratio"]), 4)
+    reasons["bbox_area_ratio"] = round(float(merge_info["area_ratio"]), 4)
 
     appearance_distance = detection.get("appearance_team_distance")
     reasons["appearance_team_distance"] = round(float(appearance_distance), 4) if appearance_distance is not None else None
@@ -839,13 +956,48 @@ def score_active_player(
             (float(appearance_distance) - APPEARANCE_TEAM_DISTANCE_THRESHOLD)
             / max(1.0 - APPEARANCE_TEAM_DISTANCE_THRESHOLD, 1e-6)
         )
-        score -= appearance_penalty
     reasons["appearance_penalty"] = round(appearance_penalty, 4)
 
-    active_score = round(_clip01(score), 4)
+    geometry_prior = max(float(grounding_score), float(foot_foreground_prior), float(center_foreground_prior) * 0.7)
+    reasons["geometry_prior"] = round(float(geometry_prior), 4)
+    on_court_score = (
+        0.18 * confidence_score
+        + 0.12 * height_score
+        + 0.20 * float(grounding_score)
+        + 0.10 * float(foot_foreground_prior)
+        + 0.06 * float(center_foreground_prior)
+        + 0.12 * float(pose_info["score"])
+        + 0.10 * float(persistence_score)
+        + 0.06 * float(motion_score)
+        - 0.55 * float(edge_penalty)
+        - 0.10 * float(merge_info["score"])
+        - 0.55 * float(appearance_penalty)
+    )
+    spectator_risk = _clip01(
+        0.32 * _clip01(edge_penalty / 0.20)
+        + 0.26 * (1.0 - float(geometry_prior))
+        + 0.16 * float(merge_info["score"])
+        + 0.14 * _clip01(appearance_penalty / 0.14)
+        + 0.12 * (1.0 - float(pose_info["score"]))
+    )
+    on_court_score = round(_clip01(on_court_score), 4)
+    reasons["on_court_score"] = on_court_score
+    reasons["spectator_risk"] = round(float(spectator_risk), 4)
+
+    active_score = _clip01(
+        on_court_score
+        + 0.09 * float(motion_score)
+        + 0.04 * float(persistence_score)
+        - 0.03 * float(merge_info["score"])
+    )
+
+    active_score = round(float(active_score), 4)
+    on_court_candidate = on_court_score >= ON_COURT_SCORE_THRESHOLD
     return {
+        "on_court_score": on_court_score,
+        "on_court_candidate": on_court_candidate,
         "score": active_score,
-        "candidate": active_score >= ACTIVE_PLAYER_SCORE_THRESHOLD,
+        "candidate": on_court_candidate and active_score >= ACTIVE_PLAYER_SCORE_THRESHOLD,
         "reasons": reasons,
     }
 
@@ -905,6 +1057,9 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
         center_x, center_y, _, _ = detection["bbox_xywh"]
         court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
         detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+        footpoint = _estimate_detection_footpoint(detection)
+        foot_court_xy = project_pixel_to_court(float(footpoint["xy"][0]), float(footpoint["xy"][1]), h_matrix)
+        detection["court_foot_xy"] = [float(foot_court_xy[0]), float(foot_court_xy[1])]
 
     if cls_id == 0:
         uniform_stats = estimate_uniform_bucket(
@@ -954,6 +1109,8 @@ def annotate_active_players(frames, video_meta):
                 bootstrap_context=bootstrap_context,
             )
             detection["active_player_score"] = score_info["score"]
+            detection["on_court_score"] = score_info["on_court_score"]
+            detection["on_court_candidate"] = score_info["on_court_candidate"]
             detection["active_player_candidate"] = score_info["candidate"]
             detection["active_player_reasons"] = score_info["reasons"]
     return frames
@@ -2087,6 +2244,22 @@ def annotate_clip(
                 },
             },
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
+            "on_court_score_threshold": ON_COURT_SCORE_THRESHOLD,
+            "player_plausibility": {
+                "kind": "multisignal_on_court_plausibility_v1",
+                "signals": [
+                    "confidence",
+                    "bbox_height",
+                    "edge_penalty",
+                    "court_grounding",
+                    "pose_coherence",
+                    "track_persistence",
+                    "motion",
+                    "bootstrap_play_region",
+                    "appearance_penalty",
+                    "merge_risk",
+                ],
+            },
             "short_gap_repair_max_gap": SHORT_GAP_REPAIR_MAX_GAP,
             "identity_repair_score_threshold": IDENTITY_REPAIR_SCORE_THRESHOLD,
             "motion_score_threshold_px": MOTION_SCORE_THRESHOLD_PX,

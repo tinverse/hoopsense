@@ -568,6 +568,11 @@ levels:
       title: Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
       owner: A0
       status: in_progress
+    - id: L3.86
+      parent: L2.3
+      title: Add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
+      owner: A0
+      status: in_progress
     - id: L3.74
       parent: L2.14
       title: Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline

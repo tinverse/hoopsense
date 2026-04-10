@@ -122,6 +122,7 @@ class ActivePlayerScoreTest(unittest.TestCase):
             track_frame_count=4,
         )
         self.assertTrue(score_info["candidate"])
+        self.assertTrue(score_info["on_court_candidate"])
         self.assertGreater(score_info["score"], 0.55)
         self.assertTrue(score_info["reasons"]["court_in_bounds"])
 
@@ -137,6 +138,7 @@ class ActivePlayerScoreTest(unittest.TestCase):
             track_frame_count=1,
         )
         self.assertFalse(score_info["candidate"])
+        self.assertFalse(score_info["on_court_candidate"])
         self.assertLess(score_info["score"], 0.55)
         self.assertFalse(score_info["reasons"]["court_in_bounds"])
 
@@ -192,6 +194,58 @@ class ActivePlayerScoreTest(unittest.TestCase):
         )
         self.assertGreater(baseline["reasons"]["appearance_penalty"], 0.0)
         self.assertEqual(moving["reasons"]["appearance_penalty"], 0.0)
+
+    def test_score_active_player_keeps_near_camera_player_when_pose_and_persistence_are_strong(self):
+        keypoints_xy = [[0.0, 0.0] for _ in range(17)]
+        keypoints_conf = [0.0 for _ in range(17)]
+        for idx, pt in {
+            5: [42.0, 120.0],
+            6: [140.0, 118.0],
+            11: [55.0, 260.0],
+            12: [128.0, 258.0],
+            13: [62.0, 360.0],
+            14: [126.0, 362.0],
+            15: [64.0, 468.0],
+            16: [124.0, 470.0],
+        }.items():
+            keypoints_xy[idx] = pt
+            keypoints_conf[idx] = 0.92
+
+        score_info = score_active_player(
+            {
+                "confidence": 0.84,
+                "bbox_xyxy": [0.0, 80.0, 170.0, 476.0],
+                "court_xy": [1150.0, 730.0],
+                "court_foot_xy": [1110.0, 760.0],
+                "motion_speed_px": 8.5,
+                "keypoints_xy": keypoints_xy,
+                "keypoints_conf": keypoints_conf,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=5,
+        )
+        self.assertTrue(score_info["on_court_candidate"])
+        self.assertGreater(score_info["reasons"]["pose_coherence"], 0.55)
+        self.assertLess(score_info["reasons"]["spectator_risk"], 0.5)
+
+    def test_score_active_player_penalizes_wide_sparse_merged_detection(self):
+        score_info = score_active_player(
+            {
+                "confidence": 0.74,
+                "bbox_xyxy": [120.0, 140.0, 390.0, 340.0],
+                "court_xy": [1240.0, 780.0],
+                "court_foot_xy": [1240.0, 860.0],
+                "motion_speed_px": 1.0,
+                "keypoints_xy": [[0.0, 0.0] for _ in range(17)],
+                "keypoints_conf": [0.0 for _ in range(17)],
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=1,
+        )
+        self.assertGreater(score_info["reasons"]["merge_risk"], 0.45)
+        self.assertLess(score_info["on_court_score"], 0.6)
 
 
 class BallStateTest(unittest.TestCase):
@@ -622,6 +676,8 @@ class ActivePlayerAnnotationTest(unittest.TestCase):
             {"width": 640, "height": 480, "fps": 30.0, "frame_count": 1},
         )
         detection = annotated[0]["detections"][0]
+        self.assertIn("on_court_score", detection)
+        self.assertIn("on_court_candidate", detection)
         self.assertIn("active_player_score", detection)
         self.assertIn("active_player_candidate", detection)
         self.assertIn("active_player_reasons", detection)
