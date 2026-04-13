@@ -9,11 +9,12 @@ meta:
   supporting_docs:
     - docs/architecture/components/LAYERED_FEATURE_SCHEMA.md
     - docs/architecture/components/FEATURE_SCHEMA_V2.md
+    - docs/architecture/components/SCENE_DISCOVERY_TRACKING.md
     - docs/plan/MVP_STATS_CONTRACT.md
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-04-01"
+  last_updated: "2026-04-12"
 
 levels:
   L0:
@@ -298,7 +299,7 @@ levels:
       status: pending
     - id: L3.12
       parent: L2.13
-      title: Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`
+      title: "Define the first stat-ready event set: `pass`, `catch`, `dribble`, `shot_attempt`, `rebound`, `turnover`"
       owner: A0
       status: pending
     - id: L3.13
@@ -548,6 +549,21 @@ levels:
       title: Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
       owner: A0
       status: completed
+    - id: L3.93
+      parent: L2.16
+      title: Add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
+      owner: A0
+      status: in_progress
+    - id: L3.94
+      parent: L3.93
+      title: Containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
+      owner: A0
+      status: in_progress
+    - id: L3.95
+      parent: L3.93
+      title: Add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
+      owner: A0
+      status: in_progress
     - id: L3.82
       parent: L2.32
       title: Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
@@ -581,6 +597,131 @@ levels:
     - id: L3.88
       parent: L2.32
       title: Split labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
+      owner: A0
+      status: in_progress
+    - id: L3.89
+      parent: L2.32
+      title: Add optional SAM 3-assisted player recovery on unexplained DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
+      owner: A0
+      status: in_progress
+    - id: L3.90
+      parent: L3.89
+      title: Route official SAM 3 text-prompted ROI refinement through the Layer 1 artifact pipeline with explicit fail-closed runtime statuses
+      owner: A0
+      status: in_progress
+    - id: L3.91
+      parent: L3.89
+      title: Keep Orin setup honest about SAM 3 runtime prerequisites and skip installation when the pinned Python runtime is too old
+      owner: A0
+      status: completed
+    - id: L3.92
+      parent: L3.89
+      title: Add regression coverage for SAM ROI proposal generation and recovered-detection wiring without requiring live SAM weights
+      owner: A0
+      status: completed
+    - id: L3.96
+      parent: L2.18
+      title: Define an explicit DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
+      owner: A0
+      status: in_progress
+    - id: L3.97
+      parent: L3.96
+      title: Rerun person YOLO inside DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
+      owner: A0
+      status: in_progress
+    - id: L3.98
+      parent: L3.96
+      title: Surface grounding-policy provenance and regression coverage in Layer 1 artifacts and review tooling
+      owner: A0
+      status: in_progress
+    - id: L3.99
+      parent: L3.96
+      title: Trigger segment regrounding on sustained live-play detection collapse without requiring a hard discontinuity
+      owner: A0
+      status: in_progress
+    - id: L3.100
+      parent: L3.96
+      title: Route SAM recovery proposals through explicit grounding-anchor regions instead of only implicit bootstrap blobs
+      owner: A0
+      status: in_progress
+    - id: L3.117
+      parent: L3.96
+      title: Materialize a per-frame `scene_prior` contract from bootstrap and grounding contexts in Layer 1 artifacts
+      owner: A0
+      status: in_progress
+    - id: L3.118
+      parent: L3.96
+      title: Materialize a per-frame `discovery_proposals` contract from accepted SAM-driven recovery and refinement outputs
+      owner: A0
+      status: in_progress
+    - id: L3.119
+      parent: L3.96
+      title: Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+      owner: A0
+      status: in_progress
+    - id: L3.101
+      parent: L2.18
+      title: Emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
+      owner: A0
+      status: in_progress
+    - id: L3.102
+      parent: L2.18
+      title: Add a player-conditioned fallback ROI ball detector pass when full-frame ball detection is absent or weak
+      owner: A0
+      status: in_progress
+    - id: L3.103
+      parent: L2.18
+      title: Add a predictive ball-search layer that uses recent ball kinematics and nearby-player context before broad fallback reacquisition
+      owner: A0
+      status: in_progress
+    - id: L3.104
+      parent: L3.103
+      title: Define a coarse ball motion-mode contract (`carry_or_hold`, `dribble_like`, `pass_or_loose`, `unknown_recent`) for ROI shaping
+      owner: A0
+      status: in_progress
+    - id: L3.105
+      parent: L3.103
+      title: Run recent-state predictive ROI search between full-frame scan and broad player-local reacquisition
+      owner: A0
+      status: completed
+    - id: L3.106
+      parent: L3.103
+      title: Emit predictive-search provenance in Layer 1 artifacts so per-frame ball recovery decisions are auditable
+      owner: A0
+      status: completed
+    - id: L3.107
+      parent: L3.103
+      title: Compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
+      owner: A0
+      status: in_progress
+    - id: L3.108
+      parent: L2.18
+      title: Add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
+      owner: A0
+      status: in_progress
+    - id: L3.109
+      parent: L3.108
+      title: Render a web-safe MP4 overlay of SAM3 basketball detections for direct visual review
+      owner: A0
+      status: in_progress
+    - id: L3.110
+      parent: L3.108
+      title: Use Layer 1 active-player candidates as SAM3 ROI seeds for segmented active-player review
+      owner: A0
+      status: in_progress
+    - id: L3.111
+      parent: L3.108
+      title: Render a web-safe MP4 overlay of SAM3 active-player masks for direct visual review
+      owner: A0
+      status: in_progress
+    - id: L3.112
+      parent: L3.108
+      title: Add a frame-local SAM3 detect endpoint to the labeller for paused-frame promptable segmentation
+      owner: A0
+      status: in_progress
+    - id: L3.113
+      parent: L3.108
+      title: Add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
       owner: A0
       status: in_progress
     - id: L3.74
@@ -621,6 +762,26 @@ levels:
     - id: L3.45
       parent: L2.21
       title: Publish a normalized MVP stats contract for a sellable scorebook-style output
+      owner: A0
+      status: completed
+    - id: L3.114
+      parent: L2.21
+      title: Document the staged perception system design for imperfect basketball video with partial-court visibility
+      owner: A0
+      status: completed
+    - id: L3.115
+      parent: L2.21
+      title: Define explicit Layer 1 contracts for scene priors, discovery, tracking, retrofit, and geometry refinement
+      owner: A0
+      status: completed
+    - id: L3.116
+      parent: L2.21
+      title: Align the architecture blueprint and layered feature schema with the staged discovery-and-tracking design
+      owner: A0
+      status: completed
+    - id: L3.120
+      parent: L2.21
+      title: Reconcile architecture, DevOps, and inline Layer 1 documentation with the current emitted staged-perception contract
       owner: A0
       status: completed
     - id: L3.46
@@ -686,6 +847,31 @@ levels:
 
 priorities:
   current_frontier:
+    - L3.96
+    - L3.97
+    - L3.98
+    - L3.99
+    - L3.100
+    - L3.101
+    - L3.102
+    - L3.103
+    - L3.104
+    - L3.105
+    - L3.106
+    - L3.107
+    - L3.108
+    - L3.109
+    - L3.110
+    - L3.111
+    - L3.112
+    - L3.113
+    - L3.93
+    - L3.94
+    - L3.95
+    - L3.89
+    - L3.90
+    - L3.91
+    - L3.92
     - L3.72
     - L3.66
     - L3.64

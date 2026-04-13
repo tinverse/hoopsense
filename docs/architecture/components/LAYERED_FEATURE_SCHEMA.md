@@ -4,6 +4,9 @@ This document defines the feature layers required for trustworthy basketball rea
 
 `FEATURE_SCHEMA_V2.md` remains the current neural contract for the Action Brain. This document defines the broader system feature graph around it.
 
+For the recommended Layer 1 perception architecture that feeds this graph, see
+`SCENE_DISCOVERY_TRACKING.md`.
+
 ## Design Rule
 
 - Keep the Action Brain narrow and stable.
@@ -13,33 +16,52 @@ This document defines the feature layers required for trustworthy basketball rea
 ## Layer 1: Perception Frame
 
 Purpose:
-Convert raw video into synchronized per-frame observations for players, ball, referee, and court geometry.
+Convert raw video into synchronized per-frame scene state for players, ball,
+referee, hoop, and court geometry.
 
 Primary owner:
-- detectors
+- scene-prior builder
+- discovery engine
 - trackers
+- retrofit engine
 - pose estimator
 - spatial resolver
 
-Canonical fields:
+Current emitted artifact fields:
+- `t_ms`, `frame_idx`, `calibrated`
+- `detections[*].track_id`, `class_name`, `bbox_xyxy`, `bbox_xywh`
+- `detections[*].keypoints_xy`, `keypoints_conf`, `lifted_keypoints_xyz`
+- `detections[*].court_xy`, `court_foot_xy`
+- `ball_detection`, `raw_ball_detections`, `ball_state`
+- `bootstrap_context`, `grounding_context`, `scene_prior`, `discovery_proposals`
+- `continuity_segment_id`, `live_play_score`, `live_play_label`
+
+Target normalized fields:
 - `t_ms`
 - `frame_idx`
+- `scene_prior`
+- `discovery_proposals`
 - `track_id`
 - `entity_type`
 - `bbox_xywh`
+- `mask_or_polygon`
 - `keypoints_2d`
 - `keypoints_3d`
 - `court_x`
 - `court_y`
 - `ball_x`, `ball_y`, `ball_z`
+- `retrofit_window_id`
 - `ref_signal`
 - `confidence_bps`
 
 Outputs:
+- the current detection-centric Layer 1 artifact used by review tooling and audits
 - frame-aligned trajectories
+- bounded repaired trajectories
 - pose streams
 - ball trajectory
-- court-relative player locations
+- object masks and prompt provenance when discovery is used
+- court-relative player locations when geometry is available
 
 ## Layer 2: Action Brain Input
 

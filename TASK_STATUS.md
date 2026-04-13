@@ -7,6 +7,34 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
+- `L3.96` define an explicit DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
+  - `L3.97` rerun person YOLO inside DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
+  - `L3.98` surface grounding-policy provenance and regression coverage in Layer 1 artifacts and review tooling
+  - `L3.99` trigger segment regrounding on sustained live-play detection collapse without requiring a hard discontinuity
+  - `L3.100` route SAM recovery proposals through explicit grounding-anchor regions instead of only implicit bootstrap blobs
+  - `L3.117` materialize a per-frame `scene_prior` contract from bootstrap and grounding contexts in Layer 1 artifacts
+  - `L3.118` materialize a per-frame `discovery_proposals` contract from accepted SAM-driven recovery and refinement outputs
+  - `L3.119` emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+- `L3.101` emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
+- `L3.102` add a player-conditioned fallback ROI ball detector pass when full-frame ball detection is absent or weak
+- `L3.103` add a predictive ball-search layer that uses recent ball kinematics and nearby-player context before broad fallback reacquisition
+  - `L3.104` define a coarse ball motion-mode contract (`carry_or_hold`, `dribble_like`, `pass_or_loose`, `unknown_recent`) for ROI shaping
+  - `L3.105` run recent-state predictive ROI search between full-frame scan and broad player-local reacquisition
+  - `L3.106` emit predictive-search provenance in Layer 1 artifacts so per-frame ball recovery decisions are auditable
+  - `L3.107` compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
+- `L3.108` add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
+  - `L3.109` render a web-safe MP4 overlay of SAM3 basketball detections for direct visual review
+  - `L3.110` use Layer 1 active-player candidates as SAM3 ROI seeds for segmented active-player review
+  - `L3.111` render a web-safe MP4 overlay of SAM3 active-player masks for direct visual review
+  - `L3.112` add a frame-local SAM3 detect endpoint to the labeller for paused-frame promptable segmentation
+  - `L3.113` add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
+- `L3.93` add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
+  - `L3.94` containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
+  - `L3.95` add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
+- `L3.89` add optional SAM 3-assisted player recovery on unexplained DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
+  - `L3.90` route official SAM 3 text-prompted ROI refinement through the Layer 1 artifact pipeline with explicit fail-closed runtime statuses
+  - `L3.91` keep Orin setup honest about SAM 3 runtime prerequisites and skip installation when the pinned Python runtime is too old
+  - `L3.92` add regression coverage for SAM ROI proposal generation and recovered-detection wiring without requiring live SAM weights
 - `L3.88` split the labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
 - `L3.87` discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - `L3.86` add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
@@ -155,6 +183,10 @@ The current highest-priority frontier is:
 - [x] Verify actual CUDA acceleration in the Orin validation path and publish a repeatable probe artifact
 - [x] Publish a mobile-friendly external HoopSense demo page with one representative clip, overlay, and feedback prompt
 - [x] Publish a normalized MVP stats contract for a sellable scorebook-style output
+- [x] Document the staged perception system design for imperfect basketball video with partial-court visibility
+- [x] Define explicit Layer 1 contracts for scene priors, discovery, tracking, retrofit, and geometry refinement
+- [x] Align the architecture blueprint and layered feature schema with the staged discovery-and-tracking design
+- [x] Reconcile architecture, DevOps, and inline Layer 1 documentation with the current emitted staged-perception contract
 - [ ] Scale Oracle ingestion to Subject 124 while preserving `features_v2`
 - [ ] Define `PossessionContext` fields and ledger serialization contract
 - [ ] Track `ballhandler_id`, `dribble_count`, and `pass_count` for one possession slice
@@ -174,6 +206,34 @@ The current highest-priority frontier is:
 - [ ] Implement dynamic perception audit script (scripts/run_perception_audit.sh)
 
 ### Active or Next
+- [ ] Define an explicit DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
+  - [ ] Rerun person YOLO inside DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
+  - [ ] Surface grounding-policy provenance and regression coverage in Layer 1 artifacts and review tooling
+  - [ ] Trigger segment regrounding on sustained live-play detection collapse without requiring a hard discontinuity
+  - [ ] Route SAM recovery proposals through explicit grounding-anchor regions instead of only implicit bootstrap blobs
+  - [ ] Materialize a per-frame `scene_prior` contract from bootstrap and grounding contexts in Layer 1 artifacts
+  - [ ] Materialize a per-frame `discovery_proposals` contract from accepted SAM-driven recovery and refinement outputs
+  - [ ] Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+- [ ] Emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
+- [ ] Add a player-conditioned fallback ROI ball detector pass when full-frame ball detection is absent or weak
+- [ ] Add a predictive ball-search layer that uses recent ball kinematics and nearby-player context before broad fallback reacquisition
+  - [ ] Define a coarse ball motion-mode contract (`carry_or_hold`, `dribble_like`, `pass_or_loose`, `unknown_recent`) for ROI shaping
+  - [ ] Run recent-state predictive ROI search between full-frame scan and broad player-local reacquisition
+  - [ ] Emit predictive-search provenance in Layer 1 artifacts so per-frame ball recovery decisions are auditable
+  - [ ] Compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
+- [ ] Add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
+  - [ ] Render a web-safe MP4 overlay of SAM3 basketball detections for direct visual review
+  - [ ] Use Layer 1 active-player candidates as SAM3 ROI seeds for segmented active-player review
+  - [ ] Render a web-safe MP4 overlay of SAM3 active-player masks for direct visual review
+  - [ ] Add a frame-local SAM3 detect endpoint to the labeller for paused-frame promptable segmentation
+  - [ ] Add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
+- [ ] Add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
+  - [ ] Containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
+  - [ ] Add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
+- [ ] Add optional SAM 3-assisted player recovery on unexplained DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
+  - [ ] Route official SAM 3 text-prompted ROI refinement through the Layer 1 artifact pipeline with explicit fail-closed runtime statuses
+  - [x] Keep Orin setup honest about SAM 3 runtime prerequisites and skip installation when the pinned Python runtime is too old
+  - [x] Add regression coverage for SAM ROI proposal generation and recovered-detection wiring without requiring live SAM weights
 - [ ] Split the labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
 - [ ] Discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - [ ] Add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
@@ -204,6 +264,7 @@ What is currently true:
 - the Action Brain is a narrow local-motion classifier
 - `features_v2` remains the current frozen neural contract
 - the layered feature architecture is documented
+- the staged scene-prior, discovery, tracking, retrofit, and geometry-refinement architecture is now documented
 - the geometry layer has a shared module and readiness report artifact
 - an Orin container logic probe exists
 - basic manifest hashing, training lineage scaffolding, and initial CI plumbing now exist locally

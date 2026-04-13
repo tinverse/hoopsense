@@ -13,9 +13,19 @@ Near-term priority:
 - explicitly evaluate the Python-vs-Rust boundary for ingestion, tracking continuity, geometry, and lifting
 
 ### Layer 1: The Perceiver (Python Prototype)
-- **Tech:** YOLOv8-pose + BoT-SORT.
-- **Responsibility:** Ingests raw video frames; identifies skeletons for players, the ball, and referees.
-- **Output:** HoopSense Perception JSONL for raw observation records.
+- **Tech:** staged scene priors, promptable discovery, and temporal tracking
+- **Responsibility:** builds a revisable scene state from imperfect basketball video rather than treating each frame as final truth
+- **Primary stages:**
+  - deterministic video contract
+  - scene prior (`DINO` / play-region evidence)
+  - object discovery (`SAM3`, detector proposals, promptable review probes)
+  - temporal tracking for players and ball
+  - bounded retrospective repair when later evidence clarifies earlier ambiguity
+  - opportunistic geometry refinement as court anchors become visible
+- **Output:** HoopSense Perception artifacts for raw observations plus tracked and repair-aware scene state
+
+Reference:
+- `docs/architecture/components/SCENE_DISCOVERY_TRACKING.md`
 
 ### Layer 2: Identity & Logic Heuristics (Python Prototype)
 - **Tech:** EasyOCR + HSV Clustering + Heuristic Rules.
@@ -30,6 +40,10 @@ Near-term priority:
 - **Implementation:** **Rust (hoopsense-core)**
 - **Responsibility:** High-performance spatial math. Handles Lens Undistortion, Homography (DLT), Camera Pose (PnP), and Dynamic SLAM-lite state tracking.
 - **Value:** This is the deterministic "measurement" layer that ensures 3D stat accuracy.
+
+Important boundary:
+- geometry should improve Layer 1 as confidence grows
+- HoopSense should not assume full trusted calibration before useful perception begins
 
 ### Perception-and-Geometry Readiness Gate
 
@@ -93,9 +107,9 @@ The decision should be made subsystem by subsystem, not as an all-or-nothing rew
 - **Scope:** Operates inside the broader DevOps layer and covers both cloud/x86 training and Jetson/ARM64 deployment targets.
 
 ### DevOps Control Plane
-- **Responsibility:** Governs reproducible developer environments, CI quality gates, build packaging, cloud job execution, and target-specific runtime guidance.
-- **Key Rule:** Prefer Guix-managed reproducibility where possible; use Docker as the fallback runtime and packaging boundary.
-- **Scope:** Covers local development, Orin smoke tests and early training, then cloud training images and deployment paths.
+- **Responsibility:** Governs developer environments, CI quality gates, build packaging, cloud job execution, and target-specific runtime guidance.
+- **Key Rule:** Prefer explicit target-specific environments: stable native Orin scripts for Jetson validation, dedicated Docker images for cloud and experimental JetPack 6 or SAM3 work, and repo-managed shell definitions only as optional developer conveniences.
+- **Scope:** Covers local development, stable Orin smoke tests and early training, experimental containerized Orin validation, then cloud training images and deployment paths.
 
 ## 4. The Capture Ecosystem (Satellites)
 
@@ -113,12 +127,12 @@ The decision should be made subsystem by subsystem, not as an all-or-nothing rew
 
 ## 5. Cloud Deployment Strategy (Scaling)
 
-### Containerization (The Guix-Docker Bridge)
-- **Method:** Prefer Guix for reproducible shells; use Docker for cloud packaging boundaries.
-- **Goal:** Keep local and Orin development reproducible where possible, then move stable workloads into cloud images.
-- **Value:** Reduces environment drift without pretending Jetson host libraries are under full Guix control.
+### Containerization And Runtime Boundaries
+- **Method:** Use dedicated Docker images for cloud training and for experimental JetPack 6 or SAM3 validation paths; keep the stable native Orin scripts as the baseline Jetson runtime path.
+- **Goal:** Make runtime boundaries explicit instead of pretending one environment model covers native Jetson, cloud, and experimental GPU validation equally well.
+- **Value:** Reduces environment drift while acknowledging that Jetson-native validation and experimental containerized validation are separate operational modes.
 
-In current repo reality, Orin is the first training target for smoke tests and initial runs. Docker is the explicit cloud-training path after that path is stable.
+In current repo reality, the stable native Orin path is the baseline for Jetson smoke tests and initial runs, while Docker is used for cloud workloads and experimental JetPack 6 or SAM3 validation.
 
 ### Infrastructure (Google Cloud Platform)
 - **Vertex AI (Colab Enterprise):** Used for interactive model development and fine-tuning with custom Docker images.
@@ -128,7 +142,7 @@ In current repo reality, Orin is the first training target for smoke tests and i
 ## 6. The Data Flow (HoopSense JSONL Contracts)
 HoopSense uses staged JSONL contracts for machine-readable interchange:
 1. **HoopSense Perception JSONL**
-   Raw perception output from detectors, trackers, pose, and referee sensing.
+   Raw and staged perception output from scene priors, discovery, tracking, retrofit, pose, and geometry evidence.
 2. **HoopSense Ledger JSONL**
    Ledger-validated events and possession-aware outputs used for downstream stats and reporting.
 
@@ -151,10 +165,10 @@ This ML artifact flow is part of the product architecture because bad lineage or
 ## 8. The Build and Delivery Flow
 
 HoopSense treats build and delivery as an explicit control path:
-1. Guix manifests define reproducible development inputs where possible
+1. Stable native scripts define the supported Jetson runtime path
 2. CI validates code, contracts, and documentation
-3. Docker images package cloud training or constrained runtime boundaries
+3. Docker images package cloud training and experimental runtime boundaries
 4. Vertex/GCP job specs execute cloud workloads
-5. Jetson/Orin runtime guidance documents the vendor boundary and validation steps
+5. Runtime guidance documents vendor, Python, and CUDA boundary assumptions explicitly
 
 This build-and-delivery flow is part of the product architecture because deployment ambiguity can invalidate reproducibility claims.
