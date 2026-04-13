@@ -8,13 +8,16 @@ from types import SimpleNamespace
 
 cv2_stub = types.ModuleType("cv2")
 cv2_stub.COLOR_BGR2RGB = 0
+cv2_stub.INTER_NEAREST = 0
 cv2_stub.cvtColor = lambda image, _flag: image
+cv2_stub.resize = lambda image, dsize, interpolation=None: np.resize(image, (dsize[1], dsize[0]))
 sys.modules.setdefault("cv2", cv2_stub)
 
 from tools.review.labeller.dinov3_bootstrap import (
     Dinov3Bootstrapper,
     foreground_mask_from_dense_features,
     foreground_prior_for_point,
+    scale_summary_bbox_to_image,
     summarize_foreground_mask,
 )
 
@@ -39,6 +42,14 @@ class Dinov3BootstrapMaskTest(unittest.TestCase):
         self.assertAlmostEqual(summary["foreground_ratio"], 0.25, places=4)
         self.assertEqual(foreground_prior_for_point(summary, 15, 15), 1.0)
         self.assertEqual(foreground_prior_for_point(summary, 2, 2), 0.0)
+
+    def test_scale_summary_bbox_to_image_projects_mask_bbox(self):
+        summary = {
+            "mask_shape": [14, 14],
+            "foreground_bbox_xyxy": [0, 0, 13, 9],
+        }
+        scaled = scale_summary_bbox_to_image(summary, image_width=1920, image_height=1080)
+        self.assertEqual(scaled["foreground_bbox_xyxy"], [0, 0, 1920, 771])
 
 
 class Dinov3BootstrapperTest(unittest.TestCase):

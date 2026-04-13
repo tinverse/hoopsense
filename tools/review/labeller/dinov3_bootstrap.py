@@ -77,6 +77,84 @@ def summarize_foreground_mask(mask):
     }
 
 
+def scale_summary_bbox_to_image(summary, *, image_width, image_height):
+    """Project the low-resolution mask bbox into full-image coordinates."""
+    if not summary:
+        return summary
+    bbox = summary.get("foreground_bbox_xyxy")
+    mask_shape = summary.get("mask_shape") or []
+    if not bbox or len(mask_shape) != 2:
+        return summary
+    mask_h = max(1, int(mask_shape[0]))
+    mask_w = max(1, int(mask_shape[1]))
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    scale_x = float(image_width) / float(mask_w)
+    scale_y = float(image_height) / float(mask_h)
+    summary["foreground_bbox_xyxy"] = [
+        int(round(x1 * scale_x)),
+        int(round(y1 * scale_y)),
+        int(round((x2 + 1.0) * scale_x)),
+        int(round((y2 + 1.0) * scale_y)),
+    ]
+    return summary
+
+
+def bootstrap_mask_to_image(summary):
+    """Upsample the stored low-resolution mask grid to full image resolution."""
+    if not summary:
+        return None
+    mask_grid = summary.get("mask_grid")
+    image_width = int(summary.get("image_width") or 0)
+    image_height = int(summary.get("image_height") or 0)
+    if not mask_grid or image_width <= 0 or image_height <= 0:
+        return None
+    mask = np.array(mask_grid, dtype=np.uint8)
+    if mask.ndim != 2:
+        return None
+    return cv2.resize(mask, (image_width, image_height), interpolation=cv2.INTER_NEAREST)
+
+
+def component_boxes_from_mask(mask):
+    """Extract connected component boxes from a binary mask without sklearn/scipy."""
+    mask_u8 = (np.array(mask, dtype=np.uint8) > 0).astype(np.uint8)
+    if mask_u8.ndim != 2 or mask_u8.size == 0:
+        return []
+    height, width = mask_u8.shape
+    visited = np.zeros_like(mask_u8, dtype=bool)
+    boxes = []
+    frame_area = float(max(height * width, 1))
+
+    for y0 in range(height):
+        for x0 in range(width):
+            if mask_u8[y0, x0] == 0 or visited[y0, x0]:
+                continue
+            stack = [(x0, y0)]
+            visited[y0, x0] = True
+            min_x = max_x = x0
+            min_y = max_y = y0
+            area = 0
+            while stack:
+                x, y = stack.pop()
+                area += 1
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if nx < 0 or ny < 0 or nx >= width or ny >= height:
+                        continue
+                    if visited[ny, nx] or mask_u8[ny, nx] == 0:
+                        continue
+                    visited[ny, nx] = True
+                    stack.append((nx, ny))
+            boxes.append({
+                "bbox_xyxy": [int(min_x), int(min_y), int(max_x + 1), int(max_y + 1)],
+                "area_px": int(area),
+                "area_ratio": round(float(area) / frame_area, 4),
+            })
+    return boxes
+
+
 def foreground_prior_for_point(summary, x, y):
     """Return a soft foreground prior for a point in image space."""
     if not summary:
@@ -215,6 +293,11 @@ class Dinov3Bootstrapper:
             summary = summarize_foreground_mask(mask)
             summary["image_height"] = int(frame_bgr.shape[0])
             summary["image_width"] = int(frame_bgr.shape[1])
+            summary = scale_summary_bbox_to_image(
+                summary,
+                image_width=int(frame_bgr.shape[1]),
+                image_height=int(frame_bgr.shape[0]),
+            )
             return Dinov3BootstrapResult(
                 enabled=True,
                 status="ready",

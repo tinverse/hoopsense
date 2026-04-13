@@ -12,7 +12,15 @@ from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
 from tools.review.labeller.dinov3_bootstrap import (
     DEFAULT_DINOV3_MODEL,
     Dinov3Bootstrapper,
+    bootstrap_mask_to_image,
+    component_boxes_from_mask,
     foreground_prior_for_point,
+)
+from tools.review.labeller.sam_refiner import (
+    DEFAULT_SAM3_REPO_MODEL,
+    DEFAULT_SAM3_TEXT_PROMPT,
+    Sam3RoiRefiner,
+    build_sam_recovery_rois,
 )
 
 
@@ -39,6 +47,9 @@ LIVE_PLAY_EXIT_WINDOW = 8
 LIVE_PLAY_EXIT_MIN_NEGATIVE = 6
 LIVE_PLAY_MOTION_SUM_THRESHOLD_PX = 180.0
 LIVE_PLAY_MOTION_MEDIAN_THRESHOLD_PX = 40.0
+GROUNDING_COLLAPSE_LIVE_SCORE_THRESHOLD = 0.70
+GROUNDING_COLLAPSE_MIN_ON_COURT_COUNT = 4
+GROUNDING_COLLAPSE_STREAK_FRAMES = 20
 JERSEY_OCR_MIN_CROP_WIDTH = 18
 JERSEY_OCR_MIN_CROP_HEIGHT = 18
 JERSEY_OCR_MIN_SHARPNESS = 25.0
@@ -54,6 +65,18 @@ BALL_STATE_MAX_JUMP_PX = 180.0
 BALL_STATE_MAX_GAP_FRAMES = 4
 BALL_STATE_MIN_SIZE_PX = 4.0
 BALL_STATE_MAX_SIZE_PX = 80.0
+BALL_FALLBACK_MIN_FULL_FRAME_CONFIDENCE = 0.20
+BALL_ROI_PAD_X_RATIO = 0.35
+BALL_ROI_PAD_Y_UP_RATIO = 0.55
+BALL_ROI_PAD_Y_DOWN_RATIO = 0.20
+BALL_ROI_MAX_PLAYER_WINDOWS = 8
+BALL_ROI_DEDUPE_IOU = 0.35
+BALL_ROI_DEDUPE_CENTER_DISTANCE_PX = 18.0
+BALL_PREDICTIVE_MAX_STALE_FRAMES = 3
+BALL_PREDICTIVE_TRIGGER_MIN_CONFIDENCE = 0.08
+BALL_PREDICTIVE_BASE_RADIUS_PX = 72.0
+PLAYER_RECOVERY_MIN_SAM_SCORE = 0.35
+GROUNDED_YOLO_MIN_SIDE_PX = 96
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
 
@@ -114,6 +137,12 @@ def _to_float_list(values):
 
 def _lerp(a, b, alpha):
     return (1.0 - alpha) * float(a) + alpha * float(b)
+
+
+def _h_matrix_as_array(value):
+    if value is None or isinstance(value, np.ndarray):
+        return value
+    return np.array(value, dtype=float)
 
 
 def _interpolate_point_list(points_a, points_b, alpha):
@@ -297,11 +326,339 @@ def _extract_best_ball_detection(detections):
         "bbox_xyxy": best.get("bbox_xyxy"),
         "bbox_xywh": best.get("bbox_xywh"),
         "center_xy": [round(float(best["bbox_xywh"][0]), 3), round(float(best["bbox_xywh"][1]), 3)],
+        "source": best.get("ball_detection_source") or "full_frame",
     }
     court_xy = best.get("court_xy")
     if court_xy is not None and len(court_xy) == 2:
         ball_detection["court_xy"] = [round(float(court_xy[0]), 3), round(float(court_xy[1]), 3)]
     return ball_detection
+
+
+def _ball_detection_needs_search(ball_detection, *, min_confidence=BALL_FALLBACK_MIN_FULL_FRAME_CONFIDENCE):
+    if ball_detection is None:
+        return True
+    return float(ball_detection.get("confidence") or 0.0) < float(min_confidence)
+
+
+def _serialize_ball_candidates(detections):
+    serialized = []
+    for detection in detections:
+        if not _is_ball_detection(detection):
+            continue
+        payload = {
+            "track_id": detection.get("track_id"),
+            "class_id": detection.get("class_id"),
+            "class_name": detection.get("class_name"),
+            "confidence": round(float(detection.get("confidence") or 0.0), 4),
+            "bbox_xyxy": detection.get("bbox_xyxy"),
+            "bbox_xywh": detection.get("bbox_xywh"),
+            "center_xy": [
+                round(float((detection.get("bbox_xywh") or [0.0, 0.0])[0]), 3),
+                round(float((detection.get("bbox_xywh") or [0.0, 0.0])[1]), 3),
+            ],
+        }
+        if detection.get("court_xy") is not None:
+            payload["court_xy"] = [round(float(v), 3) for v in detection["court_xy"]]
+        payload["source"] = detection.get("ball_detection_source") or "full_frame"
+        serialized.append(payload)
+    serialized.sort(key=lambda item: float(item.get("confidence") or 0.0), reverse=True)
+    return serialized
+
+
+def _clip_roi_xyxy(roi_bbox, frame_shape):
+    height, width = frame_shape[:2]
+    x1, y1, x2, y2 = [float(v) for v in roi_bbox]
+    clipped = [
+        max(0.0, min(float(width - 1), x1)),
+        max(0.0, min(float(height - 1), y1)),
+        max(0.0, min(float(width), x2)),
+        max(0.0, min(float(height), y2)),
+    ]
+    if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+        return None
+    return [int(round(v)) for v in clipped]
+
+
+def _nearest_player_for_ball(person_detections, center_xy):
+    if not person_detections:
+        return None
+    cx, cy = [float(v) for v in center_xy]
+    best = None
+    best_distance = None
+    for detection in person_detections:
+        bbox = detection.get("bbox_xyxy")
+        if not bbox or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        px = min(max(cx, x1), x2)
+        py = min(max(cy, y1), y2)
+        distance = float(np.linalg.norm(np.array([cx - px, cy - py], dtype=np.float32)))
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best = detection
+    return best
+
+
+def _infer_ball_motion_mode(ball_detection, velocity_xy, nearby_player):
+    vx, vy = [float(v) for v in velocity_xy]
+    speed = float(np.linalg.norm(np.array([vx, vy], dtype=np.float32)))
+    if nearby_player is None:
+        return "pass_or_loose" if speed >= 45.0 else "unknown_recent"
+    bbox = nearby_player.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    _, cy = [float(v) for v in (ball_detection.get("center_xy") or [0.0, 0.0])]
+    box_h = max(1.0, y2 - y1)
+    if speed < 35.0:
+        return "carry_or_hold"
+    if abs(vy) >= abs(vx) * 0.8 and cy >= y1 + 0.35 * box_h:
+        return "dribble_like"
+    if speed >= 45.0:
+        return "pass_or_loose"
+    return "unknown_recent"
+
+
+def _update_ball_predictive_state(previous_state, ball_detection, person_detections, frame_idx):
+    if ball_detection is None:
+        return previous_state
+    center_xy = [float(v) for v in (ball_detection.get("center_xy") or [0.0, 0.0])]
+    velocity_xy = [0.0, 0.0]
+    if previous_state is not None and previous_state.get("center_xy") is not None:
+        dt_frames = max(1, int(frame_idx) - int(previous_state.get("last_seen_frame_idx", frame_idx)))
+        prev_center = np.array(previous_state["center_xy"], dtype=np.float32)
+        velocity_xy = ((np.array(center_xy, dtype=np.float32) - prev_center) / float(dt_frames)).tolist()
+    nearby_player = _nearest_player_for_ball(person_detections, center_xy)
+    motion_mode = _infer_ball_motion_mode(ball_detection, velocity_xy, nearby_player)
+    return {
+        "center_xy": center_xy,
+        "velocity_xy": [float(velocity_xy[0]), float(velocity_xy[1])],
+        "last_seen_frame_idx": int(frame_idx),
+        "confidence": float(ball_detection.get("confidence") or 0.0),
+        "motion_mode": motion_mode,
+        "nearby_player_track_id": nearby_player.get("track_id") if nearby_player is not None else None,
+        "nearby_player_bbox_xyxy": nearby_player.get("bbox_xyxy") if nearby_player is not None else None,
+    }
+
+
+def _predictive_ball_search_roi(frame_shape, predictive_state):
+    if predictive_state is None:
+        return None
+    center_xy = predictive_state.get("center_xy")
+    if not center_xy:
+        return None
+    cx, cy = [float(v) for v in center_xy]
+    vx, vy = [float(v) for v in (predictive_state.get("velocity_xy") or [0.0, 0.0])]
+    speed = float(np.linalg.norm(np.array([vx, vy], dtype=np.float32)))
+    mode = predictive_state.get("motion_mode") or "unknown_recent"
+    predicted_cx = cx + vx
+    predicted_cy = cy + vy
+    nearby_bbox = predictive_state.get("nearby_player_bbox_xyxy")
+    if mode == "carry_or_hold" and nearby_bbox:
+        x1, y1, x2, y2 = [float(v) for v in nearby_bbox]
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        roi = [x1 - 0.25 * box_w, y1 - 0.55 * box_h, x2 + 0.25 * box_w, y2 + 0.10 * box_h]
+    elif mode == "dribble_like" and nearby_bbox:
+        x1, y1, x2, y2 = [float(v) for v in nearby_bbox]
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        roi = [x1 - 0.20 * box_w, y1 + 0.10 * box_h, x2 + 0.20 * box_w, y2 + 0.65 * box_h]
+    elif mode == "pass_or_loose":
+        radius_x = BALL_PREDICTIVE_BASE_RADIUS_PX + 1.0 * abs(vx)
+        radius_y = BALL_PREDICTIVE_BASE_RADIUS_PX + 0.8 * abs(vy)
+        roi = [predicted_cx - radius_x, predicted_cy - radius_y, predicted_cx + radius_x, predicted_cy + radius_y]
+    else:
+        radius = BALL_PREDICTIVE_BASE_RADIUS_PX + 0.8 * speed
+        roi = [predicted_cx - radius, predicted_cy - radius, predicted_cx + radius, predicted_cy + radius]
+    return _clip_roi_xyxy(roi, frame_shape)
+
+
+def _run_ball_predictive_search(ball_model, frame, predictive_state, *, frame_idx, device, h_matrix=None):
+    is_recent = (
+        predictive_state is not None
+        and int(frame_idx) - int(predictive_state.get("last_seen_frame_idx", frame_idx)) <= BALL_PREDICTIVE_MAX_STALE_FRAMES
+        and float(predictive_state.get("confidence") or 0.0) >= BALL_PREDICTIVE_TRIGGER_MIN_CONFIDENCE
+    )
+    roi_bbox = _predictive_ball_search_roi(frame.shape, predictive_state) if is_recent else None
+    summary = {
+        "enabled": predictive_state is not None,
+        "triggered": roi_bbox is not None,
+        "source": "predictive_roi_v1",
+        "roi_bbox_xyxy": roi_bbox,
+        "candidate_count": 0,
+        "motion_mode": predictive_state.get("motion_mode") if predictive_state else None,
+        "last_seen_frame_idx": predictive_state.get("last_seen_frame_idx") if predictive_state else None,
+        "nearby_player_track_id": predictive_state.get("nearby_player_track_id") if predictive_state else None,
+    }
+    if roi_bbox is None:
+        return [], summary
+    x1, y1, x2, y2 = roi_bbox
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return [], summary
+    ball_results = ball_model.predict(
+        crop,
+        classes=[BALL_CLASS_ID],
+        conf=0.02,
+        device=device,
+        verbose=False,
+    )
+    detections = []
+    if ball_results and ball_results[0].boxes is not None and len(ball_results[0].boxes) > 0:
+        result = ball_results[0]
+        for det_idx in range(len(result.boxes)):
+            detection = build_detection(result, det_idx, ball_model.names, crop, h_matrix=None)
+            bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+            bbox_xywh = detection.get("bbox_xywh") or [0.0, 0.0, 0.0, 0.0]
+            detection["bbox_xyxy"] = [
+                float(bbox_xyxy[0] + x1),
+                float(bbox_xyxy[1] + y1),
+                float(bbox_xyxy[2] + x1),
+                float(bbox_xyxy[3] + y1),
+            ]
+            detection["bbox_xywh"] = [
+                float(bbox_xywh[0] + x1),
+                float(bbox_xywh[1] + y1),
+                float(bbox_xywh[2]),
+                float(bbox_xywh[3]),
+            ]
+            detection["ball_detection_source"] = "predictive_roi_v1"
+            detection["ball_motion_mode"] = predictive_state.get("motion_mode")
+            if h_matrix is not None:
+                center_x, center_y = detection["bbox_xywh"][0], detection["bbox_xywh"][1]
+                court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
+                detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+            detections.append(detection)
+    summary["candidate_count"] = len(detections)
+    return detections, summary
+
+
+def _detection_sort_key_for_ball_roi(detection):
+    reasons = detection.get("active_player_reasons") or {}
+    return (
+        float(detection.get("active_player_score") or 0.0),
+        float(detection.get("on_court_score") or 0.0),
+        float(detection.get("motion_speed_px") or 0.0),
+        -float(reasons.get("edge_penalty") or 0.0),
+        float(detection.get("confidence") or 0.0),
+    )
+
+
+def _player_ball_search_rois(frame_shape, person_detections):
+    height, width = frame_shape[:2]
+    boxes = []
+    ranked = sorted(person_detections, key=_detection_sort_key_for_ball_roi, reverse=True)
+    for detection in ranked[:BALL_ROI_MAX_PLAYER_WINDOWS]:
+        bbox = detection.get("bbox_xyxy")
+        if not bbox or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in bbox]
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        rx1 = max(0.0, x1 - box_w * BALL_ROI_PAD_X_RATIO)
+        rx2 = min(float(width), x2 + box_w * BALL_ROI_PAD_X_RATIO)
+        ry1 = max(0.0, y1 - box_h * BALL_ROI_PAD_Y_UP_RATIO)
+        ry2 = min(float(height), y2 + box_h * BALL_ROI_PAD_Y_DOWN_RATIO)
+        boxes.append([int(round(rx1)), int(round(ry1)), int(round(rx2)), int(round(ry2))])
+    if not boxes:
+        return []
+    return boxes
+
+
+def _bbox_center_xyxy(bbox_xyxy):
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def _bbox_iou_xyxy(box_a, box_b):
+    ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+    bx1, by1, bx2, by2 = [float(v) for v in box_b]
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    inter = iw * ih
+    union = max(0.0, (ax2 - ax1) * (ay2 - ay1)) + max(0.0, (bx2 - bx1) * (by2 - by1)) - inter
+    if union <= 0.0:
+        return 0.0
+    return inter / union
+
+
+def _dedupe_ball_detections(detections):
+    deduped = []
+    for detection in sorted(detections, key=lambda item: float(item.get("confidence") or 0.0), reverse=True):
+        keep = True
+        det_bbox = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+        det_center = _bbox_center_xyxy(det_bbox)
+        for kept in deduped:
+            kept_bbox = kept.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+            kept_center = _bbox_center_xyxy(kept_bbox)
+            iou = _bbox_iou_xyxy(det_bbox, kept_bbox)
+            center_distance = float(np.linalg.norm(np.array(det_center) - np.array(kept_center)))
+            if iou >= BALL_ROI_DEDUPE_IOU or center_distance <= BALL_ROI_DEDUPE_CENTER_DISTANCE_PX:
+                keep = False
+                break
+        if keep:
+            deduped.append(detection)
+    return deduped
+
+
+def _run_ball_roi_fallback(ball_model, frame, person_detections, *, device, h_matrix=None):
+    roi_bboxes = _player_ball_search_rois(frame.shape, person_detections)
+    summary = {
+        "enabled": bool(roi_bboxes),
+        "triggered": False,
+        "source": "player_local_rois_v2",
+        "roi_bbox_xyxy": roi_bboxes[0] if roi_bboxes else None,
+        "roi_bboxes_xyxy": roi_bboxes,
+        "candidate_count": 0,
+    }
+    if not roi_bboxes:
+        return [], summary
+    detections = []
+    summary["triggered"] = True
+    for roi_index, roi_bbox in enumerate(roi_bboxes):
+        x1, y1, x2, y2 = roi_bbox
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+        ball_results = ball_model.predict(
+            crop,
+            classes=[BALL_CLASS_ID],
+            conf=0.02,
+            device=device,
+            verbose=False,
+        )
+        if not ball_results or ball_results[0].boxes is None or len(ball_results[0].boxes) <= 0:
+            continue
+        result = ball_results[0]
+        for det_idx in range(len(result.boxes)):
+            detection = build_detection(result, det_idx, ball_model.names, crop, h_matrix=None)
+            bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+            bbox_xywh = detection.get("bbox_xywh") or [0.0, 0.0, 0.0, 0.0]
+            detection["bbox_xyxy"] = [
+                float(bbox_xyxy[0] + x1),
+                float(bbox_xyxy[1] + y1),
+                float(bbox_xyxy[2] + x1),
+                float(bbox_xyxy[3] + y1),
+            ]
+            detection["bbox_xywh"] = [
+                float(bbox_xywh[0] + x1),
+                float(bbox_xywh[1] + y1),
+                float(bbox_xywh[2]),
+                float(bbox_xywh[3]),
+            ]
+            detection["ball_detection_source"] = "player_local_rois_v2"
+            detection["ball_detection_roi_index"] = roi_index
+            if h_matrix is not None:
+                center_x, center_y = detection["bbox_xywh"][0], detection["bbox_xywh"][1]
+                court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
+                detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+            detections.append(detection)
+    detections = _dedupe_ball_detections(detections)
+    summary["candidate_count"] = len(detections)
+    return detections, summary
 
 
 def _ball_size_score(detection):
@@ -995,6 +1352,13 @@ def score_active_player(
     reasons["bbox_aspect_ratio"] = round(float(merge_info["aspect_ratio"]), 4)
     reasons["bbox_area_ratio"] = round(float(merge_info["area_ratio"]), 4)
 
+    sam3_refinement = detection.get("sam3_refinement") or {}
+    sam3_score = float(sam3_refinement.get("sam_score") or 0.0)
+    sam3_mask_area_ratio = sam3_refinement.get("mask_area_ratio")
+    reasons["sam3_score"] = round(sam3_score, 4)
+    reasons["sam3_mask_area_ratio"] = round(float(sam3_mask_area_ratio), 4) if sam3_mask_area_ratio is not None else None
+    reasons["sam3_source_kind"] = sam3_refinement.get("source_kind")
+
     appearance_distance = detection.get("appearance_team_distance")
     reasons["appearance_team_distance"] = round(float(appearance_distance), 4) if appearance_distance is not None else None
     appearance_penalty = 0.0
@@ -1027,6 +1391,7 @@ def score_active_player(
         + 0.12 * float(pose_info["score"])
         + 0.10 * float(persistence_score)
         + 0.06 * float(motion_score)
+        + 0.08 * _clip01(sam3_score / 0.8)
         - 0.55 * float(edge_penalty)
         - 0.10 * float(merge_info["score"])
         - 0.55 * float(appearance_penalty)
@@ -1140,6 +1505,51 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
     return detection
 
 
+def _build_sam_recovered_detection(
+    proposal,
+    frame,
+    h_matrix=None,
+    *,
+    backend="sam3_repo_v1",
+    model_name=None,
+    text_prompt=None,
+):
+    source_kind = str(proposal.get("source_kind") or "unknown")
+    detection = {
+        "track_id": None,
+        "class_id": 0,
+        "class_name": "person",
+        "confidence": float(max(0.2, proposal.get("sam_score") or 0.0)),
+        "bbox_xyxy": [float(v) for v in proposal["bbox_xyxy"]],
+        "bbox_xywh": [float(v) for v in proposal["bbox_xywh"]],
+        "recovered_candidate": True,
+        "recovered_candidate_source": f"sam3_{source_kind}",
+        "sam3_refinement": {
+            "backend": backend,
+            "model_name": model_name,
+            "text_prompt": text_prompt,
+            "sam_score": float(proposal.get("sam_score") or 0.0),
+            "mask_area_px": int(proposal.get("mask_area_px") or 0),
+            "mask_area_ratio": proposal.get("mask_area_ratio"),
+            "source_kind": proposal.get("source_kind"),
+            "source_roi_bbox_xyxy": proposal.get("source_roi_bbox_xyxy"),
+            "source_iou": proposal.get("source_iou"),
+            "source_trigger_reason": proposal.get("source_trigger_reason"),
+        },
+    }
+    if h_matrix is not None:
+        center_x, center_y, _, _ = detection["bbox_xywh"]
+        court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
+        detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+        footpoint = _estimate_detection_footpoint(detection)
+        foot_court_xy = project_pixel_to_court(float(footpoint["xy"][0]), float(footpoint["xy"][1]), h_matrix)
+        detection["court_foot_xy"] = [float(foot_court_xy[0]), float(foot_court_xy[1])]
+    uniform_stats = estimate_uniform_bucket(frame, detection["bbox_xyxy"])
+    detection["uniform_bucket"] = uniform_stats["bucket"]
+    detection["uniform_luma_mean"] = uniform_stats["luma_mean"]
+    return detection
+
+
 def _track_frame_counts(frames):
     counts = {}
     for frame in frames:
@@ -1175,6 +1585,94 @@ def annotate_active_players(frames, video_meta):
             detection["active_player_candidate"] = score_info["candidate"]
             detection["active_player_reasons"] = score_info["reasons"]
     return frames
+
+
+def annotate_sam_player_recovery(
+    frames,
+    *,
+    player_recovery_backend="none",
+    player_recovery_model=DEFAULT_SAM3_REPO_MODEL,
+    player_recovery_prompt=DEFAULT_SAM3_TEXT_PROMPT,
+    device="cpu",
+):
+    """Run ROI-scoped SAM recovery and refinement and mutate frame detections in place.
+
+    This stage enriches existing YOLO detections and may append recovered player
+    candidates, but it is still an artifact-generation pass rather than the
+    authoritative runtime tracker handoff. Normalized `discovery_proposals` are
+    materialized later from the accepted SAM outputs.
+    """
+    summary = {
+        "backend": player_recovery_backend,
+        "model_name": player_recovery_model if player_recovery_backend != "none" else None,
+        "text_prompt": player_recovery_prompt if player_recovery_backend != "none" else None,
+        "status": "disabled" if player_recovery_backend == "none" else "pending",
+        "frame_count_with_rois": 0,
+        "roi_count": 0,
+        "refined_detection_count": 0,
+        "recovered_detection_count": 0,
+    }
+    if not frames or player_recovery_backend == "none":
+        return summary
+
+    if player_recovery_backend != "sam3":
+        summary["status"] = "unsupported_backend"
+        return summary
+
+    refiner = Sam3RoiRefiner(
+        model_name=player_recovery_model,
+        text_prompt=player_recovery_prompt,
+        device=device,
+    )
+    last_status = "no_rois"
+    for frame in frames:
+        rois = build_sam_recovery_rois(frame)
+        if not rois:
+            continue
+        summary["frame_count_with_rois"] += 1
+        summary["roi_count"] += len(rois)
+        result = refiner.refine(frame.get("_frame_bgr"), rois)
+        last_status = result.status
+        if not result.enabled or not result.proposals:
+            continue
+        detections = frame.get("detections", [])
+        for proposal in result.proposals:
+            if float(proposal.get("sam_score") or 0.0) < PLAYER_RECOVERY_MIN_SAM_SCORE:
+                continue
+            if proposal.get("source_kind") == "ambiguous_yolo_detection" and proposal.get("source_track_id") is not None:
+                target = next((d for d in detections if d.get("track_id") == proposal.get("source_track_id")), None)
+                if target is None:
+                    continue
+                target["sam3_refinement"] = {
+                    "backend": result.backend,
+                    "model_name": player_recovery_model,
+                    "text_prompt": player_recovery_prompt,
+                    "sam_score": proposal.get("sam_score"),
+                    "mask_area_px": proposal.get("mask_area_px"),
+                    "mask_area_ratio": proposal.get("mask_area_ratio"),
+                    "refined_bbox_xyxy": [float(v) for v in proposal["bbox_xyxy"]],
+                    "source_kind": proposal.get("source_kind"),
+                    "source_merge_risk": proposal.get("source_merge_risk"),
+                    "source_trigger_reason": proposal.get("source_trigger_reason"),
+                }
+                summary["refined_detection_count"] += 1
+                continue
+            if proposal.get("source_kind") in {"unexplained_dino_blob", "grounding_anchor_region"}:
+                detections.append(
+                    _build_sam_recovered_detection(
+                        proposal,
+                        frame.get("_frame_bgr"),
+                        frame.get("_h_matrix"),
+                        backend=result.backend,
+                        model_name=player_recovery_model,
+                        text_prompt=player_recovery_prompt,
+                    )
+                )
+                summary["recovered_detection_count"] += 1
+        frame["detections"] = detections
+
+    summary["status"] = last_status
+    return summary
 
 
 def annotate_team_appearance_consistency(frames):
@@ -1483,6 +1981,12 @@ def annotate_bootstrap_contexts(
     bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
     device="cpu",
 ):
+    """Attach per-segment bootstrap and grounding contexts to frames.
+
+    The current runtime still consumes these low-level contexts directly for
+    grounded reruns and collapse handling. The higher-level `scene_prior`
+    contract is emitted later as a normalized artifact view over the same state.
+    """
     if not frames:
         return {"backend": bootstrap_foreground_backend, "contexts": []}
 
@@ -1491,7 +1995,9 @@ def annotate_bootstrap_contexts(
     for frame in frames:
         segment_id = frame.get("continuity_segment_id")
         if segment_id in context_by_segment_id:
-            frame["bootstrap_context"] = context_by_segment_id[segment_id]
+            payload = context_by_segment_id[segment_id]
+            frame["bootstrap_context"] = payload
+            frame["grounding_context"] = json.loads(json.dumps(payload.get("grounding_context") or {}))
             continue
 
         if bootstrap_foreground_backend == "dinov3":
@@ -1522,15 +2028,331 @@ def annotate_bootstrap_contexts(
                 "frame_idx": frame.get("frame_idx", 0),
             }
 
+        trigger_reason = "initial" if int(segment_id or 0) == 0 else "discontinuity"
+        grounding_context = {
+            "enabled": False,
+            "pipeline_order": ["dino", "sam", "yolo"],
+            "trigger_reason": trigger_reason,
+            "source_backend": payload.get("backend"),
+            "source_status": payload.get("status"),
+            "proposal_regions": [],
+            "sam_roi_policy": "unexplained_dino_blobs_and_ambiguous_yolo",
+            "yolo_search_policy": "full_frame",
+            "yolo_search_region_mask_grid": None,
+            "yolo_search_region_mask_shape": None,
+            "yolo_search_region_bbox_xyxy": None,
+            "should_rerun_yolo": False,
+        }
+        image_width = int(payload.get("image_width") or 0)
+        image_height = int(payload.get("image_height") or 0)
+        mask_grid = payload.get("mask_grid")
+        mask_shape = payload.get("mask_shape")
+        if payload.get("enabled") and payload.get("status") == "ready" and mask_grid and image_width > 0 and image_height > 0:
+            full_mask = bootstrap_mask_to_image(payload)
+            component_regions = []
+            should_rerun_yolo = False
+            if full_mask is not None:
+                for component in component_boxes_from_mask(full_mask):
+                    bbox = component["bbox_xyxy"]
+                    bbox_width = float(bbox[2] - bbox[0])
+                    bbox_height = float(bbox[3] - bbox[1])
+                    should_rerun_yolo = should_rerun_yolo or (
+                        bbox_width >= GROUNDED_YOLO_MIN_SIDE_PX and bbox_height >= GROUNDED_YOLO_MIN_SIDE_PX
+                    )
+                    component_regions.append({
+                        "kind": "dino_play_region_component",
+                        "bbox_xyxy": [float(v) for v in bbox],
+                        "confidence": round(float(component.get("area_ratio") or 0.0), 4),
+                        "area_ratio": component.get("area_ratio"),
+                    })
+            grounding_context.update({
+                "enabled": True,
+                "proposal_regions": component_regions,
+                "yolo_search_policy": "mask_outside_play_region",
+                "yolo_search_region_mask_grid": mask_grid,
+                "yolo_search_region_mask_shape": mask_shape,
+                "yolo_search_region_bbox_xyxy": payload.get("foreground_bbox_xyxy"),
+                "should_rerun_yolo": should_rerun_yolo,
+            })
         payload["continuity_segment_id"] = segment_id
+        payload["grounding_context"] = grounding_context
         context_by_segment_id[segment_id] = payload
         frame["bootstrap_context"] = payload
+        frame["grounding_context"] = json.loads(json.dumps(grounding_context))
         contexts.append(payload)
 
     return {
         "backend": bootstrap_foreground_backend,
         "contexts": contexts,
     }
+
+
+
+
+def _scene_prior_status(bootstrap_context, grounding_context):
+    if grounding_context.get("enabled") and (
+        grounding_context.get("proposal_regions")
+        or grounding_context.get("yolo_search_region_mask_grid")
+    ):
+        return "ready"
+    return str(
+        grounding_context.get("source_status")
+        or bootstrap_context.get("status")
+        or "inactive"
+    )
+
+
+def _build_scene_prior_contract(frame):
+    bootstrap_context = frame.get("bootstrap_context") or {}
+    grounding_context = frame.get("grounding_context") or {}
+    region_mask_grid = grounding_context.get("yolo_search_region_mask_grid")
+    if region_mask_grid is None:
+        region_mask_grid = bootstrap_context.get("mask_grid")
+    region_mask_shape = grounding_context.get("yolo_search_region_mask_shape")
+    if region_mask_shape is None:
+        region_mask_shape = bootstrap_context.get("mask_shape")
+    return {
+        "frame_idx": int(frame.get("frame_idx", 0)),
+        "continuity_segment_id": frame.get("continuity_segment_id"),
+        "prior_status": _scene_prior_status(bootstrap_context, grounding_context),
+        "region_mask_shape": json.loads(json.dumps(region_mask_shape)),
+        "region_mask_grid": json.loads(json.dumps(region_mask_grid)),
+        "proposal_regions": json.loads(json.dumps(grounding_context.get("proposal_regions") or [])),
+        "source_model": bootstrap_context.get("model_name"),
+        "source_backend": bootstrap_context.get("backend"),
+        "trigger_reason": grounding_context.get("trigger_reason"),
+        "yolo_search_policy": grounding_context.get("yolo_search_policy"),
+        "yolo_search_region_bbox_xyxy": json.loads(json.dumps(grounding_context.get("yolo_search_region_bbox_xyxy"))),
+        "should_rerun_yolo": bool(grounding_context.get("should_rerun_yolo")),
+        "yolo_rerun_applied": bool(grounding_context.get("yolo_rerun_applied")),
+        "collapse_triggered": bool(grounding_context.get("collapse_triggered")),
+        "collapse_trigger_frame_idx": grounding_context.get("collapse_trigger_frame_idx"),
+    }
+
+
+def _build_discovery_proposals(frame):
+    proposals = []
+    for detection in frame.get("detections", []):
+        sam3_refinement = detection.get("sam3_refinement") or {}
+        sam_score = sam3_refinement.get("sam_score")
+        if sam_score is None:
+            continue
+        bbox_xyxy = sam3_refinement.get("refined_bbox_xyxy") or detection.get("bbox_xyxy")
+        if not bbox_xyxy:
+            continue
+        source_kind = sam3_refinement.get("source_kind")
+        source_region = {"kind": source_kind or "sam3_roi", "bbox_xyxy": None}
+        if sam3_refinement.get("source_roi_bbox_xyxy"):
+            source_region["bbox_xyxy"] = [float(v) for v in sam3_refinement["source_roi_bbox_xyxy"]]
+        proposal = {
+            "frame_idx": int(frame.get("frame_idx", 0)),
+            "entity_type": "player",
+            "bbox_xyxy": [float(v) for v in bbox_xyxy],
+            "mask_or_polygon": {
+                "kind": "bbox_proxy",
+                "bbox_xyxy": [float(v) for v in bbox_xyxy],
+            },
+            "score": round(float(sam_score), 4),
+            "source_model": sam3_refinement.get("model_name") or sam3_refinement.get("backend"),
+            "source_prompt": sam3_refinement.get("text_prompt"),
+            "source_region": source_region,
+            "source_backend": sam3_refinement.get("backend"),
+            "proposal_role": "recovery" if detection.get("recovered_candidate") else "refinement",
+            "mask_area_px": sam3_refinement.get("mask_area_px"),
+            "mask_area_ratio": sam3_refinement.get("mask_area_ratio"),
+            "anchor_region_kind": source_kind,
+            "source_trigger_reason": sam3_refinement.get("source_trigger_reason"),
+        }
+        if detection.get("track_id") is not None:
+            proposal["source_track_id"] = int(detection["track_id"])
+        proposals.append(proposal)
+    return proposals
+
+
+def annotate_scene_discovery_contracts(frames):
+    """Normalize staged discovery evidence into explicit artifact contracts.
+
+    This function is intentionally post-hoc today: it converts bootstrap,
+    grounding, and accepted SAM outputs into the explicit `scene_prior` and
+    `discovery_proposals` contracts used for auditability and downstream
+    integration work. Earlier runtime stages are not yet driven by these
+    normalized contracts.
+    """
+    summary = {
+        "kind": "scene_discovery_tracking_v1",
+        "pipeline_order": ["dino", "sam", "yolo"],
+        "scene_prior_frame_count": 0,
+        "scene_prior_ready_frame_count": 0,
+        "scene_prior_trigger_reasons": [],
+        "discovery_proposal_frame_count": 0,
+        "discovery_proposal_count": 0,
+        "discovery_refinement_count": 0,
+        "discovery_recovery_count": 0,
+        "discovery_entity_types": [],
+    }
+    trigger_reasons = set()
+    entity_types = set()
+    for frame in frames:
+        scene_prior = _build_scene_prior_contract(frame)
+        discovery_proposals = _build_discovery_proposals(frame)
+        frame["scene_prior"] = scene_prior
+        frame["discovery_proposals"] = discovery_proposals
+        summary["scene_prior_frame_count"] += 1
+        if scene_prior.get("prior_status") == "ready":
+            summary["scene_prior_ready_frame_count"] += 1
+        if scene_prior.get("trigger_reason"):
+            trigger_reasons.add(str(scene_prior["trigger_reason"]))
+        if discovery_proposals:
+            summary["discovery_proposal_frame_count"] += 1
+            summary["discovery_proposal_count"] += len(discovery_proposals)
+        for proposal in discovery_proposals:
+            entity_types.add(str(proposal.get("entity_type") or "unknown"))
+            if proposal.get("proposal_role") == "recovery":
+                summary["discovery_recovery_count"] += 1
+            else:
+                summary["discovery_refinement_count"] += 1
+    summary["scene_prior_trigger_reasons"] = sorted(trigger_reasons)
+    summary["discovery_entity_types"] = sorted(entity_types)
+    return summary
+
+
+def _apply_grounding_mask(frame_bgr, grounding_context):
+    if frame_bgr is None:
+        return None, False
+    if not grounding_context or grounding_context.get("yolo_search_policy") != "mask_outside_play_region":
+        return frame_bgr, False
+    mask_grid = grounding_context.get("yolo_search_region_mask_grid")
+    if not mask_grid:
+        return frame_bgr, False
+    mask = np.array(mask_grid, dtype=np.uint8)
+    if mask.ndim != 2:
+        return frame_bgr, False
+    height, width = frame_bgr.shape[:2]
+    mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+    if mask.shape[:2] != (height, width):
+        return frame_bgr, False
+    masked = np.zeros_like(frame_bgr)
+    masked[mask > 0] = frame_bgr[mask > 0]
+    return masked, True
+
+
+def rerun_grounded_person_detections(
+    frames,
+    *,
+    model_name,
+    device,
+    conf_threshold,
+):
+    summary = {
+        "enabled": False,
+        "status": "disabled",
+        "pipeline_order": ["dino", "sam", "yolo"],
+        "frame_count_with_grounding": 0,
+        "frame_count_rerun": 0,
+        "detection_count": 0,
+        "search_policy": "full_frame",
+    }
+    if not frames:
+        return summary
+
+    rerun_frames = [
+        frame for frame in frames
+        if (frame.get("grounding_context") or {}).get("should_rerun_yolo")
+    ]
+    summary["frame_count_with_grounding"] = len(rerun_frames)
+    if not rerun_frames:
+        summary["status"] = "no_grounded_segments"
+        return summary
+
+    pose_model = YOLO(model_name)
+    summary["enabled"] = True
+    summary["search_policy"] = "mask_outside_play_region"
+    for frame in frames:
+        grounding_context = frame.get("grounding_context") or {}
+        run_frame, was_masked = _apply_grounding_mask(frame.get("_frame_bgr"), grounding_context)
+        if not grounding_context.get("should_rerun_yolo"):
+            continue
+        pose_results = pose_model.track(
+            run_frame,
+            persist=True,
+            classes=[0],
+            conf=conf_threshold,
+            device=device,
+            verbose=False,
+        )
+        detections = []
+        h_matrix = _h_matrix_as_array(frame.get("_h_matrix"))
+        if pose_results and pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
+            result = pose_results[0]
+            for det_idx in range(len(result.boxes)):
+                detection = build_detection(result, det_idx, pose_model.names, frame.get("_frame_bgr"), h_matrix=h_matrix)
+                detection["continuity_segment_id"] = frame.get("continuity_segment_id")
+                detections.append(detection)
+        frame["detections"] = detections
+        grounding_context["yolo_rerun_applied"] = True
+        grounding_context["yolo_rerun_detection_count"] = len(detections)
+        grounding_context["yolo_rerun_masked"] = bool(was_masked)
+        summary["frame_count_rerun"] += 1
+        summary["detection_count"] += len(detections)
+    summary["status"] = "ready"
+    return summary
+
+
+def mark_tracking_collapse_reground(frames):
+    summary = {
+        "enabled": True,
+        "trigger": "detection_collapse",
+        "live_score_threshold": GROUNDING_COLLAPSE_LIVE_SCORE_THRESHOLD,
+        "min_on_court_count": GROUNDING_COLLAPSE_MIN_ON_COURT_COUNT,
+        "streak_frames": GROUNDING_COLLAPSE_STREAK_FRAMES,
+        "triggered_segment_ids": [],
+        "triggered_frame_indices": [],
+    }
+    if not frames:
+        summary["enabled"] = False
+        return summary
+
+    streak = 0
+    triggered_segments = set()
+    triggered_frames = []
+    for frame in frames:
+        live_score = float(frame.get("live_play_score") or 0.0)
+        on_court_count = int((frame.get("live_play_reasons") or {}).get("on_court_active_candidate_count", 0))
+        if (
+            live_score >= GROUNDING_COLLAPSE_LIVE_SCORE_THRESHOLD
+            and on_court_count < GROUNDING_COLLAPSE_MIN_ON_COURT_COUNT
+            and frame.get("discontinuity_label") != "discontinuity"
+        ):
+            streak += 1
+        else:
+            streak = 0
+        frame["grounding_collapse_streak"] = int(streak)
+        if streak < GROUNDING_COLLAPSE_STREAK_FRAMES:
+            continue
+        segment_id = frame.get("continuity_segment_id")
+        if segment_id in triggered_segments:
+            continue
+        triggered_segments.add(segment_id)
+        triggered_frames.append(int(frame.get("frame_idx", 0)))
+        for candidate_frame in frames:
+            if candidate_frame.get("continuity_segment_id") != segment_id:
+                continue
+            grounding_context = candidate_frame.get("grounding_context") or {}
+            if not grounding_context:
+                continue
+            grounding_context["collapse_triggered"] = True
+            grounding_context["collapse_trigger_frame_idx"] = int(frame.get("frame_idx", 0))
+            grounding_context["collapse_live_play_score"] = round(live_score, 4)
+            grounding_context["collapse_on_court_count"] = int(on_court_count)
+            grounding_context["should_rerun_yolo"] = bool(
+                grounding_context.get("enabled") and grounding_context.get("proposal_regions")
+            )
+            if grounding_context.get("trigger_reason") not in {"initial", "discontinuity"}:
+                grounding_context["trigger_reason"] = "tracking_collapse"
+
+    summary["triggered_segment_ids"] = sorted(int(v) for v in triggered_segments)
+    summary["triggered_frame_indices"] = triggered_frames
+    return summary
 
 
 def annotate_live_play(frames, video_meta=None):
@@ -2179,7 +3001,17 @@ def annotate_clip(
     *,
     bootstrap_foreground_backend="none",
     bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+    player_recovery_backend="none",
+    player_recovery_model=DEFAULT_SAM3_REPO_MODEL,
+    player_recovery_prompt=DEFAULT_SAM3_TEXT_PROMPT,
 ):
+    """Generate one full Layer 1 perception artifact for a single clip.
+
+    The pipeline is still detection-centric at runtime: YOLO detection, ball
+    search, continuity, grounding, recovery, repair, and review metadata are run
+    first, and the normalized staged-perception contracts are materialized just
+    before serialization.
+    """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
@@ -2195,6 +3027,7 @@ def annotate_clip(
     frame_idx = 0
     clip_id = video_path.stem
     calibration = load_calibration(clip_id, calibration_file)
+    previous_ball_predictive_state = None
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -2223,12 +3056,63 @@ def annotate_clip(
             result = pose_results[0]
             for det_idx in range(len(result.boxes)):
                 detections.append(build_detection(result, det_idx, pose_model.names, frame, h_matrix=h_matrix))
+        person_detections = list(detections)
+        ball_predictive_summary = {
+            "enabled": previous_ball_predictive_state is not None,
+            "triggered": False,
+            "source": "predictive_roi_v1",
+            "roi_bbox_xyxy": None,
+            "candidate_count": 0,
+            "motion_mode": previous_ball_predictive_state.get("motion_mode") if previous_ball_predictive_state else None,
+            "last_seen_frame_idx": previous_ball_predictive_state.get("last_seen_frame_idx") if previous_ball_predictive_state else None,
+            "nearby_player_track_id": previous_ball_predictive_state.get("nearby_player_track_id") if previous_ball_predictive_state else None,
+        }
+        ball_fallback_summary = {
+            "enabled": False,
+            "triggered": False,
+            "source": "player_local_rois_v2",
+            "roi_bbox_xyxy": None,
+            "candidate_count": 0,
+        }
         if ball_results and ball_results[0].boxes is not None and len(ball_results[0].boxes) > 0:
             result = ball_results[0]
             for det_idx in range(len(result.boxes)):
-                detections.append(build_detection(result, det_idx, ball_model.names, frame, h_matrix=h_matrix))
-        ball_detection = _extract_best_ball_detection(detections)
+                built = build_detection(result, det_idx, ball_model.names, frame, h_matrix=h_matrix)
+                built["ball_detection_source"] = "full_frame"
+                detections.append(built)
+        raw_ball_candidates = _serialize_ball_candidates(detections)
+        best_ball_detection = _extract_best_ball_detection(detections)
+        if _ball_detection_needs_search(best_ball_detection):
+            predictive_ball_detections, ball_predictive_summary = _run_ball_predictive_search(
+                ball_model,
+                frame,
+                previous_ball_predictive_state,
+                frame_idx=frame_idx,
+                device=device,
+                h_matrix=h_matrix,
+            )
+            detections.extend(predictive_ball_detections)
+            raw_ball_candidates = _serialize_ball_candidates(detections)
+            best_ball_detection = _extract_best_ball_detection(detections)
+        if _ball_detection_needs_search(best_ball_detection):
+            fallback_ball_detections, ball_fallback_summary = _run_ball_roi_fallback(
+                ball_model,
+                frame,
+                person_detections,
+                device=device,
+                h_matrix=h_matrix,
+            )
+            detections.extend(fallback_ball_detections)
+            raw_ball_candidates = _serialize_ball_candidates(detections)
+            best_ball_detection = _extract_best_ball_detection(detections)
+        ball_detection = best_ball_detection
         person_detections = [detection for detection in detections if not _is_ball_detection(detection)]
+        previous_ball_predictive_state = _update_ball_predictive_state(
+            previous_ball_predictive_state,
+            ball_detection,
+            person_detections,
+            frame_idx,
+        )
 
         frames.append({
             "frame_idx": frame_idx,
@@ -2236,8 +3120,12 @@ def annotate_clip(
             "calibrated": h_matrix is not None,
             "detections": person_detections,
             "ball_detection": ball_detection,
+            "raw_ball_detections": raw_ball_candidates,
+            "ball_predictive_search": ball_predictive_summary,
+            "ball_fallback": ball_fallback_summary,
             "_frame_visual_signature": _frame_visual_signature(frame),
             "_frame_bgr": frame.copy(),
+            "_h_matrix": None if h_matrix is None else h_matrix.tolist(),
         })
         frame_idx += 1
 
@@ -2250,8 +3138,6 @@ def annotate_clip(
         "width": width,
         "height": height,
     }
-    frames = smooth_track_motion(frames, video_meta)
-    frames = annotate_active_players(frames, video_meta)
     continuity = annotate_continuity_segments(frames)
     bootstrap_summary = annotate_bootstrap_contexts(
         frames,
@@ -2259,7 +3145,27 @@ def annotate_clip(
         bootstrap_foreground_model=bootstrap_foreground_model,
         device=device,
     )
+    frames = smooth_track_motion(frames, video_meta)
+    frames = annotate_active_players(frames, video_meta)
+    preliminary_live_play = annotate_live_play(frames, video_meta)
+    collapse_summary = mark_tracking_collapse_reground(frames)
+    grounding_summary = rerun_grounded_person_detections(
+        frames,
+        model_name=model_name,
+        device=device,
+        conf_threshold=conf_threshold,
+    )
+    for frame in frames:
+        if frame.get("_h_matrix") is not None:
+            frame["_h_matrix"] = _h_matrix_as_array(frame["_h_matrix"])
     ball_state_summary = annotate_ball_state(frames)
+    player_recovery_summary = annotate_sam_player_recovery(
+        frames,
+        player_recovery_backend=player_recovery_backend,
+        player_recovery_model=player_recovery_model,
+        player_recovery_prompt=player_recovery_prompt,
+        device=device,
+    )
     appearance_summary = annotate_team_appearance_consistency(frames)
     frames = annotate_active_players(frames, video_meta)
     frames, identity_hypotheses = repair_short_track_gaps(
@@ -2271,9 +3177,33 @@ def annotate_clip(
     frames = annotate_active_players(frames, video_meta)
     jersey_ocr = annotate_identity_jersey_numbers(frames)
     live_play = annotate_live_play(frames, video_meta)
+    scene_discovery_summary = annotate_scene_discovery_contracts(frames)
+    segment_grounding = []
+    for segment in continuity["segments"]:
+        source_frame = next(
+            (
+                frame for frame in frames
+                if int(frame.get("continuity_segment_id", -1)) == int(segment["segment_id"])
+                and int(frame.get("frame_idx", -1)) == int((frame.get("bootstrap_context") or {}).get("frame_idx", -2))
+            ),
+            None,
+        )
+        grounding_context = (source_frame or {}).get("grounding_context") or {}
+        segment["grounding"] = {
+            "status": "anchored" if grounding_context.get("enabled") else "inactive",
+            "pipeline_order": grounding_context.get("pipeline_order") or ["dino", "sam", "yolo"],
+            "trigger_reason": grounding_context.get("trigger_reason"),
+            "source_frame_idx": int((source_frame or {}).get("frame_idx", segment["start_frame"])),
+            "yolo_search_policy": grounding_context.get("yolo_search_policy"),
+            "yolo_search_region_bbox_xyxy": grounding_context.get("yolo_search_region_bbox_xyxy"),
+            "proposal_region_count": len(grounding_context.get("proposal_regions") or []),
+            "collapse_triggered": bool(grounding_context.get("collapse_triggered")),
+            "collapse_trigger_frame_idx": grounding_context.get("collapse_trigger_frame_idx"),
+        }
+        segment_grounding.append(segment["grounding"])
 
     artifact = {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "clip_id": clip_id,
         "video_path": relative_path,
         "video": video_meta,
@@ -2340,6 +3270,11 @@ def annotate_clip(
                 "prototype_count": appearance_summary["prototype_count"],
                 "prototype_buckets": appearance_summary["prototype_buckets"],
             },
+            "grounding_workflow": grounding_summary,
+            "grounding_collapse": collapse_summary,
+            "scene_discovery_tracking": scene_discovery_summary,
+            "preliminary_live_play_segments": len(preliminary_live_play["segments"]),
+            "player_recovery": player_recovery_summary,
             "ball_state": {
                 "kind": ball_state_summary["kind"],
                 "min_score": ball_state_summary["min_score"],
@@ -2389,12 +3324,14 @@ def annotate_clip(
             "backend": bootstrap_summary["backend"],
             "contexts": bootstrap_summary["contexts"],
         },
+        "grounding_segments": segment_grounding,
         "frames": frames,
     }
 
     for frame in artifact["frames"]:
         frame.pop("_frame_visual_signature", None)
         frame.pop("_frame_bgr", None)
+        frame.pop("_h_matrix", None)
 
     with open(output_path, "w") as f:
         json.dump(artifact, f, indent=2)
@@ -2416,6 +3353,22 @@ def main():
         "--bootstrap-foreground-model",
         default=DEFAULT_DINOV3_MODEL,
         help="Model id used when the DINOv3 bootstrap foreground backend is enabled",
+    )
+    parser.add_argument(
+        "--player-recovery-backend",
+        choices=["none", "sam3"],
+        default="none",
+        help="Optional SAM 3 recovered-player backend for unexplained DINO blobs and ambiguous YOLO detections",
+    )
+    parser.add_argument(
+        "--player-recovery-model",
+        default=DEFAULT_SAM3_REPO_MODEL,
+        help="Model id used when the SAM 3 player recovery backend is enabled",
+    )
+    parser.add_argument(
+        "--player-recovery-prompt",
+        default=DEFAULT_SAM3_TEXT_PROMPT,
+        help="Text prompt passed to SAM 3 when the recovered-player backend is enabled",
     )
     parser.add_argument("--device", default="cuda:0", help="Ultralytics device selector")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
@@ -2442,6 +3395,9 @@ def main():
         calibration_file=calibration_file,
         bootstrap_foreground_backend=args.bootstrap_foreground_backend,
         bootstrap_foreground_model=args.bootstrap_foreground_model,
+        player_recovery_backend=args.player_recovery_backend,
+        player_recovery_model=args.player_recovery_model,
+        player_recovery_prompt=args.player_recovery_prompt,
     )
     print(output_path)
 
