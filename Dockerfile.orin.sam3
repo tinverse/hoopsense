@@ -1,0 +1,91 @@
+# HoopSense Orin Dockerfile (Experimental SAM 3 Variant)
+#
+# This file intentionally leaves Dockerfile.orin and the native .venv_orin310
+# path untouched. Use this image only on JetPack 6 / L4T R36.x hosts.
+#
+# Rollback is operationally trivial:
+# - keep using scripts/run_orin_layer1_python.sh
+# - or stop tagging/publishing this experimental image
+
+ARG ORIN_SAM3_BASE_IMAGE=nvcr.io/nvidia/l4t-jetpack:r36.4.0
+FROM ${ORIN_SAM3_BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_PATH=/usr/local/cuda
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/tegra:${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}
+
+ARG TORCH_WHEEL_URL=https://pypi.jetson-ai-lab.io/jp6/cu126/+f/37d/7e156cfb4a646/torch-2.10.0-cp310-cp310-linux_aarch64.whl#sha256=37d7e156cfb4a646c4d7347597727db1529d184108f703324dfff1842cec094e
+ARG TORCHVISION_VERSION=0.25.0
+ARG JETSON_PYPI_INDEX=https://pypi.jetson-ai-lab.io/jp6/cu126
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    git \
+    ffmpeg \
+    python3-pip \
+    python3-venv \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    libopenblas0-pthread \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/root/.rustup
+ENV CARGO_HOME=/root/.cargo
+ENV PATH=/root/.cargo/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --default-toolchain stable
+
+RUN python3 --version && python3 -m pip install --upgrade pip setuptools wheel
+RUN python3 -m pip install "${TORCH_WHEEL_URL}" nvidia-cudss-cu12
+RUN python3 -m pip install --index-url "${JETSON_PYPI_INDEX}" --no-deps --force-reinstall "torchvision==${TORCHVISION_VERSION}"
+
+# Keep dependency shape close to the validated native path, but self-contained.
+RUN python3 -m pip install --no-cache-dir \
+    lap \
+    pyyaml \
+    requests \
+    pycocotools \
+    scikit-image \
+    python-bidi \
+    pyclipper \
+    shapely \
+    ninja \
+    ultralytics-thop \
+    matplotlib==3.7.5 \
+    psutil \
+    polars \
+    flask \
+    pillow \
+    easyocr \
+    einops \
+    huggingface-hub \
+    safetensors \
+    tokenizers \
+    triton \
+    transformers
+
+RUN python3 -m pip install --no-cache-dir --no-deps ultralytics
+
+ARG DINOV3_REF=main
+ARG INSTALL_DINOV3=0
+ENV HOOPSENSE_DINOV3_DIR=/opt/dinov3
+RUN if [ "${INSTALL_DINOV3}" = "1" ]; then \
+      git clone --depth 1 --branch "${DINOV3_REF}" https://github.com/facebookresearch/dinov3.git "${HOOPSENSE_DINOV3_DIR}" \
+      && python3 -m pip install --no-cache-dir --no-deps -e "${HOOPSENSE_DINOV3_DIR}"; \
+    fi
+
+# Official SAM 3 repo install. This is the whole point of the experimental image.
+ARG SAM3_REF=main
+ENV HOOPSENSE_SAM3_DIR=/opt/sam3
+RUN git clone --depth 1 --branch "${SAM3_REF}" https://github.com/facebookresearch/sam3.git "${HOOPSENSE_SAM3_DIR}" \
+    && python3 -m pip install --no-cache-dir -e "${HOOPSENSE_SAM3_DIR}"
+
+WORKDIR /app
+ENV PYTHONPATH="/app:${HOOPSENSE_DINOV3_DIR}:${HOOPSENSE_SAM3_DIR}"
+ENV HF_HOME=/cache/huggingface
+ENV TORCH_HOME=/cache/torch
+
+CMD ["/bin/bash"]

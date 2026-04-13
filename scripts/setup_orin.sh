@@ -89,6 +89,16 @@ env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install \
   tokenizers \
   transformers
 
+ORIN_PYTHON_MM="$("${ORIN_VENV_PYTHON}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [ "${ORIN_PYTHON_MM}" = "3.10" ]; then
+    echo "[WARN] Skipping official facebookresearch/sam3 install in ${ORIN_VENV}."
+    echo "[WARN] Upstream SAM 3 currently documents Python 3.12+; the Orin runtime here is pinned to Python ${ORIN_PYTHON_MM}."
+    echo "[WARN] The Layer 1 SAM 3 backend will stay fail-closed with status 'python_too_old' until a Python 3.12 CUDA runtime is provisioned."
+else
+    echo "[INFO] Installing official facebookresearch/sam3 into ${ORIN_VENV}"
+    env -u PYTHONPATH PYTHONNOUSERSITE=1 "${ORIN_VENV_PYTHON}" -m pip install "git+https://github.com/facebookresearch/sam3.git"
+fi
+
 if [ -d "${ORIN_CV2_SRC}" ]; then
     rm -rf "${ORIN_CV2_DST}"
     ln -s "${ORIN_CV2_SRC}" "${ORIN_CV2_DST}"

@@ -21,14 +21,13 @@ MLOps is part of the operations layer and is documented separately in [MLOPS.md]
 ## Current Repo Reality
 
 What is implemented:
-- `guix.scm` for the general development shell
-- `guix_orin.scm` for the Orin-oriented shell
-- `scripts/setup_orin.sh` for the Guix plus JetPack bridge
-- `scripts/run_layer1_labeller.sh` for the GPU-capable Layer 1 review app
-- `scripts/generate_layer1_annotations.sh` for GPU-backed perception artifact generation
+- `scripts/setup_orin.sh` for the stable native Orin Python 3.10 path
+- `scripts/run_layer1_labeller.sh` and `scripts/generate_layer1_annotations.sh` for the stable GPU-backed Layer 1 review path
 - `Dockerfile` for cloud-oriented packaging
+- `Dockerfile.orin.sam3` and companion scripts for the experimental JetPack 6 / Python 3.12 SAM3 container path
 - `tools/infra/cloud_train_wrapper.sh` and `vertex_job.yaml` for cloud training entrypoints
 - cloud `Dockerfile` now makes `facebookresearch/dinov3` available for later bootstrap foreground/background segmentation experiments
+- `guix.scm` and `guix_orin.scm` remain checked in as optional legacy developer shells and are not the primary operating path
 
 What is not implemented yet:
 - checked-in CI workflows
@@ -45,8 +44,8 @@ The Docker path is cloud-oriented. It is not the native Orin story.
 Preferred path:
 
 ```bash
-guix shell -m guix.scm
-guix shell -m guix.scm -- python3 -m unittest
+python3 -m unittest
+python3 -m py_compile tools/review/labeller/generate_layer1_annotations.py
 ```
 
 Use this for:
@@ -55,6 +54,10 @@ Use this for:
 - unit tests
 - non-device-specific validation
 
+Notes:
+- do not assume Guix is the default developer entrypoint
+- use repo-managed shells only if they materially help a local workflow
+
 ### Mode B: Jetson Orin Smoke Tests and Early Training
 
 This is the current first-class target.
@@ -62,7 +65,6 @@ This is the current first-class target.
 Preferred path:
 
 ```bash
-guix shell -m guix_orin.scm
 ./scripts/setup_orin.sh
 python3 tests/validate_orin_env.py
 ./scripts/run_orin_cuda_probe.sh
@@ -79,11 +81,16 @@ Use this for:
 Constraint:
 - Jetson depends on host-installed NVIDIA libraries and JetPack components
 - this path is reproducible only up to that vendor boundary
-- `guix_orin.scm` pins the shell to Python 3.10 so `scripts/setup_orin.sh` can create the validated `.venv_orin310`
+- `scripts/setup_orin.sh` creates the validated Python 3.10 `.venv_orin310`
 - that venv uses the Jetson `jp6/cu126` torch wheel and `nvidia-cudss-cu12`
-- the same venv now carries the Layer 1 review stack (`ultralytics`, `flask`, `lap`, `torchvision`) without replacing the Jetson torch build
+- the same venv carries the stable Layer 1 review stack (`ultralytics`, `flask`, `lap`, `torchvision`) without replacing the Jetson torch build
 - Jetson system OpenCV is linked into the venv instead of installing a conflicting pip wheel
 - `scripts/run_orin_cuda_probe.sh` intentionally exposes only `libcudss` from the venv and uses JetPack system CUDA/cuDNN libs for the rest
+
+Stable versus experimental Orin split:
+- stable native path: JetPack-backed Python 3.10 via `.venv_orin310`
+- experimental SAM3 path: JetPack 6 / L4T R36.x containerized Python 3.12 via `Dockerfile.orin.sam3`
+- do not treat these as interchangeable environments
 
 Layer 1 review path:
 
@@ -137,24 +144,40 @@ Current DINOv3 boundary:
 Rollback-safe experimental Orin path:
 - `Dockerfile.orin` remains the stable Jetson baseline
 - `Dockerfile.orin.dinov3` is a separate experimental variant for DINOv3 availability
+- `Dockerfile.orin.sam3` is a separate experimental JetPack 6 path for official `facebookresearch/sam3`
 - rollback is operationally trivial:
   - keep using `Dockerfile.orin`
   - or stop tagging/publishing the experimental image
 - recommended image naming:
   - stable: `hoopsense-orin:stable`
   - experimental: `hoopsense-orin:dinov3-exp1`
+  - experimental SAM3: `hoopsense-orin:sam3-exp1`
+
+Experimental SAM3 container notes:
+- this path is for JetPack 6 / L4T R36.x hosts only
+- it is intended to validate the full Layer 1 artifact generation path end to end, not just a SAM sidecar
+- it currently builds from the official NVIDIA image `nvcr.io/nvidia/l4t-jetpack:r36.4.0` and layers the Jetson PyTorch wheel plus repo-local dependencies on top
+- use:
+  - `scripts/build_orin_sam3_docker.sh`
+  - `scripts/run_orin_layer1_docker.sh`
+  - `scripts/generate_layer1_annotations_docker.sh`
+  - `scripts/run_orin_cuda_probe_docker.sh`
+- the stable native Orin path remains:
+  - `scripts/setup_orin.sh`
+  - `scripts/run_orin_layer1_python.sh`
+- do not mount `.venv_orin310` into the container; the Python 3.12 runtime must stay self-contained
 
 ## Reproducibility Strategy
 
 HoopSense uses this priority order:
-1. `Guix` where the environment can be controlled directly
-2. `Guix` plus explicit vendor bridge on Jetson
-3. `Docker` where packaging or runtime isolation is needed
+1. explicit target-specific scripts and pinned runtime assumptions
+2. `Docker` for cloud packaging and experimental runtime isolation
+3. optional repo-managed shells where they still provide local value
 
 This means:
-- Guix is the preferred developer entrypoint
-- Docker is the fallback packaging boundary
-- Docker should not be presented as the native Orin environment
+- the stable native Orin scripts are the source of truth for Jetson validation
+- Docker is the primary boundary for cloud work and experimental JetPack 6 / SAM3 paths
+- checked-in Guix files are legacy conveniences, not the primary operating model
 
 ## CI Strategy
 
