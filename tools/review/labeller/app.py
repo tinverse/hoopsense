@@ -3,6 +3,14 @@ import cv2
 import numpy as np
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory
+from tools.review.labeller.sam_refiner import (
+    DEFAULT_SAM3_CHECKPOINT,
+    DEFAULT_SAM3_REPO_MODEL,
+    DEFAULT_SAM3_TEXT_PROMPT,
+    _is_hf_available,
+    _is_sam3_available,
+    _normalize_binary_mask,
+)
 
 app = Flask(__name__)
 
@@ -26,6 +34,9 @@ VALID_FEEDBACK_ISSUES = {
     "uncertain_play_state",
     "general_note",
 }
+SAM3_INTERACTIVE_DEVICE = "cuda:0"
+SAM3_INTERACTIVE_MAX_PROPOSALS = 12
+_SAM3_INTERACTIVE_SESSION = None
 
 
 def _line_primitive(label, family, endpoints_xy):
@@ -187,6 +198,162 @@ def find_artifact_frame(artifact, frame_idx):
     return None
 
 
+class Sam3InteractiveSession:
+    def __init__(
+        self,
+        *,
+        model_name=DEFAULT_SAM3_REPO_MODEL,
+        checkpoint_filename=DEFAULT_SAM3_CHECKPOINT,
+        device=SAM3_INTERACTIVE_DEVICE,
+    ):
+        self.model_name = model_name
+        self.checkpoint_filename = checkpoint_filename
+        self.device = device
+        self.model = None
+        self.processor = None
+
+    def _gpu_ready(self):
+        if not str(self.device).startswith("cuda"):
+            return False
+        import torch
+
+        return bool(torch.cuda.is_available())
+
+    def load(self):
+        if self.model is not None and self.processor is not None:
+            return self
+        if not _is_sam3_available():
+            raise RuntimeError("sam3 repo package is not installed")
+        if not _is_hf_available():
+            raise RuntimeError("huggingface_hub is not available")
+        if not self._gpu_ready():
+            raise RuntimeError("cuda_unavailable")
+
+        from huggingface_hub import hf_hub_download
+        from sam3.model_builder import build_sam3_image_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+
+        checkpoint_path = hf_hub_download(
+            repo_id=self.model_name,
+            filename=self.checkpoint_filename,
+        )
+        runtime_device = "cuda" if str(self.device).startswith("cuda") else self.device
+        self.model = build_sam3_image_model(
+            checkpoint_path=str(Path(checkpoint_path)),
+            load_from_HF=False,
+            device=runtime_device,
+            eval_mode=True,
+        )
+        self.processor = Sam3Processor(self.model, device=runtime_device)
+        return self
+
+    def detect(self, frame_bgr, prompt):
+        self.load()
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        image_height, image_width = frame_bgr.shape[:2]
+        torch = None
+        autocast_context = None
+        if str(self.device).startswith("cuda"):
+            import torch as _torch
+
+            torch = _torch
+            autocast_context = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        from PIL import Image
+
+        if autocast_context is not None:
+            with autocast_context:
+                state = self.processor.set_image(Image.fromarray(frame_rgb))
+                output = self.processor.set_text_prompt(state=state, prompt=prompt)
+        else:
+            state = self.processor.set_image(Image.fromarray(frame_rgb))
+            output = self.processor.set_text_prompt(state=state, prompt=prompt)
+
+        masks = output.get("masks")
+        scores = output.get("scores")
+        if masks is None or scores is None or len(scores) == 0:
+            return []
+        score_values = scores.detach().float()
+        proposals = []
+        for idx in range(len(score_values)):
+            mask = _normalize_binary_mask(masks[idx].detach().float().cpu().numpy())
+            if mask is None or mask.sum() <= 0:
+                continue
+            if mask.shape[:2] != frame_bgr.shape[:2]:
+                mask = cv2.resize(mask, (image_width, image_height), interpolation=cv2.INTER_NEAREST)
+                mask = np.array(mask > 0, dtype=np.uint8)
+            ys, xs = np.where(mask > 0)
+            if len(xs) == 0 or len(ys) == 0:
+                continue
+            x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+            area_px = int(mask.sum())
+            bbox_w = max(1, x2 - x1)
+            bbox_h = max(1, y2 - y1)
+            mask_points = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+            polygons = []
+            for contour in mask_points:
+                if len(contour) < 3:
+                    continue
+                epsilon = 0.01 * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                polygons.append([[int(pt[0][0]), int(pt[0][1])] for pt in approx])
+            proposals.append({
+                "score": round(float(score_values[idx].item()), 4),
+                "bbox_xyxy": [x1, y1, x2, y2],
+                "bbox_xywh": [round(float((x1 + x2) * 0.5), 2), round(float((y1 + y2) * 0.5), 2), float(bbox_w), float(bbox_h)],
+                "mask_area_px": area_px,
+                "mask_area_ratio": round(area_px / max(float(image_width * image_height), 1.0), 6),
+                "polygons_xy": polygons,
+            })
+        proposals.sort(key=lambda item: float(item["score"]), reverse=True)
+        if torch is not None:
+            torch.cuda.empty_cache()
+        return proposals[:SAM3_INTERACTIVE_MAX_PROPOSALS]
+
+
+def get_sam3_interactive_session():
+    global _SAM3_INTERACTIVE_SESSION
+    if _SAM3_INTERACTIVE_SESSION is None:
+        _SAM3_INTERACTIVE_SESSION = Sam3InteractiveSession()
+    return _SAM3_INTERACTIVE_SESSION
+
+
+def resolve_clip_video_path(clip_id, relative_path=None):
+    if relative_path:
+        candidate = CLIPS_DIR / relative_path
+        if candidate.exists():
+            return candidate
+    for domain in ("nba", "ncaa", "youth", "playground"):
+        candidate = CLIPS_DIR / domain / f"{clip_id}.mp4"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_frame_bgr(video_path, frame_idx):
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_idx)))
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise RuntimeError(f"Could not read frame {frame_idx} from {video_path}")
+    return frame
+
+
+def resolve_frame_index(video_path, frame_idx=None, t_ms=None):
+    if frame_idx is not None:
+        return max(0, int(frame_idx))
+    if t_ms is None:
+        raise RuntimeError("frame_idx_missing")
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+    return max(0, int(round((float(t_ms) / 1000.0) * float(fps))))
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -225,6 +392,58 @@ def get_perception_overlay(clip_id):
     artifact["enabled"] = True
     artifact["status"] = "ready"
     return jsonify(artifact)
+
+
+@app.route('/api/sam_detect', methods=['POST'])
+def sam_detect():
+    data = request.json or {}
+    clip_id = data.get("clip_id")
+    prompt = str(data.get("prompt") or DEFAULT_SAM3_TEXT_PROMPT).strip()
+    if not clip_id:
+        return jsonify({"status": "error", "reason": "clip_id_missing"}), 400
+    if not prompt:
+        return jsonify({"status": "error", "reason": "prompt_missing"}), 400
+
+    frame_idx = data.get("frame_idx")
+    t_ms = data.get("t_ms")
+    artifact = load_perception_artifact(clip_id)
+    if frame_idx is None and t_ms is not None and artifact:
+        target_ms = float(t_ms)
+        best_frame = None
+        best_delta = None
+        for frame in artifact.get("frames", []):
+            delta = abs(float(frame.get("t_ms") or 0.0) - target_ms)
+            if best_delta is None or delta < best_delta:
+                best_delta = delta
+                best_frame = frame
+        if best_frame is not None:
+            frame_idx = int(best_frame.get("frame_idx") or 0)
+    video_path = resolve_clip_video_path(clip_id, data.get("clip_path"))
+    if video_path is None:
+        return jsonify({"status": "error", "reason": "clip_missing"}), 404
+
+    try:
+        resolved_frame_idx = resolve_frame_index(video_path, frame_idx=frame_idx, t_ms=t_ms)
+        frame_bgr = load_frame_bgr(video_path, resolved_frame_idx)
+        session = get_sam3_interactive_session()
+        proposals = session.detect(frame_bgr, prompt)
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "reason": "sam_detect_failed",
+            "detail": str(exc),
+        }), 500
+
+    return jsonify({
+        "status": "success",
+        "clip_id": clip_id,
+        "clip_path": data.get("clip_path"),
+        "frame_idx": int(resolved_frame_idx),
+        "t_ms": int(data.get("t_ms") or 0),
+        "prompt": prompt,
+        "proposal_count": len(proposals),
+        "proposals": proposals,
+    })
 
 
 @app.route('/api/perception_feedback', methods=['POST'])

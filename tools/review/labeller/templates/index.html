@@ -28,6 +28,11 @@
         #feedback-panel select, #feedback-panel input { width: 100%; background: #111; color: #ffd49a; border: 1px solid #5f4521; padding: 8px; margin-bottom: 10px; }
         #feedback-status { color: #ffd49a; font-size: 0.9em; }
         .feedback-btn { background: #3c2414; border-color: #b17133; color: #ffd49a; }
+        #sam-panel { background: #10131d; border: 1px solid #3d5a86; padding: 12px; margin-bottom: 20px; }
+        #sam-panel h4 { margin: 0 0 10px; color: #a9c8ff; }
+        #sam-panel input { width: 100%; background: #111; color: #dbe8ff; border: 1px solid #3d5a86; padding: 8px; margin-bottom: 10px; }
+        #sam-status { color: #a9c8ff; font-size: 0.9em; line-height: 1.35; }
+        .sam-btn { background: #15263d; border-color: #5f8fd8; color: #dbe8ff; }
         #transport-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .transport-btn { background: #182218; border-color: #3f7a3f; color: #bfffbf; text-align: center; }
         #frame-readout { color: #7dffff; font-size: 0.95em; margin: 10px 0 0; }
@@ -77,6 +82,14 @@
                 <button class="btn feedback-btn" id="feedback-uncertain">UNCERTAIN</button>
                 <button class="btn feedback-btn" id="feedback-note-save">SAVE NOTE</button>
                 <div id="feedback-status">Select a clip and frame, then save structured feedback.</div>
+            </div>
+
+            <div id="sam-panel">
+                <h4>SAM FRAME DETECT</h4>
+                <input id="sam-prompt" type="text" value="basketball players on the court" placeholder="SAM prompt: basketball player, referee, orange basketball..." />
+                <button class="btn sam-btn" id="sam-detect-btn">DETECT ON CURRENT FRAME</button>
+                <button class="btn sam-btn" id="sam-clear-btn">CLEAR SAM OVERLAY</button>
+                <div id="sam-status">Pause on a frame, enter a prompt, then run one-shot SAM detection on that exact frame.</div>
             </div>
 
             <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">

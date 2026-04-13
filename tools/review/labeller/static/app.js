@@ -13,6 +13,10 @@ const explainerStatus = document.getElementById('explainer-status');
 const feedbackTrackList = document.getElementById('feedback-track-list');
 const feedbackNote = document.getElementById('feedback-note');
 const feedbackStatus = document.getElementById('feedback-status');
+const samPromptInput = document.getElementById('sam-prompt');
+const samDetectButton = document.getElementById('sam-detect-btn');
+const samClearButton = document.getElementById('sam-clear-btn');
+const samStatus = document.getElementById('sam-status');
 const playPauseButton = document.getElementById('btn-play-pause');
 const frameReadout = document.getElementById('frame-readout');
 
@@ -26,6 +30,7 @@ let perceptionFrames = [];
 let lastFeedbackFrameIdx = null;
 let perceptionVisible = false;
 let playbackOverlayHandle = null;
+let samFrameDetection = null;
 const JERSEY_UI_MIN_CONFIDENCE = 0.9;
 const JERSEY_UI_MIN_EVIDENCE = 3;
 
@@ -125,6 +130,13 @@ function syncPerceptionUI() {
     updateTransportButton();
 }
 
+function clearSamOverlayState(message = 'Pause on a frame, enter a prompt, then run one-shot SAM detection on that exact frame.') {
+    samFrameDetection = null;
+    if (samStatus) {
+        samStatus.textContent = message;
+    }
+}
+
 function updateFrameReadout() {
     if (!frameReadout) return;
     const frame = getCurrentPerceptionFrame();
@@ -219,6 +231,7 @@ function resetUI() {
     isCalibrating = true;
     updateCalibrationStats();
     document.getElementById('calibration-hint').style.display = 'block';
+    clearSamOverlayState();
     
     player.onloadedmetadata = () => {
         syncCanvasSize();
@@ -307,7 +320,7 @@ document.getElementById('btn-dribble').addEventListener('click', () => saveLabel
 document.getElementById('btn-idle').addEventListener('click', () => saveLabel('idle'));
 
 function isTypingInFeedbackNote() {
-    return document.activeElement === feedbackNote;
+    return document.activeElement === feedbackNote || document.activeElement === samPromptInput;
 }
 
 // 4. Keyboard Shortcuts
@@ -417,6 +430,12 @@ function getCurrentPerceptionFrame() {
         }
     }
     return bestFrame;
+}
+
+function estimateCurrentFrameIndex() {
+    const frame = getCurrentPerceptionFrame();
+    if (frame) return frame.frame_idx;
+    return Math.max(0, Math.round(player.currentTime * 30));
 }
 
 function getCurrentLivePlaySegment(frame) {
@@ -559,6 +578,51 @@ function drawBallOverlay(ballDetection) {
     ctx.restore();
 }
 
+function drawSamDetectionOverlay(samDetection) {
+    if (!samDetection || !Array.isArray(samDetection.proposals)) return;
+    samDetection.proposals.forEach((proposal, index) => {
+        const bbox = proposal.bbox_xyxy || null;
+        const color = index === 0 ? '#ff4fd8' : '#c38cff';
+        const fill = index === 0 ? 'rgba(255, 79, 216, 0.20)' : 'rgba(195, 140, 255, 0.12)';
+        const polygons = Array.isArray(proposal.polygons_xy) ? proposal.polygons_xy : [];
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = fill;
+        ctx.lineWidth = index === 0 ? 3 : 2;
+        polygons.forEach((polygon) => {
+            if (!Array.isArray(polygon) || polygon.length < 3) return;
+            ctx.beginPath();
+            ctx.moveTo(polygon[0][0], polygon[0][1]);
+            for (let i = 1; i < polygon.length; i += 1) {
+                ctx.lineTo(polygon[i][0], polygon[i][1]);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+        });
+        if (bbox) {
+            const [x1, y1, x2, y2] = bbox;
+            ctx.setLineDash([8, 5]);
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            ctx.setLineDash([]);
+            const label = `SAM ${Math.round((proposal.score || 0) * 100)}%`;
+            const labelWidth = 110;
+            const labelHeight = 22;
+            const labelX = Math.max(10, Math.min(overlay.width - labelWidth - 10, x1));
+            const labelY = Math.max(10, y1 - labelHeight - 4);
+            ctx.fillStyle = 'rgba(28, 15, 43, 0.92)';
+            ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+            ctx.strokeStyle = color;
+            ctx.strokeRect(labelX, labelY, labelWidth, labelHeight);
+            ctx.fillStyle = '#f3dcff';
+            ctx.font = 'bold 14px monospace';
+            ctx.fillText(label, labelX + 8, labelY + 15);
+        }
+        ctx.restore();
+    });
+}
+
 function redrawOverlay() {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     calibrationPoints.forEach(p => {
@@ -625,7 +689,64 @@ function redrawOverlay() {
     } else if (perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
     }
+    const currentFrameIdx = frame ? frame.frame_idx : estimateCurrentFrameIndex();
+    if (samFrameDetection && samFrameDetection.frame_idx === currentFrameIdx) {
+        drawSamDetectionOverlay(samFrameDetection);
+    }
 }
+
+async function runSamDetectOnCurrentFrame() {
+    if (!activeClip) {
+        if (samStatus) samStatus.textContent = 'Select a clip first.';
+        return;
+    }
+    const frame = getCurrentPerceptionFrame();
+    const frameIdx = frame ? frame.frame_idx : estimateCurrentFrameIndex();
+    const tMs = frame ? frame.t_ms : Math.round(player.currentTime * 1000);
+    const prompt = (samPromptInput?.value || '').trim();
+    if (!prompt) {
+        if (samStatus) samStatus.textContent = 'Enter a prompt first.';
+        return;
+    }
+    if (samStatus) {
+        samStatus.textContent = `Running SAM on frame ${frameIdx} with prompt "${prompt}"...`;
+    }
+    try {
+        const response = await fetch('/api/sam_detect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                clip_id: activeClip.id,
+                clip_path: activeClip.path,
+                frame_idx: frameIdx,
+                t_ms: tMs,
+                prompt,
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.status !== 'success') {
+            throw new Error(payload.detail || payload.reason || 'request_failed');
+        }
+        samFrameDetection = payload;
+        if (samStatus) {
+            samStatus.textContent = `Frame ${payload.frame_idx} // prompt "${payload.prompt}" // ${payload.proposal_count} SAM proposals`;
+        }
+        redrawOverlay();
+    } catch (err) {
+        if (samStatus) {
+            samStatus.textContent = `SAM detect failed: ${err.message}`;
+        }
+    }
+}
+
+samDetectButton?.addEventListener('click', () => {
+    runSamDetectOnCurrentFrame();
+});
+
+samClearButton?.addEventListener('click', () => {
+    clearSamOverlayState('SAM overlay cleared.');
+    redrawOverlay();
+});
 
 function populateFeedbackTrackList() {
     const frame = getCurrentPerceptionFrame();
