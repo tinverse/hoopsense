@@ -27,6 +27,8 @@ venv/
 .DS_Store
 
 # Local agent state
+.local_models/
+tmp_runs/
 .gemini/
 venv_temp/
 venv_hoops/

@@ -7,8 +7,10 @@ import numpy as np
 from PIL import Image
 
 
-DEFAULT_SAM3_REPO_MODEL = "facebook/sam3.1"
-DEFAULT_SAM3_CHECKPOINT = "sam3.1_multiplex.pt"
+DEFAULT_SAM3_REPO_MODEL = "facebook/sam3"
+DEFAULT_SAM3_CHECKPOINT = "sam3.pt"
+DEFAULT_SAM3_MULTIPLEX_REPO_MODEL = "facebook/sam3.1"
+DEFAULT_SAM3_MULTIPLEX_CHECKPOINT = "sam3.1_multiplex.pt"
 DEFAULT_SAM3_TEXT_PROMPT = "basketball player"
 DEFAULT_SAM3_BALL_PROMPT = "basketball"
 SAM_MIN_COMPONENT_AREA_RATIO = 0.0025
@@ -18,6 +20,11 @@ SAM_PROPOSAL_IOU_MAX = 0.30
 SAM_BALL_MIN_MASK_AREA_PX = 8
 SAM_BALL_MAX_MASK_AREA_RATIO = 0.01
 SAM_BALL_MAX_ASPECT_ERROR = 0.8
+
+# The upstream SAM3 package pairs `build_sam3_image_model(...)` with the base
+# image checkpoint (`facebook/sam3`, `sam3.pt`). The multiplex SAM 3.1
+# checkpoint is intended for the multiplex/video predictor path and partially
+# loads into the image builder, which emits missing-key warnings.
 
 
 def _is_hf_available():

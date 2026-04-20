@@ -6,12 +6,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 IMAGE_TAG="${HOOPSENSE_ORIN_SAM3_IMAGE:-hoopsense-orin:sam3-exp1}"
 CONTAINER_NAME="${HOOPSENSE_ORIN_SAM3_CONTAINER:-hoopsense-orin-sam3-$$}"
-HF_CACHE_DIR="${HOOPSENSE_HF_CACHE_DIR:-${HOME}/.cache/huggingface}"
-TORCH_CACHE_DIR="${HOOPSENSE_TORCH_CACHE_DIR:-${HOME}/.cache/torch}"
-YOLO_CACHE_DIR="${HOOPSENSE_YOLO_CACHE_DIR:-${HOME}/.cache/ultralytics}"
+HF_CACHE_DIR="${HOOPSENSE_HF_CACHE_DIR:-${REPO_ROOT}/.local_models/huggingface}"
+TORCH_CACHE_DIR="${HOOPSENSE_TORCH_CACHE_DIR:-${REPO_ROOT}/.local_models/torch}"
+YOLO_CACHE_DIR="${HOOPSENSE_YOLO_CACHE_DIR:-${REPO_ROOT}/.local_models/ultralytics}"
+EASYOCR_CACHE_DIR="${HOOPSENSE_EASYOCR_CACHE_DIR:-${REPO_ROOT}/.local_models/easyocr}"
 EXTRA_DOCKER_ARGS="${HOOPSENSE_ORIN_SAM3_DOCKER_ARGS:-}"
 
-mkdir -p "${HF_CACHE_DIR}" "${TORCH_CACHE_DIR}" "${YOLO_CACHE_DIR}"
+mkdir -p "${HF_CACHE_DIR}" "${TORCH_CACHE_DIR}" "${YOLO_CACHE_DIR}" "${EASYOCR_CACHE_DIR}"
 
 if [ -f "${REPO_ROOT}/.secrets" ]; then
   # shellcheck disable=SC1091
@@ -30,6 +31,7 @@ DOCKER_CMD=(
   -v "${HF_CACHE_DIR}:/cache/huggingface"
   -v "${TORCH_CACHE_DIR}:/cache/torch"
   -v "${YOLO_CACHE_DIR}:/cache/ultralytics"
+  -v "${EASYOCR_CACHE_DIR}:/root/.EasyOCR"
   -w /app
   -e PYTHONPATH=/app
   -e HF_HOME=/cache/huggingface
