@@ -781,6 +781,10 @@ class BootstrapContextTest(unittest.TestCase):
                     {
                         "recovered_candidate": True,
                         "active_player_candidate": True,
+                        "identity_track_id": 19,
+                        "identity_best_canonical_track_id": 3,
+                        "identity_option_count": 2,
+                        "identity_is_ambiguous": True,
                         "identity_track_source": "repaired_recovery",
                         "active_player_reasons": {
                             "scene_center_prior": 0.0,
@@ -837,6 +841,8 @@ class BootstrapContextTest(unittest.TestCase):
             identity_hypotheses={
                 "group_count": 1,
                 "selected_link_count": 1,
+                "track_identity_option_count": 2,
+                "ambiguous_track_identity_option_count": 1,
             },
         )
         self.assertEqual(summary["kind"], "staged_perception_summary_v1")
@@ -844,6 +850,13 @@ class BootstrapContextTest(unittest.TestCase):
         self.assertEqual(summary["scene_prior"]["strengthened_detection_count"], 1)
         self.assertEqual(summary["grounded_yolo"]["rerun_applied_frame_count"], 1)
         self.assertEqual(summary["sam"]["recovered_candidate_active_count"], 1)
+        self.assertEqual(summary["identity"]["track_identity_option_count"], 2)
+        self.assertEqual(summary["identity"]["ambiguous_track_identity_option_count"], 1)
+        self.assertEqual(summary["identity"]["identity_option_detection_count"], 1)
+        self.assertEqual(summary["identity"]["identity_option_total"], 2)
+        self.assertEqual(summary["identity"]["ambiguous_detection_count"], 1)
+        self.assertEqual(summary["identity"]["ambiguous_frame_count"], 1)
+        self.assertEqual(summary["identity"]["best_canonical_delta_detection_count"], 1)
         self.assertEqual(summary["identity"]["repaired_recovery_count"], 1)
         self.assertEqual(summary["ball"]["predictive_trigger_count"], 1)
         self.assertEqual(summary["ball"]["fallback_trigger_count"], 1)

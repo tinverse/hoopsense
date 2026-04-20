@@ -3037,6 +3037,11 @@ def _build_staged_perception_summary(
     recovered_candidate_active_count = 0
     repaired_recovery_count = 0
     synthesized_identity_bridge_count = 0
+    ambiguous_identity_detection_count = 0
+    ambiguous_identity_frame_count = 0
+    identity_option_detection_count = 0
+    identity_option_total = 0
+    reranked_identity_delta_detection_count = 0
     grounded_rerun_applied_frame_count = 0
     grounded_rerun_detection_count = 0
     collapse_triggered_frame_count = 0
@@ -3052,6 +3057,7 @@ def _build_staged_perception_summary(
 
     for frame in frames:
         grounding_context = frame.get("grounding_context") or {}
+        frame_has_ambiguous_identity = False
         if grounding_context.get("yolo_rerun_applied"):
             grounded_rerun_applied_frame_count += 1
             grounded_rerun_detection_count += int(grounding_context.get("yolo_rerun_detection_count") or 0)
@@ -3094,10 +3100,25 @@ def _build_staged_perception_summary(
                 recovered_candidate_count += 1
                 if detection.get("active_player_candidate"):
                     recovered_candidate_active_count += 1
+            identity_option_count = int(detection.get("identity_option_count") or 0)
+            if identity_option_count > 0:
+                identity_option_detection_count += 1
+                identity_option_total += identity_option_count
+            if detection.get("identity_is_ambiguous"):
+                ambiguous_identity_detection_count += 1
+                frame_has_ambiguous_identity = True
+            if (
+                detection.get("identity_track_id") is not None
+                and detection.get("identity_best_canonical_track_id") is not None
+                and int(detection.get("identity_track_id")) != int(detection.get("identity_best_canonical_track_id"))
+            ):
+                reranked_identity_delta_detection_count += 1
             if detection.get("identity_track_source") == "repaired_recovery":
                 repaired_recovery_count += 1
             if detection.get("synthesized") and (detection.get("identity_repair") or {}).get("kind") == "short_gap_identity_bridge":
                 synthesized_identity_bridge_count += 1
+        if frame_has_ambiguous_identity:
+            ambiguous_identity_frame_count += 1
 
     help_signal_count = sum(
         int(value > 0)
@@ -3145,6 +3166,13 @@ def _build_staged_perception_summary(
         "identity": {
             "hypothesis_group_count": int(identity_hypotheses.get("group_count") or 0),
             "selected_link_count": int(identity_hypotheses.get("selected_link_count") or 0),
+            "track_identity_option_count": int(identity_hypotheses.get("track_identity_option_count") or 0),
+            "ambiguous_track_identity_option_count": int(identity_hypotheses.get("ambiguous_track_identity_option_count") or 0),
+            "identity_option_detection_count": int(identity_option_detection_count),
+            "identity_option_total": int(identity_option_total),
+            "ambiguous_detection_count": int(ambiguous_identity_detection_count),
+            "ambiguous_frame_count": int(ambiguous_identity_frame_count),
+            "best_canonical_delta_detection_count": int(reranked_identity_delta_detection_count),
             "repaired_recovery_count": int(repaired_recovery_count),
             "synthesized_bridge_count": int(synthesized_identity_bridge_count),
         },

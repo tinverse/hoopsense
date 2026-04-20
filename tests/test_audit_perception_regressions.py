@@ -3,10 +3,37 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.audit_perception_regressions import build_report
+from scripts.audit_perception_regressions import build_report, summarize_frame
 
 
 class AuditPerceptionRegressionsTest(unittest.TestCase):
+    def test_summarize_frame_reports_identity_ambiguity_metrics(self):
+        summary = summarize_frame({
+            "detections": [
+                {
+                    "track_id": 19,
+                    "identity_track_id": 19,
+                    "identity_option_track_id": 19,
+                    "identity_is_ambiguous": True,
+                    "identity_best_canonical_track_id": 3,
+                    "motion_speed_px": 4.0,
+                    "bbox_xyxy": [0, 0, 10, 10],
+                },
+                {
+                    "track_id": 3,
+                    "identity_track_id": 3,
+                    "identity_option_track_id": 3,
+                    "identity_is_ambiguous": False,
+                    "identity_best_canonical_track_id": 3,
+                    "motion_speed_px": 9.0,
+                    "bbox_xyxy": [20, 0, 30, 10],
+                },
+            ]
+        })
+        self.assertEqual(summary["identity_option_track_ids"], ["19", "3"])
+        self.assertEqual(summary["ambiguous_identity_detection_count"], 1)
+        self.assertEqual(summary["best_canonical_delta_detection_count"], 1)
+
     def test_build_report_summarizes_case_metrics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -56,6 +83,10 @@ class AuditPerceptionRegressionsTest(unittest.TestCase):
                         "detections": [
                             {
                                 "track_id": 6,
+                                "identity_track_id": 6,
+                                "identity_option_track_id": 6,
+                                "identity_is_ambiguous": True,
+                                "identity_best_canonical_track_id": 2,
                                 "bbox_xyxy": [0, 0, 100, 200],
                                 "uniform_bucket": "dark",
                                 "motion_speed_px": 0.0,
@@ -86,6 +117,8 @@ class AuditPerceptionRegressionsTest(unittest.TestCase):
             self.assertEqual(case["frame_metrics"]["uniform_bucket_counts"]["light"], 1)
             self.assertIn("low_motion_detection_count", case["category_signals"])
             self.assertIn("active_uniform_bucket_counts", case["category_signals"])
+            self.assertEqual(case["frame_metrics"]["ambiguous_identity_detection_count"], 1)
+            self.assertEqual(case["frame_metrics"]["best_canonical_delta_detection_count"], 1)
             self.assertEqual(case["frame_metrics"]["live_play_label"], "dead_ball")
 
             summary = report["category_summary"]

@@ -644,6 +644,21 @@ levels:
       title: Add regressions and artifact summary fields for runtime identity-option annotations
       owner: A0
       status: completed
+    - id: L3.162
+      parent: L3.66
+      title: Surface ambiguity-aware identity counts in clip-level staged perception summaries instead of only committed repaired identity totals
+      owner: A0
+      status: completed
+    - id: L3.163
+      parent: L3.66
+      title: Make regression audit reports consume bounded identity-option fields and preferred-canonical deltas instead of only committed canonical IDs
+      owner: A0
+      status: completed
+    - id: L3.164
+      parent: L3.66
+      title: Add regressions for ambiguity-aware staged identity summaries and audit signals
+      owner: A0
+      status: completed
     - id: L3.67
       parent: L2.3
       title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair

@@ -60,6 +60,9 @@ CATEGORY_SIGNAL_MAP = {
         "track_ids",
         "canonical_track_ids",
         "canonical_track_count",
+        "identity_option_track_ids",
+        "ambiguous_identity_detection_count",
+        "best_canonical_delta_detection_count",
         "motion_speed_max",
         "motion_speed_median",
         "synthesized_detection_count",
@@ -142,6 +145,11 @@ def summarize_frame(frame: dict) -> dict:
         for detection in detections
         if detection.get("identity_track_id", detection.get("track_id")) is not None
     )
+    identity_option_track_ids = sorted(
+        str(detection.get("identity_option_track_id"))
+        for detection in detections
+        if detection.get("identity_option_track_id") is not None
+    )
     active = [d for d in detections if d.get("active_player_candidate")]
     motion_speeds = [float(d.get("motion_speed_px") or 0.0) for d in detections]
     uniform_bucket_counts = Counter(
@@ -151,6 +159,14 @@ def summarize_frame(frame: dict) -> dict:
         str(d.get("uniform_bucket") or "unknown") for d in active
     )
     synthesized_count = sum(1 for d in detections if d.get("synthesized"))
+    ambiguous_identity_detection_count = sum(1 for d in detections if d.get("identity_is_ambiguous"))
+    best_canonical_delta_detection_count = sum(
+        1
+        for d in detections
+        if d.get("identity_track_id") is not None
+        and d.get("identity_best_canonical_track_id") is not None
+        and str(d.get("identity_track_id")) != str(d.get("identity_best_canonical_track_id"))
+    )
     low_motion_count = sum(
         1 for speed in motion_speeds if speed < MOTION_ACTIVE_THRESHOLD_PX
     )
@@ -173,6 +189,9 @@ def summarize_frame(frame: dict) -> dict:
         "track_ids": track_ids,
         "canonical_track_ids": canonical_track_ids,
         "canonical_track_count": len(set(canonical_track_ids)),
+        "identity_option_track_ids": identity_option_track_ids,
+        "ambiguous_identity_detection_count": ambiguous_identity_detection_count,
+        "best_canonical_delta_detection_count": best_canonical_delta_detection_count,
         "active_candidate_count": len(active),
         "active_candidate_track_ids": sorted(
             str(d.get("track_id"))
