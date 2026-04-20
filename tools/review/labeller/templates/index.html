@@ -23,6 +23,10 @@
         #explainer-toggle { background: #0f2730; border-color: #3ed8ff; color: #7dffff; }
         #explainer-status { color: #7dffff; font-size: 0.9em; margin-top: 8px; }
         #explainer-description { color: #cfeeee; font-size: 0.92em; line-height: 1.4; }
+        #identity-review-panel { background: #14101b; border: 1px solid #6951a8; padding: 12px; margin-bottom: 20px; display: none; }
+        #identity-review-panel h4 { margin: 0 0 10px; color: #d8c6ff; }
+        #identity-review-status { color: #d8c6ff; font-size: 0.9em; margin-bottom: 8px; }
+        #identity-review-details { color: #efe8ff; font-size: 0.9em; line-height: 1.4; white-space: pre-wrap; }
         #feedback-panel { background: #181210; border: 1px solid #7f5b29; padding: 12px; margin-bottom: 20px; }
         #feedback-panel h4 { margin: 0 0 10px; color: #ffd49a; }
         #feedback-panel select, #feedback-panel input { width: 100%; background: #111; color: #ffd49a; border: 1px solid #5f4521; padding: 8px; margin-bottom: 10px; }
@@ -64,6 +68,12 @@
                 <h4 id="explainer-title">Layer 1 Perception</h4>
                 <div id="explainer-description">Select a clip with a generated perception artifact to inspect real detections, tracks, and pose keypoints.</div>
                 <div id="explainer-status">No perception artifact loaded</div>
+            </div>
+
+            <div id="identity-review-panel">
+                <h4>IDENTITY WORLD REVIEW</h4>
+                <div id="identity-review-status">No identity world summary loaded</div>
+                <div id="identity-review-details">Select a clip with a Layer 1 artifact to inspect base vs jersey-reranked identity worlds.</div>
             </div>
 
             <div id="feedback-panel">

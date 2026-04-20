@@ -206,6 +206,9 @@ The current highest-priority frontier is:
   - [x] Re-rank bounded global identity hypotheses using jersey option consensus as later-pass evidence without mutating committed runtime identities
   - [x] Emit conservative jersey-preferred canonical track annotations per detection from the selected later-pass global identity world
   - [x] Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
+  - [x] Surface base versus jersey-reranked global identity world status in the labeller UI for reviewed Layer 1 artifacts
+  - [x] Show per-track preferred canonical identity changes caused by jersey-aware reranking in the labeller track inspector and selectors
+  - [x] Add labeller regressions or frontend wiring checks for the new identity-world review surfaces and align plan/docs
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
@@ -299,6 +302,9 @@ The current highest-priority frontier is:
   - [x] Re-rank bounded global identity hypotheses using jersey option consensus as later-pass evidence without mutating committed runtime identities
   - [x] Emit conservative jersey-preferred canonical track annotations per detection from the selected later-pass global identity world
   - [x] Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
+  - [x] Surface base versus jersey-reranked global identity world status in the labeller UI for reviewed Layer 1 artifacts
+  - [x] Show per-track preferred canonical identity changes caused by jersey-aware reranking in the labeller track inspector and selectors
+  - [x] Add labeller regressions or frontend wiring checks for the new identity-world review surfaces and align plan/docs
 - [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller

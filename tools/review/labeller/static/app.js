@@ -10,6 +10,9 @@ const explainerPanel = document.getElementById('explainer-panel');
 const explainerTitle = document.getElementById('explainer-title');
 const explainerDescription = document.getElementById('explainer-description');
 const explainerStatus = document.getElementById('explainer-status');
+const identityReviewPanel = document.getElementById('identity-review-panel');
+const identityReviewStatus = document.getElementById('identity-review-status');
+const identityReviewDetails = document.getElementById('identity-review-details');
 const feedbackTrackList = document.getElementById('feedback-track-list');
 const feedbackNote = document.getElementById('feedback-note');
 const feedbackStatus = document.getElementById('feedback-status');
@@ -124,8 +127,10 @@ function clampVideoTime(seconds) {
 }
 
 function syncPerceptionUI() {
+    const frame = getCurrentPerceptionFrame();
     redrawOverlay();
     populateFeedbackTrackList();
+    updateIdentityReviewPanel(frame);
     updateFrameReadout();
     updateTransportButton();
 }
@@ -227,11 +232,99 @@ function getVisibleJerseyMetadata(detection) {
     };
 }
 
+function getIdentityResolutionSummary() {
+    if (!(perceptionData && perceptionData.identity_global_hypothesis_resolution)) return null;
+    return perceptionData.identity_global_hypothesis_resolution;
+}
+
+function formatIdentityWorldSummary(frame) {
+    const resolution = getIdentityResolutionSummary();
+    if (!resolution || !(resolution.global_hypotheses || []).length) {
+        return {
+            status: 'No global identity world summary in this artifact.',
+            details: 'The current artifact does not expose a base vs jersey-reranked identity world comparison.',
+        };
+    }
+    const baseId = resolution.base_selected_global_hypothesis_id || 'none';
+    const selectedId = resolution.selected_global_hypothesis_id || 'none';
+    const changed = !!resolution.changed_selected_global_hypothesis;
+    const hypotheses = Array.isArray(resolution.global_hypotheses) ? resolution.global_hypotheses : [];
+    const selected = hypotheses.find(item => item.selected_after_jersey_tiebreak) || hypotheses[0] || null;
+    const selectedTrackIds = new Set();
+    if (frame && Array.isArray(frame.detections)) {
+        frame.detections.forEach(detection => {
+            if (detection.track_id !== null && detection.track_id !== undefined) {
+                selectedTrackIds.add(String(detection.track_id));
+            }
+        });
+    }
+    const changedTracks = [];
+    const preferred = resolution.preferred_track_resolution || {};
+    Object.entries(preferred).forEach(([trackId, record]) => {
+        if (!selectedTrackIds.has(String(trackId))) return;
+        const preferredCanonical = record.preferred_canonical_track_id;
+        const currentIdentity = frame && Array.isArray(frame.detections)
+            ? ((frame.detections.find(detection => String(detection.track_id) === String(trackId)) || {}).identity_track_id)
+            : null;
+        if (currentIdentity !== null && currentIdentity !== undefined && Number(currentIdentity) !== Number(preferredCanonical)) {
+            changedTracks.push({
+                trackId: Number(trackId),
+                currentIdentity: Number(currentIdentity),
+                preferredCanonical: Number(preferredCanonical),
+                jersey: record.selected_consensus_number || null,
+            });
+        }
+    });
+    changedTracks.sort((a, b) => a.trackId - b.trackId);
+    const topLines = hypotheses.slice(0, 3).map(item => {
+        const marker = item.selected_after_jersey_tiebreak ? '*' : '-';
+        const baseMarker = item.global_hypothesis_id === baseId ? ' base' : '';
+        const selectedMarker = item.global_hypothesis_id === selectedId ? ' selected' : '';
+        return `${marker} ${item.global_hypothesis_id}${baseMarker}${selectedMarker} // base ${item.base_total_score.toFixed(4)} // jersey ${item.jersey_bonus >= 0 ? '+' : ''}${item.jersey_bonus.toFixed(4)} // reranked ${item.reranked_total_score.toFixed(4)} // supported ${item.jersey_supported_track_count}`;
+    });
+    const frameLine = frame
+        ? `Frame ${frame.frame_idx} // visible tracks ${selectedTrackIds.size} // changed preferred canonical tracks ${changedTracks.length}`
+        : 'No active frame aligned to the current timestamp.';
+    const changedLine = changedTracks.length
+        ? `Changed now: ${changedTracks.map(item => `T${item.trackId} I${item.currentIdentity}->J${item.preferredCanonical}${item.jersey ? ` #${item.jersey}` : ''}`).join(' // ')}`
+        : 'Changed now: none';
+    const selectedLine = selected
+        ? `Selected world ${selectedId} // reranked margin ${Number(selected.reranked_score_margin_to_best || 0).toFixed(4)} // OCR tie-break weight ${Number(resolution.weight || 0).toFixed(2)}`
+        : `Selected world ${selectedId}`;
+    return {
+        status: `Identity worlds ${hypotheses.length} // base ${baseId} // reranked ${selectedId}${changed ? ' // CHANGED' : ' // unchanged'}`,
+        details: [frameLine, selectedLine, changedLine, 'Top worlds:', ...topLines].join('\n'),
+    };
+}
+
+function updateIdentityReviewPanel(frame) {
+    if (!identityReviewPanel || !identityReviewStatus || !identityReviewDetails) return;
+    if (!(perceptionData && perceptionData.enabled)) {
+        identityReviewPanel.style.display = 'none';
+        return;
+    }
+    identityReviewPanel.style.display = 'block';
+    const summary = formatIdentityWorldSummary(frame);
+    identityReviewStatus.textContent = summary.status;
+    identityReviewDetails.textContent = summary.details;
+}
+
+function buildTrackIdentityDeltaLabel(detection) {
+    const preferredCanonical = detection.identity_jersey_preferred_canonical_track_id;
+    const currentIdentity = detection.identity_track_id;
+    if (preferredCanonical === null || preferredCanonical === undefined) return '';
+    if (currentIdentity === null || currentIdentity === undefined) return '';
+    if (Number(currentIdentity) === Number(preferredCanonical)) return '';
+    return ` // I${currentIdentity}->J${preferredCanonical}`;
+}
+
 function resetUI() {
     isCalibrating = true;
     updateCalibrationStats();
     document.getElementById('calibration-hint').style.display = 'block';
     clearSamOverlayState();
+    if (identityReviewStatus) identityReviewStatus.textContent = 'No identity world summary loaded';
+    if (identityReviewDetails) identityReviewDetails.textContent = 'Select a clip with a Layer 1 artifact to inspect base vs jersey-reranked identity worlds.';
     
     player.onloadedmetadata = () => {
         syncCanvasSize();
@@ -646,6 +739,7 @@ function redrawOverlay() {
         const repairedIdentityCount = frame.detections.filter(d => d.identity_track_id !== undefined && d.identity_track_id !== null && d.identity_track_id !== d.track_id).length;
         const jerseyCount = frame.detections.filter(d => !!getVisibleJerseyMetadata(d)).length;
         const identityHypothesisCount = Array.isArray(frame.identity_hypothesis_group_ids) ? frame.identity_hypothesis_group_ids.length : 0;
+        const rerankedChangedTrackCount = frame.detections.filter(detection => detection.identity_jersey_preferred_canonical_track_id !== null && detection.identity_jersey_preferred_canonical_track_id !== undefined && detection.identity_track_id !== null && detection.identity_track_id !== undefined && Number(detection.identity_track_id) !== Number(detection.identity_jersey_preferred_canonical_track_id)).length;
         const ballDetection = frame.ball_state || frame.ball_detection || null;
         const continuitySegment = frame.continuity_segment_id !== undefined && frame.continuity_segment_id !== null
             ? ` continuity segment ${frame.continuity_segment_id}`
@@ -680,7 +774,7 @@ function redrawOverlay() {
             ballText +
             (frame.calibrated ? ` Calibration is active for this frame.${courtText}` : ' No calibration is active for this frame.');
         explainerStatus.textContent =
-            `${frame.detections.length} detections // ${onCourtCount} on-court // ${activeCount} active // ${demotedCount} demoted raw // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? `${ballDetection.state || 'observed'} ${Math.round((ballDetection.confidence || 0) * 100)}%` : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
+            `${frame.detections.length} detections // ${onCourtCount} on-court // ${activeCount} active // ${demotedCount} demoted raw // ${synthCount} repaired // ${repairedIdentityCount} identity-bridged // ${identityHypothesisCount} identity-hyp groups // ${jerseyCount} jersey-tagged // reranked changes ${rerankedChangedTrackCount} // continuity ${discontinuityLabel} @ ${discontinuityScore}${continuitySegment ? ` // seg ${frame.continuity_segment_id}` : ''} // ball ${ballDetection ? `${ballDetection.state || 'observed'} ${Math.round((ballDetection.confidence || 0) * 100)}%` : 'none'} // live ${livePlayLabel} @ ${livePlayScore} // ${Math.round(frame.t_ms / 10) / 100}s // ${perceptionData.model.name} // ${frame.calibrated ? 'calibrated' : 'raw'}`;
     } else if (perceptionVisible && perceptionData && perceptionData.enabled) {
         explainerPanel.style.display = 'block';
         explainerTitle.textContent = perceptionData.title || 'Layer 1 Perception Overlay';
@@ -772,6 +866,7 @@ function populateFeedbackTrackList() {
         const identityLabel = detection.identity_track_id !== null && detection.identity_track_id !== undefined && detection.identity_track_id !== detection.track_id
             ? ` // I${detection.identity_track_id}`
             : '';
+        const identityDeltaLabel = buildTrackIdentityDeltaLabel(detection);
         const visibleJersey = getVisibleJerseyMetadata(detection);
         const jerseyLabel = visibleJersey
             ? ` // #${visibleJersey.number}`
@@ -795,7 +890,7 @@ function populateFeedbackTrackList() {
         const stateLabel = detection.active_player_candidate
             ? ' // ACTIVE'
             : (detection.on_court_candidate ? ' // COURT' : ' // RAW');
-        opt.textContent = `Track ${trackId}${identityLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel}${stateLabel} // ${Math.round((detection.confidence || 0) * 100)}%${onCourtLabel}${activeLabel}${motionText}${appearanceText}${synthLabel}`;
+        opt.textContent = `Track ${trackId}${identityLabel}${identityDeltaLabel}${jerseyLabel}${jerseyConfidenceLabel}${uniformLabel}${stateLabel} // ${Math.round((detection.confidence || 0) * 100)}%${onCourtLabel}${activeLabel}${motionText}${appearanceText}${synthLabel}`;
         feedbackTrackList.appendChild(opt);
     });
 }
@@ -865,6 +960,8 @@ function loadPerceptionOverlay(clip) {
                 const jerseyCount = data.postprocess && data.postprocess.jersey_ocr ? data.postprocess.jersey_ocr.identity_count_with_consensus : 0;
                 const appearanceCount = data.postprocess && data.postprocess.appearance_cue ? data.postprocess.appearance_cue.prototype_count : 0;
                 const hypothesisCount = data.postprocess && data.postprocess.identity_hypotheses ? data.postprocess.identity_hypotheses.group_count : 0;
+                const rerankedChanged = data.postprocess && data.postprocess.jersey_ocr ? !!data.postprocess.jersey_ocr.changed_selected_global_hypothesis : false;
+                const selectedGlobalHypothesisId = data.postprocess && data.postprocess.jersey_ocr ? data.postprocess.jersey_ocr.selected_global_hypothesis_id : null;
                 const continuityCount = Array.isArray(data.continuity_segments) ? data.continuity_segments.length : 0;
                 const livePlaySegments = Array.isArray(data.live_play_segments) ? data.live_play_segments : [];
                 const liveSegmentCount = livePlaySegments.filter(segment => segment.label === 'live_play').length;
@@ -877,9 +974,11 @@ function loadPerceptionOverlay(clip) {
                 const bootstrapText = bootstrap
                     ? ` // bootstrap ${bootstrap.backend || 'unknown'} ${readyBootstrap.length}/${bootstrapContexts.length} ready${readyBootstrap[0] && readyBootstrap[0].foreground_ratio !== undefined ? ` // fg ${Math.round(readyBootstrap[0].foreground_ratio * 100)}%` : ''}`
                     : '';
-                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // ${hypothesisCount} identity-hyp groups // ${continuityCount} continuity segments // ball artifact ${ballReady ? 'enabled' : 'unavailable'} // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}${bootstrapText}`;
+                explainerStatus.textContent = `${data.calibration && data.calibration.enabled ? 'Ready // calibration available' : 'Ready // raw perception only'} // jersey OCR ${jerseyReady ? 'experimental' : 'unavailable'} // ${jerseyCount} identity consensuses // show only >=${Math.round(JERSEY_UI_MIN_CONFIDENCE * 100)}% with ${JERSEY_UI_MIN_EVIDENCE}+ votes // ${appearanceCount} appearance prototypes // ${hypothesisCount} identity-hyp groups // identity world ${selectedGlobalHypothesisId || 'none'}${rerankedChanged ? ' changed-by-ocr' : ''} // ${continuityCount} continuity segments // ball artifact ${ballReady ? 'enabled' : 'unavailable'} // live segments ${liveSegmentCount} // dead segments ${deadSegmentCount} // uncertain ${uncertainSegmentCount}${bootstrapText}`;
                 feedbackStatus.textContent = 'Select a frame and optionally a track, then save structured feedback.';
+                updateIdentityReviewPanel(getCurrentPerceptionFrame());
             } else {
+                if (identityReviewPanel) identityReviewPanel.style.display = 'none';
                 feedbackStatus.textContent = 'No perception artifact for this clip yet.';
             }
             updateExplainerButton();
@@ -889,6 +988,7 @@ function loadPerceptionOverlay(clip) {
             perceptionData = null;
             perceptionFrames = [];
             explainerPanel.style.display = 'none';
+            if (identityReviewPanel) identityReviewPanel.style.display = 'none';
             feedbackStatus.textContent = `Failed to load perception artifact: ${error.message}`;
             updateExplainerButton();
         });

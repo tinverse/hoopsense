@@ -614,6 +614,21 @@ levels:
       title: Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
       owner: A0
       status: completed
+    - id: L3.156
+      parent: L3.66
+      title: Surface base versus jersey-reranked global identity world status in the labeller UI for reviewed Layer 1 artifacts
+      owner: A0
+      status: completed
+    - id: L3.157
+      parent: L3.66
+      title: Show per-track preferred canonical identity changes caused by jersey-aware reranking in the labeller track inspector and selectors
+      owner: A0
+      status: completed
+    - id: L3.158
+      parent: L3.66
+      title: Add labeller regressions or frontend wiring checks for the new identity-world review surfaces and align plan/docs
+      owner: A0
+      status: completed
     - id: L3.67
       parent: L2.3
       title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
