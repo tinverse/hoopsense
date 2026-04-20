@@ -215,6 +215,9 @@ The current highest-priority frontier is:
 - [x] Surface ambiguity-aware identity counts in clip-level staged perception summaries instead of only committed repaired identity totals
 - [x] Make regression audit reports consume bounded identity-option fields and preferred-canonical deltas instead of only committed canonical IDs
 - [x] Add regressions for ambiguity-aware staged identity summaries and audit signals
+- [x] Raise review-clip generation defaults from 5 seconds to minute-scale windows so labeller review can inspect detection progression over time
+- [x] Expose explicit clip-duration controls in review-clip sampling and slicing utilities instead of hard-coding short windows
+- [x] Add regressions for minute-scale review-clip generation defaults and duration overrides
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs

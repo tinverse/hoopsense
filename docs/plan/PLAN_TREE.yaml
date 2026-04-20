@@ -659,6 +659,21 @@ levels:
       title: Add regressions for ambiguity-aware staged identity summaries and audit signals
       owner: A0
       status: completed
+    - id: L3.165
+      parent: L2.32
+      title: Raise review-clip generation defaults from 5 seconds to minute-scale windows so labeller review can inspect detection progression over time
+      owner: A0
+      status: completed
+    - id: L3.166
+      parent: L2.32
+      title: Expose explicit clip-duration controls in review-clip sampling and slicing utilities instead of hard-coding short windows
+      owner: A0
+      status: completed
+    - id: L3.167
+      parent: L2.32
+      title: Add regressions for minute-scale review-clip generation defaults and duration overrides
+      owner: A0
+      status: completed
     - id: L3.67
       parent: L2.3
       title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
