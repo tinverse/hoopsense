@@ -36,27 +36,35 @@ cv2_stub.resize = resize_nearest
 sys.modules.setdefault("cv2", cv2_stub)
 
 import tools.review.labeller.generate_layer1_annotations as gla
+import tools.review.labeller.identity_resolution as identity_resolution
 import tools.review.labeller.sam_refiner as sam_refiner
 from tools.review.labeller.sam_refiner import SamRefineResult
 
 from tools.review.labeller.generate_layer1_annotations import (
+    BALL_SAM_REACQUIRE_MISSING_FRAMES,
     ON_COURT_SCORE_THRESHOLD,
     _ball_detection_needs_search,
+    _ball_sam_trigger_reason,
     _normalize_jersey_text,
+    _online_ball_discontinuity,
     _player_ball_search_rois,
     _run_ball_predictive_search,
     _run_ball_roi_fallback,
+    _run_sam_ball_search,
+    retrofit_ball_detections_before_first_observation,
+    resolve_identity_global_hypotheses_with_jersey,
     _serialize_ball_candidates,
     _update_ball_predictive_state,
     _resolve_identity_jersey_consensus,
-    _score_identity_link,
     _apply_grounding_mask,
+    _build_staged_perception_summary,
     annotate_team_appearance_consistency,
     annotate_active_players,
     annotate_ball_state,
     annotate_bootstrap_contexts,
     annotate_continuity_segments,
     annotate_identity_jersey_numbers,
+    annotate_detections_with_jersey_global_resolution,
     annotate_live_play,
     annotate_scene_discovery_contracts,
     mark_tracking_collapse_reground,
@@ -68,6 +76,10 @@ from tools.review.labeller.generate_layer1_annotations import (
     score_active_player,
     score_live_play_frame,
     smooth_track_motion,
+)
+from tools.review.labeller.identity_resolution import (
+    evaluate_identity_link_candidate,
+    score_identity_link,
 )
 
 
@@ -123,11 +135,46 @@ class IdentityPolicyTest(unittest.TestCase):
         self.assertEqual(policy["kind"], "layer1_identity_policy")
         self.assertEqual(policy["assumptions"]["disappearance_default"], "occlusion_or_detector_miss")
         self.assertTrue(policy["continuity"]["reset_identity_on_discontinuity"])
+        self.assertIn("evidence_model", policy["identity"])
+        self.assertIn("hard_constraints", policy["identity"])
+        self.assertEqual(
+            policy["identity"]["evidence_model"]["scene_state"]["continuity_partition_field"],
+            "continuity_segment_id",
+        )
+        self.assertTrue(policy["identity"]["hard_constraints"]["reject_temporal_overlap_merge"])
+
+    def test_runtime_identity_thresholds_are_loaded_from_policy(self):
+        policy = load_layer1_identity_policy()
+        self.assertEqual(
+            gla.ON_COURT_SCORE_THRESHOLD,
+            policy["identity"]["evidence_model"]["on_court_plausibility"]["score_thresholds"]["on_court_candidate_min"],
+        )
+        self.assertEqual(
+            gla.ACTIVE_PLAYER_SCORE_THRESHOLD,
+            policy["identity"]["evidence_model"]["on_court_plausibility"]["score_thresholds"]["active_player_candidate_min"],
+        )
+        self.assertEqual(
+            gla.IDENTITY_REPAIR_SCORE_THRESHOLD,
+            policy["identity"]["evidence_model"]["short_gap_link"]["min_score"],
+        )
+        self.assertEqual(
+            gla.SHORT_GAP_MIN_SIZE_CONSISTENCY,
+            policy["identity"]["hard_constraints"]["short_gap_link"]["min_size_consistency"],
+        )
 
     def test_load_layer1_identity_policy_rejects_missing_sections(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "bad_policy.yaml"
             path.write_text("version: '1.0'\nkind: layer1_identity_policy\ncontinuity: {}\n")
+            with self.assertRaises(ValueError):
+                load_layer1_identity_policy(path)
+
+    def test_load_layer1_identity_policy_rejects_inconsistent_duplicated_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_policy.yaml"
+            policy_text = Path(gla.IDENTITY_POLICY_FILE).read_text()
+            policy_text = policy_text.replace("min_size_consistency: 0.55", "min_size_consistency: 0.60", 1)
+            path.write_text(policy_text)
             with self.assertRaises(ValueError):
                 load_layer1_identity_policy(path)
 
@@ -292,6 +339,40 @@ class ActivePlayerScoreTest(unittest.TestCase):
         self.assertTrue(score_info["reasons"]["frame_shared_motion"])
         self.assertGreater(score_info["reasons"]["ungrounded_shared_motion_penalty"], 0.0)
         self.assertLess(score_info["on_court_score"], ON_COURT_SCORE_THRESHOLD)
+
+    def test_score_active_player_uses_scene_prior_when_bootstrap_context_is_missing(self):
+        detection = {
+            "confidence": 0.78,
+            "bbox_xyxy": [40.0, 180.0, 120.0, 420.0],
+            "motion_speed_px": 4.0,
+        }
+        inside = score_active_player(
+            detection,
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+            scene_prior={
+                "prior_status": "ready",
+                "region_mask_shape": [2, 2],
+                "region_mask_grid": [[0, 0], [1, 0]],
+                "proposal_regions": [],
+            },
+        )
+        outside = score_active_player(
+            detection,
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+            scene_prior={
+                "prior_status": "ready",
+                "region_mask_shape": [2, 2],
+                "region_mask_grid": [[0, 0], [0, 0]],
+                "proposal_regions": [],
+            },
+        )
+        self.assertGreater(inside["reasons"]["scene_foot_prior"], outside["reasons"]["scene_foot_prior"])
+        self.assertGreater(inside["reasons"]["effective_foot_prior"], 0.0)
+        self.assertGreater(inside["on_court_score"], outside["on_court_score"])
 
 
 class BallStateTest(unittest.TestCase):
@@ -472,6 +553,86 @@ class BallStateTest(unittest.TestCase):
         self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
 
 
+class RetroBallSearchTest(unittest.TestCase):
+    def test_retrofit_ball_detections_backfills_within_segment_only(self):
+        original_retro = gla._run_ball_retro_search
+        original_fallback = gla._run_ball_roi_fallback
+
+        def fake_retro(_ball_model, _frame, _anchor_detection, _next_detection, *, frame_idx, device, h_matrix=None):
+            if frame_idx != 1:
+                return [], {"triggered": False, "roi_bbox_xyxy": None, "candidate_count": 0}
+            return [
+                {
+                    "track_id": None,
+                    "class_id": 32,
+                    "class_name": "sports_ball",
+                    "confidence": 0.66,
+                    "bbox_xyxy": [20.0, 20.0, 32.0, 32.0],
+                    "bbox_xywh": [26.0, 26.0, 12.0, 12.0],
+                    "center_xy": [26.0, 26.0],
+                    "ball_detection_source": "retro_search_v1",
+                    "retro_backfilled": True,
+                }
+            ], {"triggered": True, "roi_bbox_xyxy": [0, 0, 64, 64], "candidate_count": 1}
+
+        try:
+            gla._run_ball_retro_search = fake_retro
+            gla._run_ball_roi_fallback = lambda *args, **kwargs: ([], {"triggered": False, "roi_bbox_xyxy": None, "candidate_count": 0})
+            frames = [
+                {
+                    "frame_idx": 0,
+                    "continuity_segment_id": 0,
+                    "_frame_bgr": np.zeros((64, 64, 3), dtype=np.uint8),
+                    "_h_matrix": None,
+                    "detections": [],
+                    "ball_detection": None,
+                    "raw_ball_detections": [],
+                },
+                {
+                    "frame_idx": 1,
+                    "continuity_segment_id": 1,
+                    "_frame_bgr": np.zeros((64, 64, 3), dtype=np.uint8),
+                    "_h_matrix": None,
+                    "detections": [],
+                    "ball_detection": None,
+                    "raw_ball_detections": [],
+                },
+                {
+                    "frame_idx": 2,
+                    "continuity_segment_id": 1,
+                    "_frame_bgr": np.zeros((64, 64, 3), dtype=np.uint8),
+                    "_h_matrix": None,
+                    "detections": [],
+                    "ball_detection": {
+                        "confidence": 0.72,
+                        "bbox_xyxy": [24.0, 24.0, 36.0, 36.0],
+                        "bbox_xywh": [30.0, 30.0, 12.0, 12.0],
+                        "center_xy": [30.0, 30.0],
+                        "source": "full_frame",
+                    },
+                    "raw_ball_detections": [],
+                },
+            ]
+            summary = retrofit_ball_detections_before_first_observation(
+                frames,
+                ball_model=object(),
+                device="cpu",
+            )
+        finally:
+            gla._run_ball_retro_search = original_retro
+            gla._run_ball_roi_fallback = original_fallback
+
+        self.assertTrue(summary["enabled"])
+        self.assertEqual(summary["anchor_frame_idx"], 2)
+        self.assertEqual(summary["backfilled_frame_count"], 1)
+        self.assertEqual(summary["stop_reason"], "segment_boundary")
+        self.assertEqual(frames[1]["ball_detection"]["source"], "retro_search_v1")
+        self.assertTrue(frames[1]["ball_detection"]["retro_backfilled"])
+        self.assertIsNone(frames[0]["ball_detection"])
+        self.assertTrue(frames[1]["ball_retro_search"]["accepted"])
+        self.assertFalse(frames[0]["ball_retro_search"]["accepted"])
+
+
 class BootstrapContextTest(unittest.TestCase):
     def test_annotate_bootstrap_contexts_reuses_context_within_segment(self):
         frames = [
@@ -603,6 +764,91 @@ class BootstrapContextTest(unittest.TestCase):
         self.assertTrue(np.all(masked[4:, :] == 0))
         self.assertTrue(np.any(masked[:, 2:5] != 0))
 
+    def test_build_staged_perception_summary_counts_clip_level_handoff_signals(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "grounding_context": {
+                    "yolo_rerun_applied": True,
+                    "yolo_rerun_detection_count": 3,
+                    "collapse_triggered": True,
+                },
+                "ball_predictive_search": {"triggered": True},
+                "ball_fallback": {"triggered": False},
+                "ball_state": {"state": "observed", "source": "detector"},
+                "ball_detection": {"ball_detection_source": "predictive_roi_v1"},
+                "detections": [
+                    {
+                        "recovered_candidate": True,
+                        "active_player_candidate": True,
+                        "identity_track_source": "repaired_recovery",
+                        "active_player_reasons": {
+                            "scene_center_prior": 0.0,
+                            "scene_foot_prior": 0.8,
+                            "bootstrap_foreground_prior": 0.0,
+                            "bootstrap_foot_prior": 0.0,
+                            "effective_foreground_prior": 0.0,
+                            "effective_foot_prior": 0.8,
+                        },
+                    },
+                    {
+                        "synthesized": True,
+                        "identity_repair": {"kind": "short_gap_identity_bridge"},
+                        "active_player_reasons": {},
+                    },
+                ],
+            },
+            {
+                "frame_idx": 1,
+                "grounding_context": {},
+                "ball_predictive_search": {"triggered": False},
+                "ball_fallback": {"triggered": True},
+                "ball_state": {"state": "predicted_short_gap", "source": "smoothed_prediction"},
+                "ball_detection": None,
+                "detections": [],
+            },
+        ]
+        summary = _build_staged_perception_summary(
+            frames,
+            bootstrap_summary={
+                "backend": "dinov3",
+                "contexts": [
+                    {"enabled": True, "status": "ready", "reason": "initial"},
+                    {"enabled": True, "status": "ready", "reason": "discontinuity"},
+                ],
+            },
+            grounding_summary={
+                "pipeline_order": ["dino", "sam", "yolo"],
+                "frame_count_with_grounding": 1,
+                "frame_count_rerun": 1,
+            },
+            collapse_summary={"triggered_segment_ids": [0]},
+            scene_discovery_summary={
+                "pipeline_order": ["dino", "sam", "yolo"],
+                "scene_prior_ready_frame_count": 2,
+                "scene_prior_trigger_reasons": ["initial", "discontinuity"],
+            },
+            player_recovery_summary={
+                "status": "ready",
+                "frame_count_with_rois": 1,
+                "refined_detection_count": 2,
+                "recovered_detection_count": 1,
+            },
+            identity_hypotheses={
+                "group_count": 1,
+                "selected_link_count": 1,
+            },
+        )
+        self.assertEqual(summary["kind"], "staged_perception_summary_v1")
+        self.assertTrue(summary["clip_helped"])
+        self.assertEqual(summary["scene_prior"]["strengthened_detection_count"], 1)
+        self.assertEqual(summary["grounded_yolo"]["rerun_applied_frame_count"], 1)
+        self.assertEqual(summary["sam"]["recovered_candidate_active_count"], 1)
+        self.assertEqual(summary["identity"]["repaired_recovery_count"], 1)
+        self.assertEqual(summary["ball"]["predictive_trigger_count"], 1)
+        self.assertEqual(summary["ball"]["fallback_trigger_count"], 1)
+        self.assertEqual(summary["ball"]["observed_detection_source_counts"]["predictive_roi_v1"], 1)
+
 
 class AppearanceConsistencyTest(unittest.TestCase):
     def test_annotate_team_appearance_consistency_assigns_distance(self):
@@ -716,7 +962,7 @@ class TrackRepairTest(unittest.TestCase):
         self.assertEqual(repaired[1]["detections"], [])
 
     def test_score_identity_link_rejects_conflicting_uniforms(self):
-        link = _score_identity_link(
+        link = score_identity_link(
             {
                 "active_player_candidate": True,
                 "uniform_bucket": "dark",
@@ -735,8 +981,559 @@ class TrackRepairTest(unittest.TestCase):
             },
             gap_frames=1,
             fps=30.0,
+            config=gla.IDENTITY_RESOLUTION_CONFIG,
         )
         self.assertIsNone(link)
+
+    def test_evaluate_identity_link_candidate_records_hard_rejection_reason(self):
+        evaluation = evaluate_identity_link_candidate(
+            {
+                "active_player_candidate": True,
+                "uniform_bucket": "dark",
+                "bbox_xywh": [100.0, 120.0, 50.0, 150.0],
+                "smoothed_center_xy": [100.0, 120.0],
+                "smoothed_velocity_xy": [20.0, 0.0],
+                "confidence": 0.8,
+            },
+            {
+                "active_player_candidate": True,
+                "uniform_bucket": "light",
+                "bbox_xywh": [102.0, 120.0, 50.0, 150.0],
+                "smoothed_center_xy": [102.0, 120.0],
+                "smoothed_velocity_xy": [18.0, 0.0],
+                "confidence": 0.8,
+            },
+            gap_frames=1,
+            fps=30.0,
+            config=gla.IDENTITY_RESOLUTION_CONFIG,
+        )
+        self.assertEqual(evaluation["hard_filter"]["status"], "fail")
+        self.assertEqual(evaluation["hard_filter"]["rejection_reason"], "uniform_bucket_conflict")
+        self.assertIn("active_endpoint", evaluation["hard_filter"]["passed_checks"])
+        self.assertEqual(evaluation["hard_filter"]["failed_checks"], ["uniform_bucket_conflict"])
+        self.assertIsNone(evaluation["score"])
+
+    def test_repair_short_track_gaps_decision_ledger_includes_temporal_overlap_rejection(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [20.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 1,
+                "t_ms": 33,
+                "detections": [
+                    {
+                        "track_id": 3,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [104.0, 80.0, 164.0, 260.0],
+                        "bbox_xywh": [134.0, 170.0, 60.0, 180.0],
+                        "smoothed_center_xy": [134.0, 170.0],
+                        "smoothed_velocity_xy": [20.0, 0.0],
+                        "smoothed_bbox_xywh": [134.0, 170.0, 60.0, 180.0],
+                        "court_xy": [1005.0, 600.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "dark",
+                    },
+                    {
+                        "track_id": 19,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [180.0, 82.0, 240.0, 262.0],
+                        "bbox_xywh": [210.0, 172.0, 60.0, 180.0],
+                        "smoothed_center_xy": [210.0, 172.0],
+                        "smoothed_velocity_xy": [18.0, 0.0],
+                        "smoothed_bbox_xywh": [210.0, 172.0, 60.0, 180.0],
+                        "court_xy": [1120.0, 610.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "dark",
+                    },
+                ],
+            },
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.88,
+                    "bbox_xyxy": [184.0, 84.0, 244.0, 264.0],
+                    "bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "smoothed_center_xy": [214.0, 174.0],
+                    "smoothed_velocity_xy": [18.0, 0.0],
+                    "smoothed_bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "court_xy": [1125.0, 615.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        _repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        self.assertTrue(any(
+            (candidate["hard_filter"] or {}).get("rejection_reason") == "temporal_overlap"
+            for item in summary["decision_ledger"]
+            for candidate in item["candidates"]
+        ))
+
+    def test_repair_short_track_gaps_prunes_far_temporal_overlap_pairs(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [20.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 1,
+                "t_ms": 33,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [104.0, 80.0, 164.0, 260.0],
+                    "bbox_xywh": [134.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [134.0, 170.0],
+                    "smoothed_velocity_xy": [20.0, 0.0],
+                    "smoothed_bbox_xywh": [134.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1005.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 10,
+                "t_ms": 330,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.88,
+                    "bbox_xyxy": [184.0, 84.0, 244.0, 264.0],
+                    "bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "smoothed_center_xy": [214.0, 174.0],
+                    "smoothed_velocity_xy": [18.0, 0.0],
+                    "smoothed_bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "court_xy": [1125.0, 615.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        _repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 11, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        self.assertFalse(any(
+            (candidate["hard_filter"] or {}).get("rejection_reason") == "temporal_overlap"
+            for item in summary["decision_ledger"]
+            for candidate in item["candidates"]
+        ))
+
+    def test_repair_short_track_gaps_decision_ledger_includes_max_gap_rejection(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [20.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 5,
+                "t_ms": 165,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.88,
+                    "bbox_xyxy": [184.0, 84.0, 244.0, 264.0],
+                    "bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "smoothed_center_xy": [214.0, 174.0],
+                    "smoothed_velocity_xy": [18.0, 0.0],
+                    "smoothed_bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "court_xy": [1125.0, 615.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        _repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 6, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        self.assertTrue(any(
+            (candidate["hard_filter"] or {}).get("rejection_reason") == "max_gap_exceeded"
+            for item in summary["decision_ledger"]
+            for candidate in item["candidates"]
+        ))
+
+    def test_repair_short_track_gaps_prunes_far_max_gap_pairs(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [20.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 20,
+                "t_ms": 660,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.88,
+                    "bbox_xyxy": [184.0, 84.0, 244.0, 264.0],
+                    "bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "smoothed_center_xy": [214.0, 174.0],
+                    "smoothed_velocity_xy": [18.0, 0.0],
+                    "smoothed_bbox_xywh": [214.0, 174.0, 60.0, 180.0],
+                    "court_xy": [1125.0, 615.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        _repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 21, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        self.assertFalse(any(
+            (candidate["hard_filter"] or {}).get("rejection_reason") == "max_gap_exceeded"
+            for item in summary["decision_ledger"]
+            for candidate in item["candidates"]
+        ))
+
+    def test_identity_resolution_prefers_best_assignment_over_greedy_edge_order(self):
+        original_generate = identity_resolution.generate_identity_link_candidates
+        try:
+            def fake_generate_identity_link_candidates(track_frames, fps, *, config, max_gap, candidate_threshold, selection_threshold):
+                return [
+                    {
+                        "candidate_id": "h0",
+                        "predecessor_track_id": 1,
+                        "successor_track_id": 10,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.90,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h1",
+                        "predecessor_track_id": 1,
+                        "successor_track_id": 11,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.80,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h2",
+                        "predecessor_track_id": 2,
+                        "successor_track_id": 10,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.85,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h3",
+                        "predecessor_track_id": 2,
+                        "successor_track_id": 11,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.10,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                ]
+
+            identity_resolution.generate_identity_link_candidates = fake_generate_identity_link_candidates
+            summary = identity_resolution.build_identity_hypothesis_summary(
+                track_frames={},
+                fps=30.0,
+                config=gla.IDENTITY_RESOLUTION_CONFIG,
+                max_gap=2,
+            )
+        finally:
+            identity_resolution.generate_identity_link_candidates = original_generate
+
+        self.assertEqual(len(summary["groups"]), 1)
+        group = summary["groups"][0]
+        self.assertEqual(group["status"], "selected")
+        self.assertEqual(group["selected_hypothesis_id"], "g0a0")
+        selected = next(h for h in group["assignment_hypotheses"] if h["selected"])
+        self.assertEqual(set(selected["candidate_ids"]), {"h1", "h2"})
+        self.assertEqual(group["selected_candidate_count"], 2)
+        self.assertEqual({link["candidate_id"] for link in summary["selected_links"]}, {"h1", "h2"})
+        self.assertEqual(len(summary["global_hypotheses"]), 1)
+        self.assertEqual(summary["global_hypotheses"][0]["selected_candidate_ids"], ["h1", "h2"])
+
+    def test_identity_resolution_emits_global_hypotheses_and_track_options_for_ambiguous_groups(self):
+        original_generate = identity_resolution.generate_identity_link_candidates
+        try:
+            def fake_generate_identity_link_candidates(track_frames, fps, *, config, max_gap, candidate_threshold, selection_threshold):
+                return [
+                    {
+                        "candidate_id": "h0",
+                        "predecessor_track_id": 1,
+                        "successor_track_id": 10,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.81,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h1",
+                        "predecessor_track_id": 1,
+                        "successor_track_id": 11,
+                        "start_frame_idx": 5,
+                        "end_frame_idx": 8,
+                        "gap_frames": 2,
+                        "score": 0.79,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h2",
+                        "predecessor_track_id": 2,
+                        "successor_track_id": 20,
+                        "start_frame_idx": 12,
+                        "end_frame_idx": 15,
+                        "gap_frames": 2,
+                        "score": 0.77,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                    {
+                        "candidate_id": "h3",
+                        "predecessor_track_id": 2,
+                        "successor_track_id": 21,
+                        "start_frame_idx": 12,
+                        "end_frame_idx": 15,
+                        "gap_frames": 2,
+                        "score": 0.76,
+                        "passes_candidate_threshold": True,
+                        "passes_selection_threshold": True,
+                        "candidate_threshold": candidate_threshold,
+                        "selection_threshold": selection_threshold,
+                        "selection_status": "candidate",
+                        "hard_filter": {"status": "pass", "rejection_reason": None, "details": {}, "passed_checks": [], "failed_checks": []},
+                        "soft_evidence": {"synthetic": 1.0},
+                        "selected_link": None,
+                    },
+                ]
+
+            identity_resolution.generate_identity_link_candidates = fake_generate_identity_link_candidates
+            summary = identity_resolution.build_identity_hypothesis_summary(
+                track_frames={},
+                fps=30.0,
+                config=gla.IDENTITY_RESOLUTION_CONFIG,
+                max_gap=2,
+            )
+        finally:
+            identity_resolution.generate_identity_link_candidates = original_generate
+
+        self.assertEqual(len(summary["groups"]), 2)
+        self.assertTrue(all(group["status"] == "deferred_ambiguous" for group in summary["groups"]))
+        self.assertGreaterEqual(len(summary["global_hypotheses"]), 4)
+        self.assertEqual(summary["global_hypotheses"][0]["selected_candidate_ids"], ["h0", "h2"])
+        self.assertEqual(summary["global_hypotheses"][0]["ambiguous_group_ids"], ["g0", "g1"])
+        track_option_lookup = {item["track_id"]: item for item in summary["track_identity_options"]}
+        self.assertEqual(track_option_lookup[10]["best_canonical_track_id"], 1)
+        self.assertTrue(track_option_lookup[10]["is_ambiguous"])
+        self.assertEqual({option["canonical_track_id"] for option in track_option_lookup[10]["options"]}, {1, 10})
+        self.assertTrue(track_option_lookup[20]["is_ambiguous"])
+        self.assertEqual({option["canonical_track_id"] for option in track_option_lookup[20]["options"]}, {2, 20})
+
+    def test_repair_short_track_gaps_emits_assignment_hypotheses_for_ambiguous_group(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [60.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [
+                    {
+                        "track_id": 19,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [106.0, 82.0, 166.0, 262.0],
+                        "bbox_xywh": [136.0, 172.0, 60.0, 180.0],
+                        "smoothed_center_xy": [136.0, 172.0],
+                        "smoothed_velocity_xy": [58.0, 0.0],
+                        "smoothed_bbox_xywh": [136.0, 172.0, 60.0, 180.0],
+                        "court_xy": [1012.0, 604.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "dark",
+                    },
+                    {
+                        "track_id": 25,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [108.0, 84.0, 168.0, 264.0],
+                        "bbox_xywh": [138.0, 174.0, 60.0, 180.0],
+                        "smoothed_center_xy": [138.0, 174.0],
+                        "smoothed_velocity_xy": [58.0, 0.0],
+                        "smoothed_bbox_xywh": [138.0, 174.0, 60.0, 180.0],
+                        "court_xy": [1014.0, 606.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "dark",
+                    },
+                ],
+            },
+        ]
+        repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        group = summary["groups"][0]
+        self.assertEqual(group["status"], "deferred_ambiguous")
+        self.assertIsNone(group["selected_hypothesis_id"])
+        self.assertGreaterEqual(len(group["assignment_hypotheses"]), 3)
+        self.assertTrue(any(hypothesis["link_count"] == 1 for hypothesis in group["assignment_hypotheses"]))
+        self.assertEqual(summary["selected_link_count"], 0)
+        self.assertGreaterEqual(summary["global_hypothesis_count"], 2)
+        self.assertGreaterEqual(summary["track_identity_option_count"], 3)
+        self.assertTrue(any(item["track_id"] == 19 for item in summary["track_identity_options"]))
+        self.assertEqual(repaired[1]["detections"], [])
 
     def test_repair_short_track_gaps_bridges_short_identity_switch(self):
         frames = [
@@ -794,6 +1591,9 @@ class TrackRepairTest(unittest.TestCase):
         self.assertEqual(successor["identity_track_source"], "repaired")
         self.assertEqual(successor["identity_repair"]["predecessor_track_id"], 3)
         self.assertEqual(successor["identity_repair"]["successor_track_id"], 19)
+        self.assertEqual(successor["identity_repair"]["selected_link"]["policy_version"], gla.IDENTITY_POLICY_VERSION)
+        self.assertIn("confidence_delta", successor["identity_repair"]["selected_link"])
+        self.assertGreaterEqual(len(successor["identity_repair"]["link_candidates"]), 1)
 
     def test_repair_short_track_gaps_does_not_bridge_across_discontinuity_segments(self):
         frames = [
@@ -847,6 +1647,154 @@ class TrackRepairTest(unittest.TestCase):
         self.assertEqual(successor["identity_track_id"], 19)
         self.assertIsNone(successor["identity_repair"])
 
+    def test_repair_short_track_gaps_decision_ledger_includes_hard_rejection(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [120.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {"frame_idx": 1, "t_ms": 33, "detections": []},
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [
+                    {
+                        "track_id": 19,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [108.0, 82.0, 168.0, 262.0],
+                        "bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                        "smoothed_center_xy": [138.0, 172.0],
+                        "smoothed_velocity_xy": [118.0, 1.0],
+                        "smoothed_bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                        "court_xy": [1015.0, 605.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "dark",
+                    },
+                    {
+                        "track_id": 25,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox_xyxy": [110.0, 84.0, 170.0, 264.0],
+                        "bbox_xywh": [140.0, 174.0, 60.0, 180.0],
+                        "smoothed_center_xy": [140.0, 174.0],
+                        "smoothed_velocity_xy": [118.0, 1.0],
+                        "smoothed_bbox_xywh": [140.0, 174.0, 60.0, 180.0],
+                        "court_xy": [1018.0, 607.0],
+                        "active_player_candidate": True,
+                        "uniform_bucket": "light",
+                    },
+                ],
+            },
+        ]
+        repaired, summary = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+            return_hypothesis_summary=True,
+        )
+        self.assertGreaterEqual(summary["decision_ledger_count"], 1)
+        predecessor_ledger = next(item for item in summary["decision_ledger"] if item["predecessor_track_id"] == 3)
+        self.assertEqual(predecessor_ledger["selected_candidate_id"], "h0")
+        self.assertTrue(any(candidate["selection_status"] == "selected" for candidate in predecessor_ledger["candidates"]))
+        self.assertTrue(any((candidate["hard_filter"] or {}).get("rejection_reason") == "uniform_bucket_conflict" for candidate in predecessor_ledger["candidates"]))
+        successor = repaired[2]["detections"][0]
+        self.assertEqual(successor["identity_repair"]["selected_link"]["policy_version"], gla.IDENTITY_POLICY_VERSION)
+
+    def test_repair_short_track_gaps_reuses_discovery_recovery_detection(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "t_ms": 0,
+                "detections": [{
+                    "track_id": 3,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.92,
+                    "bbox_xyxy": [100.0, 80.0, 160.0, 260.0],
+                    "bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "smoothed_center_xy": [130.0, 170.0],
+                    "smoothed_velocity_xy": [120.0, 0.0],
+                    "smoothed_bbox_xywh": [130.0, 170.0, 60.0, 180.0],
+                    "court_xy": [1000.0, 600.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+            {
+                "frame_idx": 1,
+                "t_ms": 33,
+                "detections": [{
+                    "track_id": None,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.78,
+                    "bbox_xyxy": [104.0, 81.0, 164.0, 261.0],
+                    "bbox_xywh": [134.0, 171.0, 60.0, 180.0],
+                    "recovered_candidate": True,
+                    "sam3_refinement": {
+                        "sam_score": 0.78,
+                        "refined_bbox_xyxy": [104.0, 81.0, 164.0, 261.0],
+                        "source_kind": "unexplained_dino_blob",
+                    },
+                }],
+                "discovery_proposals": [{
+                    "frame_idx": 1,
+                    "entity_type": "player",
+                    "bbox_xyxy": [104.0, 81.0, 164.0, 261.0],
+                    "score": 0.78,
+                    "proposal_role": "recovery",
+                }],
+            },
+            {
+                "frame_idx": 2,
+                "t_ms": 66,
+                "detections": [{
+                    "track_id": 19,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.9,
+                    "bbox_xyxy": [108.0, 82.0, 168.0, 262.0],
+                    "bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "smoothed_center_xy": [138.0, 172.0],
+                    "smoothed_velocity_xy": [118.0, 1.0],
+                    "smoothed_bbox_xywh": [138.0, 172.0, 60.0, 180.0],
+                    "court_xy": [1015.0, 605.0],
+                    "active_player_candidate": True,
+                    "uniform_bucket": "dark",
+                }],
+            },
+        ]
+        repaired = repair_short_track_gaps(
+            frames,
+            {"fps": 30.0, "frame_count": 3, "width": 640, "height": 480},
+            max_gap=2,
+        )
+        self.assertEqual(len(repaired[1]["detections"]), 1)
+        middle = repaired[1]["detections"][0]
+        self.assertTrue(middle["recovered_candidate"])
+        self.assertFalse(middle.get("synthesized", False))
+        self.assertEqual(middle["identity_track_id"], 3)
+        self.assertEqual(middle["identity_track_source"], "repaired_recovery")
+        self.assertEqual(middle["identity_repair"]["evidence_source"], "discovery_recovery_proposal")
+        self.assertEqual(middle["identity_repair"]["recovery_match"]["proposal_score"], 0.78)
+
 
 class JerseyIdentityTest(unittest.TestCase):
     def test_normalize_jersey_text_handles_common_ocr_confusions(self):
@@ -899,6 +1847,166 @@ class JerseyIdentityTest(unittest.TestCase):
         finally:
             gla.get_easyocr_reader = original_reader
             gla._collect_jersey_evidence = original_collect
+
+    def test_annotate_identity_jersey_numbers_emits_option_consensus_for_ambiguous_track(self):
+        import tools.review.labeller.generate_layer1_annotations as gla
+
+        original_reader = gla.get_easyocr_reader
+        original_collect = gla._collect_jersey_evidence
+        try:
+            gla.get_easyocr_reader = lambda: object()
+
+            def fake_collect(_reader, detection):
+                mapping = {
+                    3: {"candidate": "24", "raw_text": "24", "ocr_confidence": 0.92, "sharpness": 70.0, "source": "stub"},
+                    19: {"candidate": "24", "raw_text": "24", "ocr_confidence": 0.81, "sharpness": 65.0, "source": "stub"},
+                }
+                evidence = mapping.get(detection.get("track_id"))
+                if evidence:
+                    detection["jersey_number_evidence"] = evidence
+                return evidence
+
+            gla._collect_jersey_evidence = fake_collect
+            frames = [
+                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 19, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+            ]
+            summary = annotate_identity_jersey_numbers(
+                frames,
+                identity_hypotheses={
+                    "track_identity_options": [
+                        {
+                            "track_id": 19,
+                            "is_ambiguous": True,
+                            "option_count": 2,
+                            "best_canonical_track_id": 3,
+                            "options": [
+                                {
+                                    "canonical_track_id": 3,
+                                    "chain_track_ids": [3, 19],
+                                    "hypothesis_ids": ["gh0"],
+                                    "group_hypothesis_ids": ["g0a0"],
+                                    "support_share": 0.7,
+                                    "best_total_score": 0.81,
+                                    "best_score_margin_to_best": 0.01,
+                                },
+                                {
+                                    "canonical_track_id": 19,
+                                    "chain_track_ids": [19],
+                                    "hypothesis_ids": ["gh1"],
+                                    "group_hypothesis_ids": ["g0a1"],
+                                    "support_share": 0.3,
+                                    "best_total_score": 0.8,
+                                    "best_score_margin_to_best": 0.02,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            )
+            self.assertTrue(summary["reader_available"])
+            self.assertEqual(summary["track_option_count_with_consensus"], 1)
+            self.assertEqual(summary["ambiguous_track_option_count_with_consensus"], 1)
+            track_19 = summary["track_option_consensus"]["19"]
+            self.assertTrue(track_19["is_ambiguous"])
+            winning_option = next(option for option in track_19["options"] if option["canonical_track_id"] == 3)
+            self.assertTrue(winning_option["has_consensus"])
+            self.assertEqual(winning_option["consensus"]["number"], "24")
+            self.assertEqual(winning_option["consensus"]["evidence_count"], 2)
+            fallback_option = next(option for option in track_19["options"] if option["canonical_track_id"] == 19)
+            self.assertFalse(fallback_option["has_consensus"])
+            detection = frames[1]["detections"][0]
+            self.assertTrue(detection["identity_jersey_is_ambiguous"])
+            self.assertEqual(detection["identity_jersey_best_canonical_track_id"], 3)
+            self.assertEqual(len(detection["identity_jersey_options"]), 2)
+        finally:
+            gla.get_easyocr_reader = original_reader
+            gla._collect_jersey_evidence = original_collect
+
+    def test_resolve_identity_global_hypotheses_with_jersey_prefers_supported_world(self):
+        identity_hypotheses = {
+            "global_hypotheses": [
+                {
+                    "global_hypothesis_id": "gh0",
+                    "rank": 1,
+                    "group_hypothesis_ids": ["g0a0"],
+                    "ambiguous_group_ids": ["g0"],
+                    "selected_candidate_ids": ["h0"],
+                    "selected_link_count": 1,
+                    "total_score": 1.0,
+                    "score_margin_to_best": 0.0,
+                    "score_share": 0.5,
+                    "committed_only": False,
+                },
+                {
+                    "global_hypothesis_id": "gh1",
+                    "rank": 2,
+                    "group_hypothesis_ids": ["g0a1"],
+                    "ambiguous_group_ids": ["g0"],
+                    "selected_candidate_ids": ["h1"],
+                    "selected_link_count": 1,
+                    "total_score": 0.96,
+                    "score_margin_to_best": 0.04,
+                    "score_share": 0.5,
+                    "committed_only": False,
+                },
+            ],
+        }
+        jersey_ocr = {
+            "track_option_consensus": {
+                "19": {
+                    "track_id": 19,
+                    "is_ambiguous": True,
+                    "option_count": 2,
+                    "best_canonical_track_id": 19,
+                    "options": [
+                        {
+                            "canonical_track_id": 19,
+                            "chain_track_ids": [19],
+                            "hypothesis_ids": ["gh0"],
+                            "group_hypothesis_ids": ["g0a0"],
+                            "support_share": 0.5,
+                            "best_total_score": 1.0,
+                            "best_score_margin_to_best": 0.0,
+                            "has_consensus": False,
+                        },
+                        {
+                            "canonical_track_id": 3,
+                            "chain_track_ids": [3, 19],
+                            "hypothesis_ids": ["gh1"],
+                            "group_hypothesis_ids": ["g0a1"],
+                            "support_share": 0.5,
+                            "best_total_score": 0.96,
+                            "best_score_margin_to_best": 0.04,
+                            "has_consensus": True,
+                            "consensus": {
+                                "number": "24",
+                                "confidence": 0.93,
+                                "vote_count": 2,
+                                "evidence_count": 2,
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        resolution = resolve_identity_global_hypotheses_with_jersey(identity_hypotheses, jersey_ocr)
+        self.assertEqual(resolution["base_selected_global_hypothesis_id"], "gh0")
+        self.assertEqual(resolution["selected_global_hypothesis_id"], "gh1")
+        self.assertTrue(resolution["changed_selected_global_hypothesis"])
+        self.assertEqual(resolution["global_hypotheses"][0]["global_hypothesis_id"], "gh1")
+        self.assertGreater(resolution["global_hypotheses"][0]["jersey_bonus"], 0.0)
+        self.assertLess(resolution["global_hypotheses"][1]["jersey_bonus"], 0.0)
+        preferred = resolution["preferred_track_resolution"]["19"]
+        self.assertEqual(preferred["preferred_canonical_track_id"], 3)
+        self.assertEqual(preferred["selected_consensus_number"], "24")
+
+        frames = [{"frame_idx": 0, "detections": [{"track_id": 19}]}]
+        annotate_detections_with_jersey_global_resolution(frames, resolution)
+        detection = frames[0]["detections"][0]
+        self.assertEqual(detection["identity_jersey_selected_global_hypothesis_id"], "gh1")
+        self.assertEqual(detection["identity_jersey_preferred_canonical_track_id"], 3)
+        self.assertEqual(detection["identity_jersey_preferred_number"], "24")
 
 
 class ActivePlayerAnnotationTest(unittest.TestCase):
@@ -1107,6 +2215,76 @@ class ContinuitySegmentationTest(unittest.TestCase):
         self.assertEqual(frames[1]["continuity_segment_id"], 0)
         self.assertEqual(frames[2]["continuity_segment_id"], 1)
         self.assertEqual(frames[2]["discontinuity_label"], "discontinuity")
+
+
+class SamBallRuntimeTest(unittest.TestCase):
+    def test_ball_sam_trigger_reason_bootstraps_before_first_detection(self):
+        reason = _ball_sam_trigger_reason(
+            None,
+            None,
+            0,
+            {"triggered": False},
+        )
+        self.assertEqual(reason, "initial_bootstrap")
+
+    def test_ball_sam_trigger_reason_uses_discontinuity_and_missing_hysteresis(self):
+        predictive_state = {"center_xy": [100.0, 100.0], "last_seen_frame_idx": 4, "confidence": 0.88}
+        self.assertEqual(
+            _ball_sam_trigger_reason(
+                None,
+                predictive_state,
+                BALL_SAM_REACQUIRE_MISSING_FRAMES,
+                {"triggered": False},
+            ),
+            "sustained_missing",
+        )
+        self.assertEqual(
+            _ball_sam_trigger_reason(
+                None,
+                predictive_state,
+                2,
+                {"triggered": True},
+            ),
+            "discontinuity_reset",
+        )
+
+    def test_run_sam_ball_search_accepts_high_confidence_detection(self):
+        candidate = types.SimpleNamespace(
+            bbox_xyxy=[10, 12, 18, 20],
+            bbox_xywh=[14.0, 16.0, 8.0, 8.0],
+            center_xy=[14.0, 16.0],
+            mask_area_px=36,
+            mask_area_ratio=0.0005,
+            score=0.72,
+            prompt="basketball",
+        )
+
+        class FakeDetector:
+            model_name = "facebook/sam3.1"
+            text_prompt = "basketball"
+
+            def detect(self, _frame):
+                return [candidate]
+
+        detections, summary, status = _run_sam_ball_search(
+            FakeDetector(),
+            np.zeros((24, 24, 3), dtype=np.uint8),
+            h_matrix=None,
+            trigger_reason="initial_bootstrap",
+        )
+        self.assertEqual(status, "ready")
+        self.assertTrue(summary["accepted"])
+        self.assertEqual(summary["source"], "sam3_initial_bootstrap_v1")
+        self.assertEqual(detections[0]["ball_detection_source"], "sam3_initial_bootstrap_v1")
+        self.assertEqual(detections[0]["sam3_ball_detection"]["trigger_reason"], "initial_bootstrap")
+
+    def test_online_ball_discontinuity_matches_visual_and_track_churn_signal(self):
+        dark = np.zeros((18, 32), dtype=np.float32).tolist()
+        bright = np.ones((18, 32), dtype=np.float32).tolist()
+        summary = _online_ball_discontinuity(dark, {1, 2}, bright, {9, 10}, 5)
+        self.assertTrue(summary["triggered"])
+        self.assertGreater(summary["visual_delta"], 0.5)
+        self.assertGreater(summary["track_churn"], 0.5)
 
 
 class SamPlayerRecoveryTest(unittest.TestCase):

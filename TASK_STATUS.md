@@ -15,6 +15,9 @@ The current highest-priority frontier is:
   - `L3.117` materialize a per-frame `scene_prior` contract from bootstrap and grounding contexts in Layer 1 artifacts
   - `L3.118` materialize a per-frame `discovery_proposals` contract from accepted SAM-driven recovery and refinement outputs
   - `L3.119` emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+    - `L3.122` summarize clip-level staged handoff evidence across bootstrap, grounded reruns, SAM adoption, identity repair, and ball recovery
+    - `L3.123` re-run the current review clip with the staged summary enabled and verify the emitted artifact fields
+  - `L3.121` consume `scene_prior` and `discovery_proposals` directly in Layer 1 scoring and short-gap identity repair
 - `L3.101` emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
 - `L3.102` add a player-conditioned fallback ROI ball detector pass when full-frame ball detection is absent or weak
 - `L3.103` add a predictive ball-search layer that uses recent ball kinematics and nearby-player context before broad fallback reacquisition
@@ -22,12 +25,18 @@ The current highest-priority frontier is:
   - `L3.105` run recent-state predictive ROI search between full-frame scan and broad player-local reacquisition
   - `L3.106` emit predictive-search provenance in Layer 1 artifacts so per-frame ball recovery decisions are auditable
   - `L3.107` compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
+  - `L3.128` backfill pre-first-observation frames by walking backward from the first credible ball detection with reverse ROI search and player-local fallback
+    - `L3.129` re-run the representative clip and verify the artifact backfills early ball frames while preserving player and jersey outputs
 - `L3.108` add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
   - `L3.109` render a web-safe MP4 overlay of SAM3 basketball detections for direct visual review
   - `L3.110` use Layer 1 active-player candidates as SAM3 ROI seeds for segmented active-player review
   - `L3.111` render a web-safe MP4 overlay of SAM3 active-player masks for direct visual review
   - `L3.112` add a frame-local SAM3 detect endpoint to the labeller for paused-frame promptable segmentation
   - `L3.113` add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
+  - `L3.124` use SAM3 basketball detections to bootstrap the first credible runtime ball state before predictive ROI handoff
+  - `L3.125` re-enter SAM3 ball reacquisition only after sustained missing-ball evidence or segment reset and emit handoff provenance
+  - `L3.126` align image-model SAM checkpoint defaults with the upstream SAM3 image-builder contract and remove partial-load warnings
+    - `L3.127` move experimental SAM and OCR model caches into a repo-local git-ignored mount so Docker runs do not re-download weights
 - `L3.93` add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
   - `L3.94` containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
   - `L3.95` add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
@@ -42,6 +51,21 @@ The current highest-priority frontier is:
 - `L3.85` feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
+  - `L3.132` run a bounded longer-clip BoT-SORT evaluation outside the checked-in runtime path and measure track fragmentation and suspicious identity jumps before deciding on any tracker work
+  - `L3.133` formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract
+  - `L3.134` implement explicit Layer 1 identity decision staging with hard-filtered candidate records, soft-evidence scoring, and selected-link provenance
+  - `L3.135` extract Layer 1 identity-resolution helpers into a dedicated module and route runtime short-gap repair through the explicit contract
+  - `L3.136` remove obsolete labeller identity-resolution wrappers and make tests and runtime call the extracted module directly
+  - `L3.137` emit explicit temporal-overlap and max-gap hard-rejection records for identity-link candidates instead of silently dropping them
+  - `L3.138` extract short-gap identity repair mechanics into a dedicated Layer 1 tracklet stitcher module
+  - `L3.139` validate identity-link provenance on a bounded real clip after the stitcher extraction and hard-rejection contract cleanup
+  - `L3.140` bound temporal-overlap candidate generation so identity provenance keeps near-boundary overlap evidence without flooding the ledger with irrelevant overlapping tracklet pairs
+  - `L3.141` bound max-gap candidate generation so identity provenance keeps near-boundary over-gap evidence without flooding the ledger with irrelevant long-distance tracklet pairs
+  - `L3.142` enumerate bounded connected-component assignment hypotheses for identity links instead of relying on greedy pairwise link selection
+  - `L3.143` emit alternative assignment hypotheses and ambiguity margins per identity conflict group in Layer 1 artifacts
+  - `L3.144` validate bounded assignment-hypothesis identity selection on a reviewed real artifact and compare it against prior greedy pairwise selection
+  - `L3.145` sweep reviewed Layer 1 artifacts for nontrivial identity conflict components that actually exercise bounded assignment-hypothesis selection
+  - `L3.146` compare bounded assignment-hypothesis selection against a greedy edge baseline on the first reviewed artifact with a nontrivial conflict component
 - `L3.64` add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - `L3.63` add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - `L3.62` add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support
@@ -169,6 +193,19 @@ The current highest-priority frontier is:
 - [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
+  - [x] Formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract
+  - [x] Implement explicit Layer 1 identity decision staging with hard-filtered candidate records, soft-evidence scoring, and selected-link provenance
+  - [x] Sweep reviewed Layer 1 artifacts for nontrivial identity conflict components that actually exercise bounded assignment-hypothesis selection
+  - [x] Compare bounded assignment-hypothesis selection against a greedy edge baseline on the first reviewed artifact with a nontrivial conflict component
+  - [x] Build bounded global identity hypotheses across ambiguous local conflict groups instead of exposing only isolated group-level alternatives
+  - [x] Emit per-track canonical-identity options induced by the top bounded global identity hypotheses for review and downstream consumers
+  - [x] Keep runtime stitching conservative while exposing unresolved multi-hypothesis identity state in Layer 1 artifacts and summaries
+  - [x] Make the jersey-OCR consensus path consume bounded identity track options instead of only committed identity_track_id assignments
+  - [x] Emit per-track jersey option consensus for ambiguous identity tracks without forcing runtime identity collapse
+  - [x] Surface hypothesis-aware jersey consensus counts and option summaries in Layer 1 artifacts and tests
+  - [x] Re-rank bounded global identity hypotheses using jersey option consensus as later-pass evidence without mutating committed runtime identities
+  - [x] Emit conservative jersey-preferred canonical track annotations per detection from the selected later-pass global identity world
+  - [x] Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs
@@ -213,7 +250,10 @@ The current highest-priority frontier is:
   - [ ] Route SAM recovery proposals through explicit grounding-anchor regions instead of only implicit bootstrap blobs
   - [ ] Materialize a per-frame `scene_prior` contract from bootstrap and grounding contexts in Layer 1 artifacts
   - [ ] Materialize a per-frame `discovery_proposals` contract from accepted SAM-driven recovery and refinement outputs
-  - [ ] Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+  - [x] Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+    - [x] Summarize clip-level staged handoff evidence across bootstrap, grounded reruns, SAM adoption, identity repair, and ball recovery
+    - [x] Re-run the current review clip with the staged summary enabled and verify the emitted artifact fields
+  - [x] Consume `scene_prior` and `discovery_proposals` directly in Layer 1 scoring and short-gap identity repair
 - [ ] Emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
 - [ ] Add a player-conditioned fallback ROI ball detector pass when full-frame ball detection is absent or weak
 - [ ] Add a predictive ball-search layer that uses recent ball kinematics and nearby-player context before broad fallback reacquisition
@@ -221,12 +261,18 @@ The current highest-priority frontier is:
   - [ ] Run recent-state predictive ROI search between full-frame scan and broad player-local reacquisition
   - [ ] Emit predictive-search provenance in Layer 1 artifacts so per-frame ball recovery decisions are auditable
   - [ ] Compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
+  - [x] Backfill pre-first-observation frames by walking backward from the first credible ball detection with reverse ROI search and player-local fallback
+    - [x] Re-run the representative clip and verify the artifact backfills early ball frames while preserving player and jersey outputs
 - [ ] Add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
   - [ ] Render a web-safe MP4 overlay of SAM3 basketball detections for direct visual review
   - [ ] Use Layer 1 active-player candidates as SAM3 ROI seeds for segmented active-player review
   - [ ] Render a web-safe MP4 overlay of SAM3 active-player masks for direct visual review
   - [ ] Add a frame-local SAM3 detect endpoint to the labeller for paused-frame promptable segmentation
   - [ ] Add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
+  - [ ] Use SAM3 basketball detections to bootstrap the first credible runtime ball state before predictive ROI handoff
+  - [ ] Re-enter SAM3 ball reacquisition only after sustained missing-ball evidence or segment reset and emit handoff provenance
+  - [x] Align image-model SAM checkpoint defaults with the upstream SAM3 image-builder contract and remove partial-load warnings
+    - [x] Move experimental SAM and OCR model caches into a repo-local git-ignored mount so Docker runs do not re-download weights
 - [ ] Add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
   - [ ] Containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
   - [ ] Add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
@@ -239,8 +285,21 @@ The current highest-priority frontier is:
 - [ ] Add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
 - [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
-- [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
+  - [x] Formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract
+  - [x] Implement explicit Layer 1 identity decision staging with hard-filtered candidate records, soft-evidence scoring, and selected-link provenance
+  - [x] Sweep reviewed Layer 1 artifacts for nontrivial identity conflict components that actually exercise bounded assignment-hypothesis selection
+  - [x] Compare bounded assignment-hypothesis selection against a greedy edge baseline on the first reviewed artifact with a nontrivial conflict component
+  - [x] Build bounded global identity hypotheses across ambiguous local conflict groups instead of exposing only isolated group-level alternatives
+  - [x] Emit per-track canonical-identity options induced by the top bounded global identity hypotheses for review and downstream consumers
+  - [x] Keep runtime stitching conservative while exposing unresolved multi-hypothesis identity state in Layer 1 artifacts and summaries
+  - [x] Make the jersey-OCR consensus path consume bounded identity track options instead of only committed identity_track_id assignments
+  - [x] Emit per-track jersey option consensus for ambiguous identity tracks without forcing runtime identity collapse
+  - [x] Surface hypothesis-aware jersey consensus counts and option summaries in Layer 1 artifacts and tests
+  - [x] Re-rank bounded global identity hypotheses using jersey option consensus as later-pass evidence without mutating committed runtime identities
+  - [x] Emit conservative jersey-preferred canonical track annotations per detection from the selected later-pass global identity world
+  - [x] Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
+- [ ] Extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add a rule-based live-play/dead-ball gate with per-frame scores, stitched segments, and labeller review support

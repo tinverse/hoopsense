@@ -14,7 +14,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-04-12"
+  last_updated: "2026-04-16"
 
 levels:
   L0:
@@ -494,6 +494,126 @@ levels:
       title: Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
       owner: A0
       status: in_progress
+    - id: L3.132
+      parent: L3.66
+      title: Run a bounded longer-clip BoT-SORT evaluation outside the checked-in runtime path and measure track fragmentation and suspicious identity jumps before deciding on any tracker work
+      owner: A0
+      status: completed
+    - id: L3.133
+      parent: L3.66
+      title: Formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract
+      owner: A0
+      status: completed
+    - id: L3.134
+      parent: L3.66
+      title: Implement explicit Layer 1 identity decision staging with hard-filtered candidate records, soft-evidence scoring, and selected-link provenance
+      owner: A0
+      status: completed
+    - id: L3.135
+      parent: L3.66
+      title: Extract Layer 1 identity-resolution helpers into a dedicated module and route runtime short-gap repair through the explicit contract
+      owner: A0
+      status: completed
+    - id: L3.136
+      parent: L3.66
+      title: Remove obsolete labeller identity-resolution wrappers and make tests and runtime call the extracted module directly
+      owner: A0
+      status: completed
+    - id: L3.137
+      parent: L3.66
+      title: Emit explicit temporal-overlap and max-gap hard-rejection records for identity-link candidates instead of silently dropping them
+      owner: A0
+      status: completed
+    - id: L3.138
+      parent: L3.66
+      title: Extract short-gap identity repair mechanics into a dedicated Layer 1 tracklet stitcher module
+      owner: A0
+      status: completed
+    - id: L3.139
+      parent: L3.66
+      title: Validate identity-link provenance on a bounded real clip after the stitcher extraction and hard-rejection contract cleanup
+      owner: A0
+      status: completed
+    - id: L3.140
+      parent: L3.66
+      title: Bound temporal-overlap candidate generation so identity provenance keeps near-boundary overlap evidence without flooding the ledger with irrelevant overlapping tracklet pairs
+      owner: A0
+      status: completed
+    - id: L3.141
+      parent: L3.66
+      title: Bound max-gap candidate generation so identity provenance keeps near-boundary over-gap evidence without flooding the ledger with irrelevant long-distance tracklet pairs
+      owner: A0
+      status: completed
+    - id: L3.142
+      parent: L3.66
+      title: Enumerate bounded connected-component assignment hypotheses for identity links instead of relying on greedy pairwise link selection
+      owner: A0
+      status: completed
+    - id: L3.143
+      parent: L3.66
+      title: Emit alternative assignment hypotheses and ambiguity margins per identity conflict group in Layer 1 artifacts
+      owner: A0
+      status: completed
+    - id: L3.144
+      parent: L3.66
+      title: Validate bounded assignment-hypothesis identity selection on a reviewed real artifact and compare it against prior greedy pairwise selection
+      owner: A0
+      status: completed
+    - id: L3.145
+      parent: L3.66
+      title: Sweep reviewed Layer 1 artifacts for nontrivial identity conflict components that actually exercise bounded assignment-hypothesis selection
+      owner: A0
+      status: completed
+    - id: L3.146
+      parent: L3.66
+      title: Compare bounded assignment-hypothesis selection against a greedy edge baseline on the first reviewed artifact with a nontrivial conflict component
+      owner: A0
+      status: completed
+    - id: L3.147
+      parent: L3.66
+      title: Build bounded global identity hypotheses across ambiguous local conflict groups instead of exposing only isolated group-level alternatives
+      owner: A0
+      status: completed
+    - id: L3.148
+      parent: L3.66
+      title: Emit per-track canonical-identity options induced by the top bounded global identity hypotheses for review and downstream consumers
+      owner: A0
+      status: completed
+    - id: L3.149
+      parent: L3.66
+      title: Keep runtime stitching conservative while exposing unresolved multi-hypothesis identity state in Layer 1 artifacts and summaries
+      owner: A0
+      status: completed
+    - id: L3.150
+      parent: L3.66
+      title: Make the jersey-OCR consensus path consume bounded identity track options instead of only committed identity_track_id assignments
+      owner: A0
+      status: completed
+    - id: L3.151
+      parent: L3.66
+      title: Emit per-track jersey option consensus for ambiguous identity tracks without forcing runtime identity collapse
+      owner: A0
+      status: completed
+    - id: L3.152
+      parent: L3.66
+      title: Surface hypothesis-aware jersey consensus counts and option summaries in Layer 1 artifacts and tests
+      owner: A0
+      status: completed
+    - id: L3.153
+      parent: L3.66
+      title: Re-rank bounded global identity hypotheses using jersey option consensus as later-pass evidence without mutating committed runtime identities
+      owner: A0
+      status: completed
+    - id: L3.154
+      parent: L3.66
+      title: Emit conservative jersey-preferred canonical track annotations per detection from the selected later-pass global identity world
+      owner: A0
+      status: completed
+    - id: L3.155
+      parent: L3.66
+      title: Surface jersey-aware global identity resolution summaries and tie-break regressions in Layer 1 artifacts and tests
+      owner: A0
+      status: completed
     - id: L3.67
       parent: L2.3
       title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
@@ -658,7 +778,22 @@ levels:
       parent: L3.96
       title: Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
       owner: A0
-      status: in_progress
+      status: completed
+    - id: L3.122
+      parent: L3.119
+      title: Summarize clip-level staged handoff evidence across bootstrap, grounded reruns, SAM adoption, identity repair, and ball recovery
+      owner: A0
+      status: completed
+    - id: L3.123
+      parent: L3.119
+      title: Re-run the current review clip with the staged summary enabled and verify the emitted artifact fields
+      owner: A0
+      status: completed
+    - id: L3.121
+      parent: L3.96
+      title: Consume `scene_prior` and `discovery_proposals` directly in Layer 1 scoring and short-gap identity repair
+      owner: A0
+      status: completed
     - id: L3.101
       parent: L2.18
       title: Emit raw pre-filter ball detections in Layer 1 artifacts so detector recall can be audited separately from ball-state heuristics
@@ -694,6 +829,16 @@ levels:
       title: Compare predictive ROI recovery against prior broad-fallback audits on reviewed visible-ball clips
       owner: A0
       status: in_progress
+    - id: L3.128
+      parent: L3.103
+      title: Backfill pre-first-observation frames by walking backward from the first credible ball detection with reverse ROI search and player-local fallback
+      owner: A0
+      status: completed
+    - id: L3.129
+      parent: L3.128
+      title: Re-run the representative clip and verify the artifact backfills early ball frames while preserving player and jersey outputs
+      owner: A0
+      status: completed
     - id: L3.108
       parent: L2.18
       title: Add an experimental SAM3 text-prompted basketball detector path for visual ball-recall evaluation on reviewed clips
@@ -724,6 +869,26 @@ levels:
       title: Add labeller UI controls for prompt entry, detect, and overlay display of same-frame SAM3 results
       owner: A0
       status: in_progress
+    - id: L3.124
+      parent: L3.108
+      title: Use SAM3 basketball detections to bootstrap the first credible runtime ball state before predictive ROI handoff
+      owner: A0
+      status: in_progress
+    - id: L3.125
+      parent: L3.108
+      title: Re-enter SAM3 ball reacquisition only after sustained missing-ball evidence or segment reset and emit handoff provenance
+      owner: A0
+      status: in_progress
+    - id: L3.126
+      parent: L3.108
+      title: Align image-model SAM checkpoint defaults with the upstream SAM3 image-builder contract and remove partial-load warnings
+      owner: A0
+      status: completed
+    - id: L3.127
+      parent: L3.126
+      title: Move experimental SAM and OCR model caches into a repo-local git-ignored mount so Docker runs do not re-download weights
+      owner: A0
+      status: completed
     - id: L3.74
       parent: L2.14
       title: Emit running MVP stat-update rows from deterministic attributed events in the inference pipeline

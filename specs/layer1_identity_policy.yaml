@@ -1,4 +1,4 @@
-version: "1.0"
+version: "1.1"
 kind: layer1_identity_policy
 scope: basketball_video_identity_continuity
 
@@ -24,8 +24,88 @@ identity:
     repair_score_threshold: 0.72
     max_court_distance: 260.0
     max_center_distance_ratio: 1.35
+    min_size_consistency: 0.55
   hypotheses:
     enabled: true
     min_score: 0.55
     max_candidates_per_group: 3
+    max_global_hypotheses: 6
     ambiguity_margin: 0.05
+  evidence_model:
+    observation_contract:
+      required_detection_fields:
+        - frame_idx
+        - t_ms
+        - bbox_xyxy
+        - confidence
+        - continuity_segment_id
+      optional_detection_fields:
+        - court_xy
+        - footpoint_xy
+        - smoothed_velocity_xy
+        - motion_speed_px
+        - keypoints_xy
+        - keypoints_conf
+        - appearance_team_bucket
+        - appearance_team_distance
+        - bootstrap_context
+        - grounding_context
+        - scene_prior
+        - discovery_proposals
+        - sam3_refinement
+        - live_play_score
+    on_court_plausibility:
+      kind: multisignal_on_court_plausibility_v1
+      score_thresholds:
+        on_court_candidate_min: 0.48
+        active_player_candidate_min: 0.55
+      positive_weights:
+        confidence: 0.18
+        bbox_height: 0.12
+        court_grounding: 0.20
+        foot_foreground_prior: 0.10
+        center_foreground_prior: 0.06
+        pose_coherence: 0.12
+        track_persistence: 0.10
+        motion: 0.06
+        sam3_support: 0.08
+      penalty_weights:
+        edge: 0.55
+        merge_risk: 0.10
+        appearance_mismatch: 0.55
+        ungrounded_shared_motion: 1.0
+      spectator_risk_weights:
+        edge: 0.32
+        weak_geometry: 0.26
+        merge_risk: 0.16
+        appearance_mismatch: 0.14
+        weak_pose: 0.12
+    short_gap_link:
+      kind: weighted_short_gap_link_v1
+      min_score: 0.72
+      weights:
+        predicted_position: 0.34
+        velocity_alignment: 0.18
+        size_consistency: 0.14
+        uniform_bucket: 0.14
+        court_distance: 0.10
+        temporal_gap: 0.06
+        confidence_floor: 0.04
+    scene_state:
+      continuity_partition_field: continuity_segment_id
+      discontinuity_label_field: discontinuity_label
+      reset_identity_on_discontinuity: true
+      within_segment_missing_default: occlusion_or_detector_miss
+      discontinuity_default: reground_or_reset_identity
+      live_play_usage: contextual_signal_only
+  hard_constraints:
+    reject_cross_segment_links_when_reset_enabled: true
+    unique_successor_per_predecessor: true
+    unique_predecessor_per_successor: true
+    reject_temporal_overlap_merge: true
+    preserve_recent_identity_within_segment: true
+    short_gap_link:
+      max_gap_frames: 3
+      max_court_distance: 260.0
+      max_center_distance_ratio: 1.35
+      min_size_consistency: 0.55

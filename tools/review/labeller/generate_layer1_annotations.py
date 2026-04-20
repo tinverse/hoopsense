@@ -16,9 +16,21 @@ from tools.review.labeller.dinov3_bootstrap import (
     component_boxes_from_mask,
     foreground_prior_for_point,
 )
+from tools.review.labeller.identity_resolution import (
+    IdentityResolutionConfig,
+    build_identity_hypothesis_summary,
+)
+from tools.review.labeller.tracklet_stitcher import (
+    TrackletStitcherConfig,
+    empty_identity_hypothesis_summary,
+    stitch_tracklets,
+)
+
 from tools.review.labeller.sam_refiner import (
+    DEFAULT_SAM3_BALL_PROMPT,
     DEFAULT_SAM3_REPO_MODEL,
     DEFAULT_SAM3_TEXT_PROMPT,
+    Sam3BallDetector,
     Sam3RoiRefiner,
     build_sam_recovery_rois,
 )
@@ -33,8 +45,6 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COURT_X_RANGE = (-50.0, 2890.0)
 COURT_Y_RANGE = (-50.0, 1575.0)
-ACTIVE_PLAYER_SCORE_THRESHOLD = 0.55
-ON_COURT_SCORE_THRESHOLD = 0.48
 MIN_PLAYER_BBOX_HEIGHT_RATIO = 0.08
 EDGE_MARGIN_RATIO = 0.06
 MOTION_SCORE_THRESHOLD_PX = 6.0
@@ -56,6 +66,7 @@ JERSEY_OCR_MIN_SHARPNESS = 25.0
 JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY = 5
 JERSEY_OCR_CONSENSUS_MIN_VOTES = 2
 JERSEY_OCR_CONSENSUS_MIN_SHARE = 0.62
+JERSEY_IDENTITY_TIEBREAK_WEIGHT = 0.18
 APPEARANCE_TEAM_DISTANCE_THRESHOLD = 0.42
 APPEARANCE_LOW_MOTION_THRESHOLD_PX = 3.0
 BALL_CLASS_ID = 32
@@ -75,8 +86,15 @@ BALL_ROI_DEDUPE_CENTER_DISTANCE_PX = 18.0
 BALL_PREDICTIVE_MAX_STALE_FRAMES = 3
 BALL_PREDICTIVE_TRIGGER_MIN_CONFIDENCE = 0.08
 BALL_PREDICTIVE_BASE_RADIUS_PX = 72.0
+BALL_RETRO_ANCHOR_MIN_CONFIDENCE = 0.20
+BALL_RETRO_BASE_RADIUS_PX = 96.0
+BALL_RETRO_MAX_MISS_STREAK = 6
+BALL_SAM_MIN_SCORE = 0.45
+BALL_SAM_REACQUIRE_MISSING_FRAMES = 15
 PLAYER_RECOVERY_MIN_SAM_SCORE = 0.35
 GROUNDED_YOLO_MIN_SIDE_PX = 96
+DISCOVERY_BRIDGE_MATCH_MIN_IOU = 0.15
+DISCOVERY_BRIDGE_MATCH_MAX_CENTER_DISTANCE_PX = 64.0
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
 
@@ -90,6 +108,13 @@ def load_layer1_identity_policy(policy_file=IDENTITY_POLICY_FILE):
     identity = policy.get("identity") or {}
     short_gap = identity.get("short_gap") or {}
     hypotheses = identity.get("hypotheses") or {}
+    evidence_model = identity.get("evidence_model") or {}
+    hard_constraints = identity.get("hard_constraints") or {}
+    observation_contract = evidence_model.get("observation_contract") or {}
+    on_court_plausibility = evidence_model.get("on_court_plausibility") or {}
+    short_gap_link = evidence_model.get("short_gap_link") or {}
+    scene_state = evidence_model.get("scene_state") or {}
+    short_gap_constraints = hard_constraints.get("short_gap_link") or {}
     assumptions = policy.get("assumptions") or {}
 
     required_sections = {
@@ -98,11 +123,67 @@ def load_layer1_identity_policy(policy_file=IDENTITY_POLICY_FILE):
         "identity": identity,
         "identity.short_gap": short_gap,
         "identity.hypotheses": hypotheses,
+        "identity.evidence_model": evidence_model,
+        "identity.evidence_model.observation_contract": observation_contract,
+        "identity.evidence_model.on_court_plausibility": on_court_plausibility,
+        "identity.evidence_model.short_gap_link": short_gap_link,
+        "identity.evidence_model.scene_state": scene_state,
+        "identity.hard_constraints": hard_constraints,
+        "identity.hard_constraints.short_gap_link": short_gap_constraints,
     }
     missing_sections = [name for name, value in required_sections.items() if not value]
     if missing_sections:
         raise ValueError(
             f"Layer 1 identity policy is missing required sections: {', '.join(missing_sections)}"
+        )
+
+    consistency_pairs = [
+        (
+            "identity.short_gap.max_gap_frames",
+            short_gap.get("max_gap_frames"),
+            "identity.hard_constraints.short_gap_link.max_gap_frames",
+            short_gap_constraints.get("max_gap_frames"),
+        ),
+        (
+            "identity.short_gap.repair_score_threshold",
+            short_gap.get("repair_score_threshold"),
+            "identity.evidence_model.short_gap_link.min_score",
+            short_gap_link.get("min_score"),
+        ),
+        (
+            "identity.short_gap.max_court_distance",
+            short_gap.get("max_court_distance"),
+            "identity.hard_constraints.short_gap_link.max_court_distance",
+            short_gap_constraints.get("max_court_distance"),
+        ),
+        (
+            "identity.short_gap.max_center_distance_ratio",
+            short_gap.get("max_center_distance_ratio"),
+            "identity.hard_constraints.short_gap_link.max_center_distance_ratio",
+            short_gap_constraints.get("max_center_distance_ratio"),
+        ),
+        (
+            "identity.short_gap.min_size_consistency",
+            short_gap.get("min_size_consistency"),
+            "identity.hard_constraints.short_gap_link.min_size_consistency",
+            short_gap_constraints.get("min_size_consistency"),
+        ),
+        (
+            "continuity.reset_identity_on_discontinuity",
+            continuity.get("reset_identity_on_discontinuity"),
+            "identity.evidence_model.scene_state.reset_identity_on_discontinuity",
+            scene_state.get("reset_identity_on_discontinuity"),
+        ),
+    ]
+    mismatches = [
+        f"{left_name} != {right_name}"
+        for left_name, left_value, right_name, right_value in consistency_pairs
+        if left_value != right_value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Layer 1 identity policy has inconsistent duplicated thresholds: "
+            + ", ".join(mismatches)
         )
 
     return policy
@@ -115,20 +196,61 @@ CONTINUITY_POLICY = LAYER1_IDENTITY_POLICY["continuity"]
 IDENTITY_POLICY = LAYER1_IDENTITY_POLICY["identity"]
 IDENTITY_SHORT_GAP_POLICY = IDENTITY_POLICY["short_gap"]
 IDENTITY_HYPOTHESIS_POLICY = IDENTITY_POLICY["hypotheses"]
+IDENTITY_EVIDENCE_MODEL = IDENTITY_POLICY["evidence_model"]
+IDENTITY_HARD_CONSTRAINTS = IDENTITY_POLICY["hard_constraints"]
+IDENTITY_OBSERVATION_CONTRACT = IDENTITY_EVIDENCE_MODEL["observation_contract"]
+ON_COURT_PLAUSIBILITY_POLICY = IDENTITY_EVIDENCE_MODEL["on_court_plausibility"]
+SHORT_GAP_LINK_POLICY = IDENTITY_EVIDENCE_MODEL["short_gap_link"]
+IDENTITY_SCENE_STATE_POLICY = IDENTITY_EVIDENCE_MODEL["scene_state"]
+IDENTITY_CONTINUITY_PARTITION_FIELD = str(IDENTITY_SCENE_STATE_POLICY["continuity_partition_field"])
+SHORT_GAP_HARD_CONSTRAINTS = IDENTITY_HARD_CONSTRAINTS["short_gap_link"]
 
-SHORT_GAP_REPAIR_MAX_GAP = int(IDENTITY_SHORT_GAP_POLICY["max_gap_frames"])
-IDENTITY_REPAIR_SCORE_THRESHOLD = float(IDENTITY_SHORT_GAP_POLICY["repair_score_threshold"])
-IDENTITY_REPAIR_MAX_COURT_DISTANCE = float(IDENTITY_SHORT_GAP_POLICY["max_court_distance"])
-IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = float(IDENTITY_SHORT_GAP_POLICY["max_center_distance_ratio"])
+ON_COURT_SCORE_THRESHOLD = float(ON_COURT_PLAUSIBILITY_POLICY["score_thresholds"]["on_court_candidate_min"])
+ACTIVE_PLAYER_SCORE_THRESHOLD = float(ON_COURT_PLAUSIBILITY_POLICY["score_thresholds"]["active_player_candidate_min"])
+ON_COURT_POSITIVE_WEIGHTS = ON_COURT_PLAUSIBILITY_POLICY["positive_weights"]
+ON_COURT_PENALTY_WEIGHTS = ON_COURT_PLAUSIBILITY_POLICY["penalty_weights"]
+ON_COURT_SPECTATOR_RISK_WEIGHTS = ON_COURT_PLAUSIBILITY_POLICY["spectator_risk_weights"]
+SHORT_GAP_REPAIR_MAX_GAP = int(SHORT_GAP_HARD_CONSTRAINTS["max_gap_frames"])
+SHORT_GAP_MIN_SIZE_CONSISTENCY = float(SHORT_GAP_HARD_CONSTRAINTS["min_size_consistency"])
+IDENTITY_REPAIR_SCORE_THRESHOLD = float(SHORT_GAP_LINK_POLICY["min_score"])
+IDENTITY_REPAIR_MAX_COURT_DISTANCE = float(SHORT_GAP_HARD_CONSTRAINTS["max_court_distance"])
+IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO = float(SHORT_GAP_HARD_CONSTRAINTS["max_center_distance_ratio"])
+SHORT_GAP_LINK_WEIGHTS = SHORT_GAP_LINK_POLICY["weights"]
 IDENTITY_HYPOTHESIS_MIN_SCORE = float(IDENTITY_HYPOTHESIS_POLICY["min_score"])
 IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP = int(IDENTITY_HYPOTHESIS_POLICY["max_candidates_per_group"])
+IDENTITY_HYPOTHESIS_MAX_GLOBAL_HYPOTHESES = int(IDENTITY_HYPOTHESIS_POLICY.get("max_global_hypotheses", max(4, IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP)))
 IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN = float(IDENTITY_HYPOTHESIS_POLICY["ambiguity_margin"])
 DISCONTINUITY_VISUAL_DELTA_THRESHOLD = float(CONTINUITY_POLICY["visual_delta_threshold"])
 DISCONTINUITY_TRACK_CHURN_THRESHOLD = float(CONTINUITY_POLICY["track_churn_threshold"])
 DISCONTINUITY_SCORE_THRESHOLD = float(CONTINUITY_POLICY["score_threshold"])
-RESET_IDENTITY_ON_DISCONTINUITY = bool(CONTINUITY_POLICY.get("reset_identity_on_discontinuity", True))
+RESET_IDENTITY_ON_DISCONTINUITY = bool(IDENTITY_SCENE_STATE_POLICY.get("reset_identity_on_discontinuity", CONTINUITY_POLICY.get("reset_identity_on_discontinuity", True)))
 OCCLUSION_FIRST_WITHIN_SEGMENT = bool(IDENTITY_POLICY.get("occlusion_first_within_segment", True))
 IDENTITY_HYPOTHESES_ENABLED = bool(IDENTITY_HYPOTHESIS_POLICY.get("enabled", True))
+IDENTITY_RESOLUTION_CONFIG = IdentityResolutionConfig(
+    policy_version=IDENTITY_POLICY_VERSION,
+    max_gap_frames=SHORT_GAP_REPAIR_MAX_GAP,
+    max_overlap_probe_frames=SHORT_GAP_REPAIR_MAX_GAP,
+    max_gap_probe_frames=SHORT_GAP_REPAIR_MAX_GAP,
+    max_assignment_candidates_per_group=max(8, IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP),
+    max_assignment_hypotheses_per_group=max(4, IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP),
+    max_global_hypotheses=IDENTITY_HYPOTHESIS_MAX_GLOBAL_HYPOTHESES,
+    min_size_consistency=SHORT_GAP_MIN_SIZE_CONSISTENCY,
+    repair_score_threshold=IDENTITY_REPAIR_SCORE_THRESHOLD,
+    max_court_distance=IDENTITY_REPAIR_MAX_COURT_DISTANCE,
+    max_center_distance_ratio=IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO,
+    ambiguity_margin=IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN,
+    candidate_min_score=IDENTITY_HYPOTHESIS_MIN_SCORE,
+    continuity_partition_field=IDENTITY_CONTINUITY_PARTITION_FIELD,
+    reset_identity_on_discontinuity=RESET_IDENTITY_ON_DISCONTINUITY,
+    hypothesis_max_candidates_per_group=IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP,
+    short_gap_link_weights=SHORT_GAP_LINK_WEIGHTS,
+)
+TRACKLET_STITCHER_CONFIG = TrackletStitcherConfig(
+    max_gap=SHORT_GAP_REPAIR_MAX_GAP,
+    continuity_partition_field=IDENTITY_CONTINUITY_PARTITION_FIELD,
+    reset_identity_on_discontinuity=RESET_IDENTITY_ON_DISCONTINUITY,
+    occlusion_first_within_segment=OCCLUSION_FIRST_WITHIN_SEGMENT,
+)
 
 
 def _to_float_list(values):
@@ -532,6 +654,134 @@ def _run_ball_predictive_search(ball_model, frame, predictive_state, *, frame_id
     return detections, summary
 
 
+def _sam_runtime_status_for_exception(exc):
+    text = str(exc).lower()
+    if "gated repo" in text or "restricted" in text or "401" in text:
+        return "gated_repo"
+    if "cuda" in text and ("unavailable" in text or "capable" in text):
+        return "cuda_unavailable"
+    if "couldn't connect" in text or "connection" in text or "offline" in text or "timed out" in text:
+        return "weights_unavailable"
+    if "not installed" in text:
+        return "unavailable"
+    if "out of memory" in text or "cuda out of memory" in text:
+        return "oom"
+    return "load_failed"
+
+
+def _build_ball_sam_detection(candidate, *, h_matrix, source, model_name, prompt, trigger_reason):
+    detection = {
+        "track_id": None,
+        "class_id": BALL_CLASS_ID,
+        "class_name": "sports_ball",
+        "confidence": round(float(candidate.score), 4),
+        "bbox_xyxy": [float(v) for v in candidate.bbox_xyxy],
+        "bbox_xywh": [float(v) for v in candidate.bbox_xywh],
+        "center_xy": [round(float(v), 3) for v in candidate.center_xy],
+        "ball_detection_source": source,
+        "sam3_ball_detection": {
+            "backend": "sam3_repo_v1",
+            "model_name": model_name,
+            "text_prompt": prompt,
+            "trigger_reason": trigger_reason,
+            "score": round(float(candidate.score), 4),
+            "mask_area_px": int(candidate.mask_area_px),
+            "mask_area_ratio": round(float(candidate.mask_area_ratio), 6),
+        },
+    }
+    if h_matrix is not None:
+        court_xy = project_pixel_to_court(detection["center_xy"][0], detection["center_xy"][1], h_matrix)
+        detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+    return detection
+
+
+def _online_ball_discontinuity(previous_signature, previous_track_ids, current_signature, current_track_ids, detection_count_delta):
+    if previous_signature is None:
+        return {
+            "triggered": False,
+            "visual_delta": 0.0,
+            "track_churn": 0.0,
+            "detection_count_delta": int(detection_count_delta),
+            "score": 0.0,
+        }
+    visual_delta = _frame_visual_delta(previous_signature, current_signature)
+    prev_ids = previous_track_ids or set()
+    curr_ids = current_track_ids or set()
+    union_ids = prev_ids | curr_ids
+    track_overlap = (len(prev_ids & curr_ids) / len(union_ids)) if union_ids else 1.0
+    track_churn = 1.0 - track_overlap
+    detection_count_score = _clip01(float(detection_count_delta) / 6.0)
+    visual_score = _clip01(visual_delta / DISCONTINUITY_VISUAL_DELTA_THRESHOLD)
+    churn_score = _clip01(track_churn / DISCONTINUITY_TRACK_CHURN_THRESHOLD)
+    discontinuity_score = 0.60 * visual_score + 0.30 * churn_score + 0.10 * detection_count_score
+    triggered = bool(
+        discontinuity_score >= DISCONTINUITY_SCORE_THRESHOLD
+        or (visual_delta >= DISCONTINUITY_VISUAL_DELTA_THRESHOLD and track_churn >= 0.55)
+    )
+    return {
+        "triggered": triggered,
+        "visual_delta": round(float(visual_delta), 4),
+        "track_churn": round(float(track_churn), 4),
+        "detection_count_delta": int(detection_count_delta),
+        "score": round(float(discontinuity_score), 4),
+    }
+
+
+def _ball_sam_trigger_reason(best_ball_detection, predictive_state, missing_streak, online_discontinuity):
+    if not _ball_detection_needs_search(best_ball_detection):
+        return None
+    if online_discontinuity.get("triggered"):
+        return "discontinuity_reset"
+    if predictive_state is None:
+        return "initial_bootstrap"
+    if int(missing_streak) >= BALL_SAM_REACQUIRE_MISSING_FRAMES:
+        return "sustained_missing"
+    return None
+
+
+def _run_sam_ball_search(sam_ball_detector, frame, *, h_matrix, trigger_reason):
+    summary = {
+        "enabled": sam_ball_detector is not None,
+        "status": "disabled" if sam_ball_detector is None else "ready",
+        "triggered": trigger_reason is not None and sam_ball_detector is not None,
+        "trigger_reason": trigger_reason,
+        "candidate_count": 0,
+        "accepted": False,
+        "accepted_score": None,
+        "source": None,
+        "model_name": getattr(sam_ball_detector, "model_name", None),
+        "text_prompt": getattr(sam_ball_detector, "text_prompt", None),
+    }
+    if sam_ball_detector is None or trigger_reason is None:
+        return [], summary, summary["status"]
+    try:
+        candidates = sam_ball_detector.detect(frame)
+    except Exception as exc:
+        summary["status"] = _sam_runtime_status_for_exception(exc)
+        return [], summary, summary["status"]
+    accepted = []
+    source = "sam3_initial_bootstrap_v1" if trigger_reason == "initial_bootstrap" else "sam3_reacquire_v1"
+    for candidate in candidates:
+        if float(candidate.score) < BALL_SAM_MIN_SCORE:
+            continue
+        accepted.append(
+            _build_ball_sam_detection(
+                candidate,
+                h_matrix=h_matrix,
+                source=source,
+                model_name=sam_ball_detector.model_name,
+                prompt=sam_ball_detector.text_prompt,
+                trigger_reason=trigger_reason,
+            )
+        )
+    summary["candidate_count"] = len(accepted)
+    if accepted:
+        summary["accepted"] = True
+        summary["accepted_score"] = round(float(accepted[0].get("confidence") or 0.0), 4)
+        summary["source"] = source
+    return accepted, summary, summary["status"]
+
+
 def _detection_sort_key_for_ball_roi(detection):
     reasons = detection.get("active_player_reasons") or {}
     return (
@@ -583,6 +833,39 @@ def _bbox_iou_xyxy(box_a, box_b):
     if union <= 0.0:
         return 0.0
     return inter / union
+
+
+def _scene_prior_for_point(scene_prior, x, y, *, frame_width, frame_height):
+    if not scene_prior or frame_width <= 0 or frame_height <= 0:
+        return 0.0
+
+    mask_score = 0.0
+    mask_grid = scene_prior.get("region_mask_grid") or []
+    if isinstance(mask_grid, list) and mask_grid:
+        rows = len(mask_grid)
+        cols = max((len(row) for row in mask_grid if isinstance(row, list)), default=0)
+        if rows > 0 and cols > 0:
+            x_clamped = min(max(float(x), 0.0), max(float(frame_width) - 1.0, 0.0))
+            y_clamped = min(max(float(y), 0.0), max(float(frame_height) - 1.0, 0.0))
+            col_idx = min(cols - 1, max(0, int((x_clamped / max(float(frame_width), 1.0)) * cols)))
+            row_idx = min(rows - 1, max(0, int((y_clamped / max(float(frame_height), 1.0)) * rows)))
+            row = mask_grid[row_idx] if row_idx < len(mask_grid) else []
+            if isinstance(row, list) and col_idx < len(row):
+                mask_score = _clip01(float(row[col_idx]))
+
+    proposal_score = 0.0
+    for proposal in scene_prior.get("proposal_regions") or []:
+        bbox_xyxy = proposal.get("bbox_xyxy")
+        if not bbox_xyxy or len(bbox_xyxy) != 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+        if x1 <= float(x) <= x2 and y1 <= float(y) <= y2:
+            proposal_score = max(
+                proposal_score,
+                _clip01(float(proposal.get("confidence") or proposal.get("area_ratio") or 1.0)),
+            )
+
+    return _clip01(max(mask_score, proposal_score))
 
 
 def _dedupe_ball_detections(detections):
@@ -659,6 +942,244 @@ def _run_ball_roi_fallback(ball_model, frame, person_detections, *, device, h_ma
     detections = _dedupe_ball_detections(detections)
     summary["candidate_count"] = len(detections)
     return detections, summary
+
+
+def _ball_detection_as_candidate(ball_detection):
+    if ball_detection is None:
+        return None
+    candidate = {
+        "track_id": ball_detection.get("track_id"),
+        "class_id": ball_detection.get("class_id", BALL_CLASS_ID),
+        "class_name": ball_detection.get("class_name") or "sports_ball",
+        "confidence": float(ball_detection.get("confidence") or 0.0),
+        "bbox_xyxy": [float(v) for v in (ball_detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0])],
+        "bbox_xywh": [float(v) for v in (ball_detection.get("bbox_xywh") or [0.0, 0.0, 0.0, 0.0])],
+        "ball_detection_source": ball_detection.get("source") or ball_detection.get("ball_detection_source") or "unknown",
+    }
+    center_xy = ball_detection.get("center_xy")
+    if center_xy is not None:
+        candidate["center_xy"] = [float(v) for v in center_xy]
+    court_xy = ball_detection.get("court_xy")
+    if court_xy is not None:
+        candidate["court_xy"] = [float(v) for v in court_xy]
+    if ball_detection.get("retro_backfilled"):
+        candidate["retro_backfilled"] = True
+        candidate["retro_anchor_frame_idx"] = ball_detection.get("retro_anchor_frame_idx")
+        candidate["retro_link_frame_idx"] = ball_detection.get("retro_link_frame_idx")
+    return candidate
+
+
+def _retro_ball_search_roi(frame_shape, anchor_detection, next_detection=None):
+    if anchor_detection is None:
+        return None
+    center_xy = anchor_detection.get("center_xy") or []
+    if len(center_xy) != 2:
+        return None
+    anchor_center = np.array(center_xy, dtype=np.float32)
+    if next_detection is not None and next_detection.get("center_xy") is not None:
+        next_center = np.array(next_detection.get("center_xy"), dtype=np.float32)
+        velocity_xy = next_center - anchor_center
+        predicted_center = anchor_center - velocity_xy
+        radius = BALL_RETRO_BASE_RADIUS_PX + 0.45 * float(np.linalg.norm(velocity_xy))
+    else:
+        predicted_center = anchor_center
+        radius = BALL_RETRO_BASE_RADIUS_PX
+    roi_bbox = [
+        float(predicted_center[0] - radius),
+        float(predicted_center[1] - radius),
+        float(predicted_center[0] + radius),
+        float(predicted_center[1] + radius),
+    ]
+    return _clip_roi_xyxy(roi_bbox, frame_shape)
+
+
+def _run_ball_retro_search(ball_model, frame, anchor_detection, next_detection, *, frame_idx, device, h_matrix=None):
+    roi_bbox = _retro_ball_search_roi(frame.shape, anchor_detection, next_detection)
+    summary = {
+        "enabled": anchor_detection is not None,
+        "triggered": roi_bbox is not None,
+        "source": "retro_search_v1",
+        "roi_bbox_xyxy": roi_bbox,
+        "candidate_count": 0,
+        "anchor_frame_idx": anchor_detection.get("frame_idx") if anchor_detection else None,
+        "next_frame_idx": next_detection.get("frame_idx") if next_detection else None,
+    }
+    if roi_bbox is None:
+        return [], summary
+    x1, y1, x2, y2 = roi_bbox
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return [], summary
+    ball_results = ball_model.predict(
+        crop,
+        classes=[BALL_CLASS_ID],
+        conf=0.02,
+        device=device,
+        verbose=False,
+    )
+    detections = []
+    if ball_results and ball_results[0].boxes is not None and len(ball_results[0].boxes) > 0:
+        result = ball_results[0]
+        for det_idx in range(len(result.boxes)):
+            detection = build_detection(result, det_idx, ball_model.names, crop, h_matrix=None)
+            bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+            bbox_xywh = detection.get("bbox_xywh") or [0.0, 0.0, 0.0, 0.0]
+            detection["bbox_xyxy"] = [
+                float(bbox_xyxy[0] + x1),
+                float(bbox_xyxy[1] + y1),
+                float(bbox_xyxy[2] + x1),
+                float(bbox_xyxy[3] + y1),
+            ]
+            detection["bbox_xywh"] = [
+                float(bbox_xywh[0] + x1),
+                float(bbox_xywh[1] + y1),
+                float(bbox_xywh[2]),
+                float(bbox_xywh[3]),
+            ]
+            detection["ball_detection_source"] = "retro_search_v1"
+            detection["retro_backfilled"] = True
+            detection["retro_anchor_frame_idx"] = anchor_detection.get("frame_idx") if anchor_detection else None
+            detection["retro_link_frame_idx"] = next_detection.get("frame_idx") if next_detection else None
+            if h_matrix is not None:
+                center_x, center_y = detection["bbox_xywh"][0], detection["bbox_xywh"][1]
+                court_xy = project_pixel_to_court(center_x, center_y, h_matrix)
+                detection["court_xy"] = [float(court_xy[0]), float(court_xy[1])]
+            detections.append(detection)
+    detections = _dedupe_ball_detections(detections)
+    summary["candidate_count"] = len(detections)
+    return detections, summary
+
+
+def retrofit_ball_detections_before_first_observation(frames, *, ball_model, device):
+    if not frames:
+        return {"enabled": False, "anchor_frame_idx": None, "backfilled_frame_count": 0, "stop_reason": "empty"}
+    anchor_idx = None
+    for idx, frame in enumerate(frames):
+        if not _ball_detection_needs_search(frame.get("ball_detection"), min_confidence=BALL_RETRO_ANCHOR_MIN_CONFIDENCE):
+            anchor_idx = idx
+            break
+    default_summary = {
+        "enabled": anchor_idx is not None and anchor_idx > 0,
+        "triggered": False,
+        "anchor_frame_idx": anchor_idx,
+        "roi_bbox_xyxy": None,
+        "candidate_count": 0,
+        "accepted": False,
+        "accepted_source": None,
+        "stop_reason": None,
+    }
+    for frame in frames:
+        frame.setdefault("ball_retro_search", dict(default_summary))
+    if anchor_idx is None:
+        return {"enabled": False, "anchor_frame_idx": None, "backfilled_frame_count": 0, "stop_reason": "no_anchor"}
+    if anchor_idx == 0:
+        return {"enabled": False, "anchor_frame_idx": 0, "backfilled_frame_count": 0, "stop_reason": "anchor_is_first_frame"}
+
+    anchor_segment_id = frames[anchor_idx].get("continuity_segment_id")
+    known_after = _ball_detection_as_candidate(frames[anchor_idx].get("ball_detection"))
+    if known_after is None:
+        return {"enabled": False, "anchor_frame_idx": anchor_idx, "backfilled_frame_count": 0, "stop_reason": "missing_anchor_detection"}
+    known_after["frame_idx"] = int(frames[anchor_idx].get("frame_idx", anchor_idx))
+    next_detection = None
+    backfilled_frame_count = 0
+    miss_streak = 0
+    stop_reason = "segment_start"
+
+    for idx in range(anchor_idx - 1, -1, -1):
+        frame = frames[idx]
+        frame_summary = frame["ball_retro_search"]
+        frame_summary.update({
+            "enabled": True,
+            "anchor_frame_idx": int(frames[anchor_idx].get("frame_idx", anchor_idx)),
+        })
+        if frame.get("continuity_segment_id") != anchor_segment_id:
+            stop_reason = "segment_boundary"
+            break
+
+        existing_ball = frame.get("ball_detection")
+        if not _ball_detection_needs_search(existing_ball, min_confidence=BALL_RETRO_ANCHOR_MIN_CONFIDENCE):
+            current = _ball_detection_as_candidate(existing_ball)
+            current["frame_idx"] = int(frame.get("frame_idx", idx))
+            next_detection = known_after
+            known_after = current
+            miss_streak = 0
+            frame_summary.update({
+                "accepted": True,
+                "accepted_source": current.get("ball_detection_source"),
+                "stop_reason": None,
+            })
+            continue
+
+        h_matrix = _h_matrix_as_array(frame.get("_h_matrix"))
+        retro_detections, retro_summary = _run_ball_retro_search(
+            ball_model,
+            frame.get("_frame_bgr"),
+            known_after,
+            next_detection,
+            frame_idx=int(frame.get("frame_idx", idx)),
+            device=device,
+            h_matrix=h_matrix,
+        )
+        fallback_detections, fallback_summary = _run_ball_roi_fallback(
+            ball_model,
+            frame.get("_frame_bgr"),
+            frame.get("detections") or [],
+            device=device,
+            h_matrix=h_matrix,
+        )
+        combined = []
+        for candidate in frame.get("raw_ball_detections") or []:
+            built = _ball_detection_as_candidate(candidate)
+            if built is not None:
+                combined.append(built)
+        combined.extend(retro_detections)
+        combined.extend(fallback_detections)
+        combined = _dedupe_ball_detections(combined)
+        frame["raw_ball_detections"] = _serialize_ball_candidates(combined)
+        selected = max(combined, key=lambda item: float(item.get("confidence") or 0.0), default=None)
+        accepted = False
+        if selected is not None:
+            best = _extract_best_ball_detection([selected])
+            if not _ball_detection_needs_search(best, min_confidence=BALL_RETRO_ANCHOR_MIN_CONFIDENCE):
+                best["retro_backfilled"] = True
+                best["retro_anchor_frame_idx"] = int(frames[anchor_idx].get("frame_idx", anchor_idx))
+                best["retro_link_frame_idx"] = known_after.get("frame_idx")
+                frame["ball_detection"] = best
+                current = _ball_detection_as_candidate(best)
+                current["frame_idx"] = int(frame.get("frame_idx", idx))
+                next_detection = known_after
+                known_after = current
+                backfilled_frame_count += 1
+                miss_streak = 0
+                accepted = True
+        if not accepted:
+            miss_streak += 1
+            if miss_streak >= BALL_RETRO_MAX_MISS_STREAK:
+                stop_reason = "retro_miss_streak"
+                frame_summary.update({
+                    "triggered": bool(retro_summary.get("triggered") or fallback_summary.get("triggered")),
+                    "roi_bbox_xyxy": retro_summary.get("roi_bbox_xyxy"),
+                    "candidate_count": int(len(combined)),
+                    "accepted": False,
+                    "accepted_source": None,
+                    "stop_reason": stop_reason,
+                })
+                break
+        frame_summary.update({
+            "triggered": bool(retro_summary.get("triggered") or fallback_summary.get("triggered")),
+            "roi_bbox_xyxy": retro_summary.get("roi_bbox_xyxy"),
+            "candidate_count": int(len(combined)),
+            "accepted": bool(accepted),
+            "accepted_source": (frame.get("ball_detection") or {}).get("source") if accepted else None,
+            "stop_reason": None,
+        })
+
+    return {
+        "enabled": True,
+        "anchor_frame_idx": int(frames[anchor_idx].get("frame_idx", anchor_idx)),
+        "backfilled_frame_count": int(backfilled_frame_count),
+        "stop_reason": stop_reason,
+    }
 
 
 def _ball_size_score(detection):
@@ -1079,9 +1600,83 @@ def _resolve_identity_jersey_consensus(evidence_items):
     }
 
 
-def annotate_identity_jersey_numbers(frames):
+def _sort_and_clip_jersey_samples(samples):
+    ranked = sorted(
+        samples,
+        key=lambda item: (
+            float(item.get("sharpness") or 0.0),
+            float(item.get("ocr_confidence") or 0.0),
+            int(item.get("frame_idx") or -1),
+        ),
+        reverse=True,
+    )
+    return ranked[:JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY]
+
+
+def _serialize_jersey_consensus(consensus):
+    return {
+        "number": consensus["number"],
+        "confidence": consensus["confidence"],
+        "vote_count": consensus["vote_count"],
+        "evidence_count": consensus["evidence_count"],
+        "votes": consensus["votes"],
+        "samples": [
+            {
+                "frame_idx": sample["frame_idx"],
+                "track_id": sample["track_id"],
+                "identity_track_id": sample.get("identity_track_id"),
+                "candidate": sample["candidate"],
+                "raw_text": sample["raw_text"],
+                "ocr_confidence": sample["ocr_confidence"],
+                "sharpness": sample["sharpness"],
+            }
+            for sample in consensus["samples"]
+        ],
+    }
+
+
+def _build_track_option_consensus(track_samples, identity_hypotheses):
+    track_identity_options = (identity_hypotheses or {}).get("track_identity_options") or []
+    if not track_identity_options:
+        return {}
+
+    track_option_consensus = {}
+    for record in track_identity_options:
+        track_id = int(record["track_id"])
+        serialized_options = []
+        for option in record.get("options") or []:
+            option_samples = []
+            for chain_track_id in option.get("chain_track_ids") or []:
+                option_samples.extend(track_samples.get(int(chain_track_id), []))
+            option_samples = _sort_and_clip_jersey_samples(option_samples)
+            consensus = _resolve_identity_jersey_consensus(option_samples)
+            serialized_option = {
+                "canonical_track_id": int(option["canonical_track_id"]),
+                "chain_track_ids": [int(value) for value in option.get("chain_track_ids") or []],
+                "support_share": round(float(option.get("support_share") or 0.0), 4),
+                "best_total_score": round(float(option.get("best_total_score") or 0.0), 4),
+                "best_score_margin_to_best": round(float(option.get("best_score_margin_to_best") or 0.0), 4),
+                "hypothesis_ids": list(option.get("hypothesis_ids") or []),
+                "group_hypothesis_ids": list(option.get("group_hypothesis_ids") or []),
+                "has_consensus": consensus is not None,
+            }
+            if consensus is not None:
+                serialized_option["consensus"] = _serialize_jersey_consensus({**consensus, "samples": option_samples})
+            serialized_options.append(serialized_option)
+        track_option_consensus[track_id] = {
+            "track_id": track_id,
+            "is_ambiguous": bool(record.get("is_ambiguous")),
+            "option_count": int(record.get("option_count") or len(serialized_options)),
+            "best_canonical_track_id": int(record.get("best_canonical_track_id") or track_id),
+            "options": serialized_options,
+        }
+    return track_option_consensus
+
+
+def annotate_identity_jersey_numbers(frames, *, identity_hypotheses=None):
     reader = get_easyocr_reader()
     identity_samples = {}
+    track_samples = {}
     for frame in frames:
         for detection in frame.get("detections", []):
             identity_track_id = detection.get("identity_track_id")
@@ -1098,10 +1693,14 @@ def annotate_identity_jersey_numbers(frames):
                 "identity_track_id": identity_track_id,
                 **evidence,
             }
-            bucket = identity_samples.setdefault(identity_track_id, [])
-            bucket.append(sample)
-            bucket.sort(key=lambda item: (item["sharpness"], item["ocr_confidence"]), reverse=True)
-            del bucket[JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY:]
+            identity_bucket = identity_samples.setdefault(identity_track_id, [])
+            identity_bucket.append(sample)
+            identity_samples[identity_track_id] = _sort_and_clip_jersey_samples(identity_bucket)
+            track_id = detection.get("track_id")
+            if track_id is not None:
+                track_bucket = track_samples.setdefault(int(track_id), [])
+                track_bucket.append(sample)
+                track_samples[int(track_id)] = _sort_and_clip_jersey_samples(track_bucket)
 
     identity_consensus = {}
     for identity_track_id, samples in identity_samples.items():
@@ -1113,6 +1712,8 @@ def annotate_identity_jersey_numbers(frames):
             "samples": samples,
         }
 
+    track_option_consensus = _build_track_option_consensus(track_samples, identity_hypotheses)
+
     for frame in frames:
         for detection in frame.get("detections", []):
             identity_track_id = detection.get("identity_track_id")
@@ -1122,33 +1723,185 @@ def annotate_identity_jersey_numbers(frames):
                 detection["identity_jersey_number_confidence"] = consensus["confidence"]
                 detection["identity_jersey_number_source"] = consensus["source"]
                 detection["identity_jersey_evidence_count"] = consensus["evidence_count"]
+            track_id = detection.get("track_id")
+            option_record = track_option_consensus.get(int(track_id)) if track_id is not None else None
+            if option_record is not None:
+                detection["identity_jersey_options"] = json.loads(json.dumps(option_record["options"]))
+                detection["identity_jersey_option_count"] = int(option_record["option_count"])
+                detection["identity_jersey_is_ambiguous"] = bool(option_record["is_ambiguous"])
+                detection["identity_jersey_best_canonical_track_id"] = int(option_record["best_canonical_track_id"])
             detection.pop("_jersey_crop_bgr", None)
             detection.pop("_jersey_crop_sharpness", None)
     return {
         "reader_available": reader is not None,
         "identity_count_with_consensus": len(identity_consensus),
+        "track_option_count_with_consensus": sum(
+            1 for record in track_option_consensus.values() if any(option.get("has_consensus") for option in record.get("options") or [])
+        ),
+        "ambiguous_track_option_count_with_consensus": sum(
+            1
+            for record in track_option_consensus.values()
+            if record.get("is_ambiguous") and any(option.get("has_consensus") for option in record.get("options") or [])
+        ),
         "identity_consensus": {
-            str(identity_track_id): {
-                "number": consensus["number"],
-                "confidence": consensus["confidence"],
-                "vote_count": consensus["vote_count"],
-                "evidence_count": consensus["evidence_count"],
-                "votes": consensus["votes"],
-                "samples": [
-                    {
-                        "frame_idx": sample["frame_idx"],
-                        "track_id": sample["track_id"],
-                        "candidate": sample["candidate"],
-                        "raw_text": sample["raw_text"],
-                        "ocr_confidence": sample["ocr_confidence"],
-                        "sharpness": sample["sharpness"],
-                    }
-                    for sample in consensus["samples"]
-                ],
-            }
+            str(identity_track_id): _serialize_jersey_consensus(consensus)
             for identity_track_id, consensus in sorted(identity_consensus.items())
         },
+        "track_option_consensus": {
+            str(track_id): json.loads(json.dumps(record))
+            for track_id, record in sorted(track_option_consensus.items())
+        },
     }
+
+
+def _jersey_consensus_strength(consensus):
+    if not consensus:
+        return 0.0
+    confidence = float(consensus.get("confidence") or 0.0)
+    evidence_count = float(consensus.get("evidence_count") or 0.0)
+    vote_count = float(consensus.get("vote_count") or 0.0)
+    evidence_factor = min(1.0, evidence_count / float(max(JERSEY_OCR_CONSENSUS_MIN_VOTES + 1, 1)))
+    vote_factor = min(1.0, vote_count / float(max(JERSEY_OCR_CONSENSUS_MIN_VOTES, 1)))
+    return confidence * (0.6 * evidence_factor + 0.4 * vote_factor)
+
+
+def resolve_identity_global_hypotheses_with_jersey(identity_hypotheses, jersey_ocr):
+    global_hypotheses = list((identity_hypotheses or {}).get("global_hypotheses") or [])
+    track_option_consensus = (jersey_ocr or {}).get("track_option_consensus") or {}
+    if not global_hypotheses:
+        return {
+            "kind": "jersey_global_identity_tiebreak_v1",
+            "weight": JERSEY_IDENTITY_TIEBREAK_WEIGHT,
+            "base_selected_global_hypothesis_id": None,
+            "selected_global_hypothesis_id": None,
+            "changed_selected_global_hypothesis": False,
+            "global_hypothesis_count": 0,
+            "global_hypotheses": [],
+            "preferred_track_resolution": {},
+        }
+
+    reranked = []
+    for global_hypothesis in global_hypotheses:
+        global_hypothesis_id = global_hypothesis["global_hypothesis_id"]
+        jersey_bonus = 0.0
+        supported_track_count = 0
+        conflicted_track_count = 0
+        track_breakdown = []
+        for track_id_str, record in sorted(track_option_consensus.items(), key=lambda item: int(item[0])):
+            options = list(record.get("options") or [])
+            if not options:
+                continue
+            chosen_option = next((option for option in options if global_hypothesis_id in (option.get("hypothesis_ids") or [])), None)
+            if chosen_option is None and len(options) == 1:
+                chosen_option = options[0]
+            if chosen_option is None:
+                continue
+            chosen_strength = _jersey_consensus_strength(chosen_option.get("consensus"))
+            competitor_strength = max(
+                (_jersey_consensus_strength(option.get("consensus")) for option in options if option is not chosen_option),
+                default=0.0,
+            )
+            delta = JERSEY_IDENTITY_TIEBREAK_WEIGHT * (chosen_strength - competitor_strength)
+            if chosen_strength > competitor_strength:
+                supported_track_count += 1
+            elif chosen_strength < competitor_strength:
+                conflicted_track_count += 1
+            if chosen_strength > 0.0 or competitor_strength > 0.0 or abs(delta) > 1e-9:
+                track_breakdown.append({
+                    "track_id": int(track_id_str),
+                    "chosen_canonical_track_id": int(chosen_option.get("canonical_track_id") or int(track_id_str)),
+                    "chosen_consensus_number": (chosen_option.get("consensus") or {}).get("number"),
+                    "chosen_consensus_strength": round(float(chosen_strength), 4),
+                    "best_competing_consensus_strength": round(float(competitor_strength), 4),
+                    "jersey_delta": round(float(delta), 4),
+                    "has_competing_consensus": any(option is not chosen_option and option.get("consensus") for option in options),
+                })
+            jersey_bonus += delta
+        reranked.append({
+            **global_hypothesis,
+            "base_rank": int(global_hypothesis.get("rank") or 0),
+            "base_total_score": round(float(global_hypothesis.get("total_score") or 0.0), 4),
+            "jersey_bonus": round(float(jersey_bonus), 4),
+            "jersey_supported_track_count": int(supported_track_count),
+            "jersey_conflicted_track_count": int(conflicted_track_count),
+            "track_breakdown": track_breakdown,
+            "reranked_total_score": round(float(global_hypothesis.get("total_score") or 0.0) + float(jersey_bonus), 4),
+        })
+
+    reranked.sort(
+        key=lambda item: (
+            -float(item["reranked_total_score"]),
+            -int(item.get("jersey_supported_track_count") or 0),
+            int(item.get("base_rank") or 0),
+            str(item["global_hypothesis_id"]),
+        )
+    )
+    best_total_score = float(reranked[0]["reranked_total_score"])
+    normalizer = sum(np.exp(float(item["reranked_total_score"]) - best_total_score) for item in reranked)
+    selected_global_hypothesis_id = reranked[0]["global_hypothesis_id"]
+    for rank, item in enumerate(reranked, start=1):
+        item["reranked_rank"] = int(rank)
+        item["reranked_score_margin_to_best"] = round(best_total_score - float(item["reranked_total_score"]), 4)
+        item["reranked_score_share"] = round(float(np.exp(float(item["reranked_total_score"]) - best_total_score) / normalizer), 4) if normalizer > 0.0 else 0.0
+        item["selected_after_jersey_tiebreak"] = item["global_hypothesis_id"] == selected_global_hypothesis_id
+
+    preferred_track_resolution = {}
+    selected_record = reranked[0]
+    for track_id_str, record in sorted(track_option_consensus.items(), key=lambda item: int(item[0])):
+        options = list(record.get("options") or [])
+        if not options:
+            continue
+        chosen_option = next(
+            (option for option in options if selected_global_hypothesis_id in (option.get("hypothesis_ids") or [])),
+            None,
+        )
+        if chosen_option is None and len(options) == 1:
+            chosen_option = options[0]
+        if chosen_option is None:
+            continue
+        consensus = chosen_option.get("consensus") or {}
+        preferred_track_resolution[str(track_id_str)] = {
+            "track_id": int(track_id_str),
+            "selected_global_hypothesis_id": selected_global_hypothesis_id,
+            "preferred_canonical_track_id": int(chosen_option.get("canonical_track_id") or int(track_id_str)),
+            "preferred_chain_track_ids": [int(value) for value in chosen_option.get("chain_track_ids") or []],
+            "selected_option_has_consensus": bool(chosen_option.get("has_consensus")),
+            "selected_consensus_number": consensus.get("number"),
+            "selected_consensus_confidence": consensus.get("confidence"),
+            "selected_consensus_evidence_count": consensus.get("evidence_count"),
+            "is_ambiguous": bool(record.get("is_ambiguous")),
+        }
+
+    return {
+        "kind": "jersey_global_identity_tiebreak_v1",
+        "weight": JERSEY_IDENTITY_TIEBREAK_WEIGHT,
+        "base_selected_global_hypothesis_id": global_hypotheses[0]["global_hypothesis_id"],
+        "selected_global_hypothesis_id": selected_global_hypothesis_id,
+        "changed_selected_global_hypothesis": global_hypotheses[0]["global_hypothesis_id"] != selected_global_hypothesis_id,
+        "global_hypothesis_count": len(reranked),
+        "global_hypotheses": reranked,
+        "preferred_track_resolution": preferred_track_resolution,
+    }
+
+
+def annotate_detections_with_jersey_global_resolution(frames, resolution):
+    preferred_track_resolution = (resolution or {}).get("preferred_track_resolution") or {}
+    selected_global_hypothesis_id = (resolution or {}).get("selected_global_hypothesis_id")
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            track_id = detection.get("track_id")
+            if track_id is None:
+                continue
+            preferred = preferred_track_resolution.get(str(int(track_id)))
+            if preferred is None:
+                continue
+            detection["identity_jersey_selected_global_hypothesis_id"] = selected_global_hypothesis_id
+            detection["identity_jersey_preferred_canonical_track_id"] = int(preferred["preferred_canonical_track_id"])
+            detection["identity_jersey_preferred_chain_track_ids"] = [int(value) for value in preferred.get("preferred_chain_track_ids") or []]
+            detection["identity_jersey_selected_option_has_consensus"] = bool(preferred.get("selected_option_has_consensus"))
+            if preferred.get("selected_consensus_number") is not None:
+                detection["identity_jersey_preferred_number"] = preferred.get("selected_consensus_number")
+                detection["identity_jersey_preferred_number_confidence"] = preferred.get("selected_consensus_confidence")
 
 
 class KalmanTrack2D:
@@ -1244,6 +1997,7 @@ def score_active_player(
     frame_height,
     track_frame_count=1,
     bootstrap_context=None,
+    scene_prior=None,
     frame_motion_context=None,
 ):
     confidence = float(detection.get("confidence") or 0.0)
@@ -1335,6 +2089,28 @@ def score_active_player(
     reasons["bootstrap_foreground_prior"] = round(float(center_foreground_prior), 4)
     reasons["bootstrap_foot_prior"] = round(float(foot_foreground_prior), 4)
 
+    scene_center_prior = _scene_prior_for_point(
+        scene_prior,
+        bbox_cx,
+        bbox_cy,
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    scene_foot_prior = _scene_prior_for_point(
+        scene_prior,
+        float(footpoint_xy[0]),
+        float(footpoint_xy[1]),
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    effective_center_prior = max(float(center_foreground_prior), float(scene_center_prior))
+    effective_foot_prior = max(float(foot_foreground_prior), float(scene_foot_prior))
+    reasons["scene_prior_status"] = (scene_prior or {}).get("prior_status")
+    reasons["scene_center_prior"] = round(float(scene_center_prior), 4)
+    reasons["scene_foot_prior"] = round(float(scene_foot_prior), 4)
+    reasons["effective_foreground_prior"] = round(float(effective_center_prior), 4)
+    reasons["effective_foot_prior"] = round(float(effective_foot_prior), 4)
+
     pose_info = _score_pose_coherence(detection)
     reasons["pose_visible_count"] = int(pose_info["visible_count"])
     reasons["pose_torso_visible_count"] = int(pose_info["torso_visible_count"])
@@ -1374,7 +2150,7 @@ def score_active_player(
         )
     reasons["appearance_penalty"] = round(appearance_penalty, 4)
 
-    geometry_prior = max(float(grounding_score), float(foot_foreground_prior), float(center_foreground_prior) * 0.7)
+    geometry_prior = max(float(grounding_score), float(effective_foot_prior), float(effective_center_prior) * 0.7)
     reasons["geometry_prior"] = round(float(geometry_prior), 4)
     ungrounded_shared_motion_penalty = 0.0
     if float(geometry_prior) <= 0.45 and shared_motion and relative_motion_speed <= MOTION_SCORE_THRESHOLD_PX:
@@ -1383,26 +2159,26 @@ def score_active_player(
         )
     reasons["ungrounded_shared_motion_penalty"] = round(float(ungrounded_shared_motion_penalty), 4)
     on_court_score = (
-        0.18 * confidence_score
-        + 0.12 * height_score
-        + 0.20 * float(grounding_score)
-        + 0.10 * float(foot_foreground_prior)
-        + 0.06 * float(center_foreground_prior)
-        + 0.12 * float(pose_info["score"])
-        + 0.10 * float(persistence_score)
-        + 0.06 * float(motion_score)
-        + 0.08 * _clip01(sam3_score / 0.8)
-        - 0.55 * float(edge_penalty)
-        - 0.10 * float(merge_info["score"])
-        - 0.55 * float(appearance_penalty)
-        - float(ungrounded_shared_motion_penalty)
+        float(ON_COURT_POSITIVE_WEIGHTS["confidence"]) * confidence_score
+        + float(ON_COURT_POSITIVE_WEIGHTS["bbox_height"]) * height_score
+        + float(ON_COURT_POSITIVE_WEIGHTS["court_grounding"]) * float(grounding_score)
+        + float(ON_COURT_POSITIVE_WEIGHTS["foot_foreground_prior"]) * float(effective_foot_prior)
+        + float(ON_COURT_POSITIVE_WEIGHTS["center_foreground_prior"]) * float(effective_center_prior)
+        + float(ON_COURT_POSITIVE_WEIGHTS["pose_coherence"]) * float(pose_info["score"])
+        + float(ON_COURT_POSITIVE_WEIGHTS["track_persistence"]) * float(persistence_score)
+        + float(ON_COURT_POSITIVE_WEIGHTS["motion"]) * float(motion_score)
+        + float(ON_COURT_POSITIVE_WEIGHTS["sam3_support"]) * _clip01(sam3_score / 0.8)
+        - float(ON_COURT_PENALTY_WEIGHTS["edge"]) * float(edge_penalty)
+        - float(ON_COURT_PENALTY_WEIGHTS["merge_risk"]) * float(merge_info["score"])
+        - float(ON_COURT_PENALTY_WEIGHTS["appearance_mismatch"]) * float(appearance_penalty)
+        - float(ON_COURT_PENALTY_WEIGHTS["ungrounded_shared_motion"]) * float(ungrounded_shared_motion_penalty)
     )
     spectator_risk = _clip01(
-        0.32 * _clip01(edge_penalty / 0.20)
-        + 0.26 * (1.0 - float(geometry_prior))
-        + 0.16 * float(merge_info["score"])
-        + 0.14 * _clip01(appearance_penalty / 0.14)
-        + 0.12 * (1.0 - float(pose_info["score"]))
+        float(ON_COURT_SPECTATOR_RISK_WEIGHTS["edge"]) * _clip01(edge_penalty / 0.20)
+        + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["weak_geometry"]) * (1.0 - float(geometry_prior))
+        + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["merge_risk"]) * float(merge_info["score"])
+        + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["appearance_mismatch"]) * _clip01(appearance_penalty / 0.14)
+        + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["weak_pose"]) * (1.0 - float(pose_info["score"]))
     )
     on_court_score = round(_clip01(on_court_score), 4)
     reasons["on_court_score"] = on_court_score
@@ -1569,6 +2345,7 @@ def annotate_active_players(frames, video_meta):
     frame_height = int(video_meta["height"])
     for frame in frames:
         bootstrap_context = frame.get("bootstrap_context")
+        scene_prior = frame.get("scene_prior") or _build_scene_prior_contract(frame)
         frame_motion_context = _estimate_frame_motion_context(frame.get("detections", []))
         for detection in frame.get("detections", []):
             score_info = score_active_player(
@@ -1577,6 +2354,7 @@ def annotate_active_players(frames, video_meta):
                 frame_height=frame_height,
                 track_frame_count=track_counts.get(detection.get("track_id"), 1),
                 bootstrap_context=bootstrap_context,
+                scene_prior=scene_prior,
                 frame_motion_context=frame_motion_context,
             )
             detection["active_player_score"] = score_info["score"]
@@ -2216,6 +2994,167 @@ def annotate_scene_discovery_contracts(frames):
     return summary
 
 
+def _increment_counter(counter, key, amount=1):
+    counter[str(key)] = int(counter.get(str(key), 0)) + int(amount)
+
+
+def _build_staged_perception_summary(
+    frames,
+    *,
+    bootstrap_summary,
+    grounding_summary,
+    collapse_summary,
+    scene_discovery_summary,
+    player_recovery_summary,
+    identity_hypotheses,
+):
+    pipeline_order = (
+        scene_discovery_summary.get("pipeline_order")
+        or grounding_summary.get("pipeline_order")
+        or ["dino", "sam", "yolo"]
+    )
+    bootstrap_contexts = bootstrap_summary.get("contexts") or []
+    bootstrap_ready_contexts = [
+        context for context in bootstrap_contexts
+        if context.get("enabled") and context.get("status") == "ready"
+    ]
+    bootstrap_reasons = sorted({
+        str(context.get("reason") or (context.get("grounding_context") or {}).get("trigger_reason"))
+        for context in bootstrap_contexts
+        if context.get("reason") or (context.get("grounding_context") or {}).get("trigger_reason")
+    })
+
+    scene_prior_supported_detection_count = 0
+    scene_prior_strengthened_detection_count = 0
+    recovered_candidate_count = 0
+    recovered_candidate_active_count = 0
+    repaired_recovery_count = 0
+    synthesized_identity_bridge_count = 0
+    grounded_rerun_applied_frame_count = 0
+    grounded_rerun_detection_count = 0
+    collapse_triggered_frame_count = 0
+    ball_state_source_counts = {}
+    ball_detection_source_counts = {}
+    ball_state_counts = {}
+    ball_predictive_trigger_count = 0
+    ball_fallback_trigger_count = 0
+    ball_retro_accepted_count = 0
+    ball_sam_trigger_count = 0
+    ball_sam_accepted_count = 0
+    ball_sam_status_counts = {}
+
+    for frame in frames:
+        grounding_context = frame.get("grounding_context") or {}
+        if grounding_context.get("yolo_rerun_applied"):
+            grounded_rerun_applied_frame_count += 1
+            grounded_rerun_detection_count += int(grounding_context.get("yolo_rerun_detection_count") or 0)
+        if grounding_context.get("collapse_triggered"):
+            collapse_triggered_frame_count += 1
+
+        if (frame.get("ball_predictive_search") or {}).get("triggered"):
+            ball_predictive_trigger_count += 1
+        if (frame.get("ball_fallback") or {}).get("triggered"):
+            ball_fallback_trigger_count += 1
+        if (frame.get("ball_retro_search") or {}).get("accepted"):
+            ball_retro_accepted_count += 1
+        ball_sam = frame.get("ball_sam") or {}
+        if ball_sam.get("triggered"):
+            ball_sam_trigger_count += 1
+        if ball_sam.get("accepted"):
+            ball_sam_accepted_count += 1
+        _increment_counter(ball_sam_status_counts, ball_sam.get("status") or "disabled")
+
+        ball_state = frame.get("ball_state") or {}
+        _increment_counter(ball_state_counts, ball_state.get("state") or "missing")
+        _increment_counter(ball_state_source_counts, ball_state.get("source") or "unknown")
+        ball_detection = frame.get("ball_detection") or {}
+        if ball_state.get("state") == "observed":
+            _increment_counter(
+                ball_detection_source_counts,
+                ball_detection.get("ball_detection_source") or ball_detection.get("source") or "unknown",
+            )
+
+        for detection in frame.get("detections", []):
+            reasons = detection.get("active_player_reasons") or {}
+            if float(reasons.get("scene_center_prior") or 0.0) > 0.0 or float(reasons.get("scene_foot_prior") or 0.0) > 0.0:
+                scene_prior_supported_detection_count += 1
+            if (
+                float(reasons.get("effective_foreground_prior") or 0.0) > float(reasons.get("bootstrap_foreground_prior") or 0.0)
+                or float(reasons.get("effective_foot_prior") or 0.0) > float(reasons.get("bootstrap_foot_prior") or 0.0)
+            ):
+                scene_prior_strengthened_detection_count += 1
+            if detection.get("recovered_candidate"):
+                recovered_candidate_count += 1
+                if detection.get("active_player_candidate"):
+                    recovered_candidate_active_count += 1
+            if detection.get("identity_track_source") == "repaired_recovery":
+                repaired_recovery_count += 1
+            if detection.get("synthesized") and (detection.get("identity_repair") or {}).get("kind") == "short_gap_identity_bridge":
+                synthesized_identity_bridge_count += 1
+
+    help_signal_count = sum(
+        int(value > 0)
+        for value in [
+            scene_prior_strengthened_detection_count,
+            grounded_rerun_applied_frame_count,
+            repaired_recovery_count,
+            ball_predictive_trigger_count + ball_fallback_trigger_count + ball_retro_accepted_count + ball_sam_accepted_count,
+        ]
+    )
+
+    return {
+        "kind": "staged_perception_summary_v1",
+        "pipeline_order": list(pipeline_order),
+        "clip_helped": bool(help_signal_count > 0),
+        "help_signal_count": int(help_signal_count),
+        "bootstrap": {
+            "context_count": len(bootstrap_contexts),
+            "ready_context_count": len(bootstrap_ready_contexts),
+            "trigger_reasons": bootstrap_reasons,
+            "backend": bootstrap_summary.get("backend"),
+        },
+        "scene_prior": {
+            "ready_frame_count": int(scene_discovery_summary.get("scene_prior_ready_frame_count") or 0),
+            "trigger_reasons": list(scene_discovery_summary.get("scene_prior_trigger_reasons") or []),
+            "supported_detection_count": int(scene_prior_supported_detection_count),
+            "strengthened_detection_count": int(scene_prior_strengthened_detection_count),
+        },
+        "grounded_yolo": {
+            "requested_frame_count": int(grounding_summary.get("frame_count_with_grounding") or 0),
+            "rerun_frame_count": int(grounding_summary.get("frame_count_rerun") or 0),
+            "rerun_applied_frame_count": int(grounded_rerun_applied_frame_count),
+            "rerun_detection_count": int(grounded_rerun_detection_count),
+            "collapse_triggered_segment_count": len(collapse_summary.get("triggered_segment_ids") or []),
+            "collapse_triggered_frame_count": int(collapse_triggered_frame_count),
+        },
+        "sam": {
+            "status": player_recovery_summary.get("status"),
+            "frame_count_with_rois": int(player_recovery_summary.get("frame_count_with_rois") or 0),
+            "refined_detection_count": int(player_recovery_summary.get("refined_detection_count") or 0),
+            "recovered_detection_count": int(player_recovery_summary.get("recovered_detection_count") or 0),
+            "recovered_candidate_count": int(recovered_candidate_count),
+            "recovered_candidate_active_count": int(recovered_candidate_active_count),
+        },
+        "identity": {
+            "hypothesis_group_count": int(identity_hypotheses.get("group_count") or 0),
+            "selected_link_count": int(identity_hypotheses.get("selected_link_count") or 0),
+            "repaired_recovery_count": int(repaired_recovery_count),
+            "synthesized_bridge_count": int(synthesized_identity_bridge_count),
+        },
+        "ball": {
+            "state_counts": ball_state_counts,
+            "state_source_counts": ball_state_source_counts,
+            "observed_detection_source_counts": ball_detection_source_counts,
+            "predictive_trigger_count": int(ball_predictive_trigger_count),
+            "fallback_trigger_count": int(ball_fallback_trigger_count),
+            "retro_backfilled_frame_count": int(ball_retro_accepted_count),
+            "sam_trigger_count": int(ball_sam_trigger_count),
+            "sam_accepted_count": int(ball_sam_accepted_count),
+            "sam_status_counts": ball_sam_status_counts,
+        },
+    }
+
+
 def _apply_grounding_mask(frame_bgr, grounding_context):
     if frame_bgr is None:
         return None, False
@@ -2546,301 +3485,58 @@ def _interpolate_detection(start_det, end_det, frame_idx, t_ms, alpha):
     return synthesized
 
 
-def _score_identity_link(start_det, end_det, gap_frames, fps):
-    if not start_det.get("active_player_candidate") or not end_det.get("active_player_candidate"):
-        return None
+def _match_discovery_recovery_detection(frame, predicted_bbox_xyxy):
+    discovery_proposals = frame.get("discovery_proposals")
+    if discovery_proposals is None:
+        discovery_proposals = _build_discovery_proposals(frame)
 
-    start_bucket = start_det.get("uniform_bucket")
-    end_bucket = end_det.get("uniform_bucket")
-    if (
-        start_bucket in {"dark", "light"}
-        and end_bucket in {"dark", "light"}
-        and start_bucket != end_bucket
-    ):
-        return None
+    predicted_center = np.array(_bbox_center_xyxy(predicted_bbox_xyxy), dtype=np.float32)
+    best_match = None
+    for detection in frame.get("detections", []):
+        if detection.get("track_id") is not None or not detection.get("recovered_candidate"):
+            continue
+        detection_bbox = detection.get("bbox_xyxy")
+        if not detection_bbox or len(detection_bbox) != 4:
+            continue
 
-    dt = max(1.0 / max(float(fps), 1.0), 1e-3)
-    elapsed_s = max(gap_frames + 1, 1) * dt
-    start_cx, start_cy = _bbox_center_xy(start_det)
-    end_cx, end_cy = _bbox_center_xy(end_det)
-    vel_x, vel_y = (start_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2]
-    predicted_x = float(start_cx) + float(vel_x) * elapsed_s
-    predicted_y = float(start_cy) + float(vel_y) * elapsed_s
-    center_distance = float(np.linalg.norm([end_cx - predicted_x, end_cy - predicted_y]))
+        proposal_score = float((detection.get("sam3_refinement") or {}).get("sam_score") or 0.0)
+        matched_proposal = None
+        for proposal in discovery_proposals or []:
+            if proposal.get("proposal_role") != "recovery" or proposal.get("entity_type") != "player":
+                continue
+            proposal_bbox = proposal.get("bbox_xyxy")
+            if not proposal_bbox or len(proposal_bbox) != 4:
+                continue
+            if _bbox_iou_xyxy(detection_bbox, proposal_bbox) >= 0.95:
+                matched_proposal = proposal
+                proposal_score = max(proposal_score, float(proposal.get("score") or 0.0))
+                break
 
-    _start_w, start_h = _bbox_size_xy(start_det)
-    _end_w, end_h = _bbox_size_xy(end_det)
-    avg_height = max(1.0, (start_h + end_h) * 0.5)
-    max_center_distance = max(40.0, avg_height * IDENTITY_REPAIR_MAX_CENTER_DISTANCE_RATIO)
-    if center_distance > max_center_distance:
-        return None
-    position_score = _clip01(1.0 - (center_distance / max_center_distance))
+        if proposal_score < PLAYER_RECOVERY_MIN_SAM_SCORE:
+            continue
 
-    start_w, start_h = _bbox_size_xy(start_det)
-    end_w, end_h = _bbox_size_xy(end_det)
-    width_ratio = min(start_w, end_w) / max(start_w, end_w, 1.0)
-    height_ratio = min(start_h, end_h) / max(start_h, end_h, 1.0)
-    size_score = (width_ratio + height_ratio) * 0.5
-    if size_score < 0.55:
-        return None
+        iou = _bbox_iou_xyxy(detection_bbox, predicted_bbox_xyxy)
+        detection_center = np.array(_bbox_center_xyxy(detection_bbox), dtype=np.float32)
+        center_distance = float(np.linalg.norm(detection_center - predicted_center))
+        if iou < DISCOVERY_BRIDGE_MATCH_MIN_IOU and center_distance > DISCOVERY_BRIDGE_MATCH_MAX_CENTER_DISTANCE_PX:
+            continue
 
-    start_vel = np.array((start_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2], dtype=float)
-    end_vel = np.array((end_det.get("smoothed_velocity_xy") or [0.0, 0.0])[:2], dtype=float)
-    start_speed = float(np.linalg.norm(start_vel))
-    end_speed = float(np.linalg.norm(end_vel))
-    if start_speed > 1.0 and end_speed > 1.0:
-        velocity_score = _clip01((float(np.dot(start_vel, end_vel)) / (start_speed * end_speed) + 1.0) * 0.5)
-    else:
-        velocity_score = 0.5
-
-    if start_bucket == end_bucket and start_bucket in {"dark", "light"}:
-        uniform_score = 1.0
-    elif start_bucket == "unknown" or end_bucket == "unknown":
-        uniform_score = 0.55
-    else:
-        uniform_score = 0.0
-
-    court_score = 0.5
-    if start_det.get("court_xy") and end_det.get("court_xy"):
-        court_distance = float(
-            np.linalg.norm(
-                [
-                    float(end_det["court_xy"][0]) - float(start_det["court_xy"][0]),
-                    float(end_det["court_xy"][1]) - float(start_det["court_xy"][1]),
-                ]
-            )
+        match_score = (
+            0.50 * _clip01(float(proposal_score))
+            + 0.30 * _clip01(iou)
+            + 0.20 * _clip01(1.0 - (center_distance / max(DISCOVERY_BRIDGE_MATCH_MAX_CENTER_DISTANCE_PX, 1e-6)))
         )
-        if court_distance > IDENTITY_REPAIR_MAX_COURT_DISTANCE:
-            return None
-        court_score = _clip01(1.0 - (court_distance / IDENTITY_REPAIR_MAX_COURT_DISTANCE))
-
-    gap_score = _clip01(1.0 - ((gap_frames - 1) / max(SHORT_GAP_REPAIR_MAX_GAP, 1)))
-    confidence_score = min(float(start_det.get("confidence") or 0.0), float(end_det.get("confidence") or 0.0))
-    link_score = (
-        0.34 * position_score
-        + 0.18 * velocity_score
-        + 0.14 * size_score
-        + 0.14 * uniform_score
-        + 0.10 * court_score
-        + 0.06 * gap_score
-        + 0.04 * confidence_score
-    )
-    return {
-        "score": round(float(link_score), 4),
-        "gap_frames": int(gap_frames),
-        "reasons": {
-            "position_score": round(position_score, 4),
-            "velocity_score": round(velocity_score, 4),
-            "size_score": round(size_score, 4),
-            "uniform_score": round(uniform_score, 4),
-            "court_score": round(court_score, 4),
-            "gap_score": round(gap_score, 4),
-            "confidence_score": round(confidence_score, 4),
-            "predicted_center_distance_px": round(center_distance, 3),
-        },
-    }
-
-
-def _find_identity_links(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
-    track_ids = sorted(track_frames)
-    candidates = []
-    for predecessor_track_id in track_ids:
-        predecessor_obs = sorted(track_frames.get(predecessor_track_id, []), key=lambda item: item[0])
-        if not predecessor_obs:
-            continue
-        predecessor_last_frame, predecessor_last_det = predecessor_obs[-1]
-        for successor_track_id in track_ids:
-            if successor_track_id == predecessor_track_id:
-                continue
-            successor_obs = sorted(track_frames.get(successor_track_id, []), key=lambda item: item[0])
-            if not successor_obs:
-                continue
-            successor_first_frame, successor_first_det = successor_obs[0]
-            if (
-                RESET_IDENTITY_ON_DISCONTINUITY
-                and predecessor_last_det.get("continuity_segment_id") != successor_first_det.get("continuity_segment_id")
-            ):
-                continue
-            gap_frames = successor_first_frame - predecessor_last_frame - 1
-            if gap_frames <= 0 or gap_frames > max_gap:
-                continue
-            link = _score_identity_link(predecessor_last_det, successor_first_det, gap_frames, fps)
-            if link is None or link["score"] < IDENTITY_REPAIR_SCORE_THRESHOLD:
-                continue
-            candidates.append(
-                {
-                    "predecessor_track_id": predecessor_track_id,
-                    "successor_track_id": successor_track_id,
-                    "start_det": predecessor_last_det,
-                    "end_det": successor_first_det,
-                    **link,
-                }
-            )
-
-    links_by_predecessor = {}
-    links_by_successor = {}
-    for candidate in sorted(candidates, key=lambda item: (-item["score"], item["gap_frames"], item["successor_track_id"])):
-        predecessor_track_id = candidate["predecessor_track_id"]
-        successor_track_id = candidate["successor_track_id"]
-        if predecessor_track_id in links_by_predecessor or successor_track_id in links_by_successor:
-            continue
-        competing_predecessor_scores = sorted(
-            other["score"]
-            for other in candidates
-            if other["predecessor_track_id"] == predecessor_track_id and other["successor_track_id"] != successor_track_id
-        )
-        competing_successor_scores = sorted(
-            other["score"]
-            for other in candidates
-            if other["successor_track_id"] == successor_track_id and other["predecessor_track_id"] != predecessor_track_id
-        )
-        best_competitor = max(competing_predecessor_scores + competing_successor_scores, default=0.0)
-        if best_competitor >= candidate["score"] - 0.05:
-            continue
-        links_by_predecessor[predecessor_track_id] = candidate
-        links_by_successor[successor_track_id] = candidate
-    return list(links_by_successor.values())
-
-
-def _build_identity_hypothesis_summary(track_frames, fps, *, max_gap=SHORT_GAP_REPAIR_MAX_GAP):
-    if not IDENTITY_HYPOTHESES_ENABLED:
-        return {"groups": [], "selected_links": [], "candidate_lookup": {}}
-
-    track_ids = sorted(track_frames)
-    candidates = []
-    candidate_id = 0
-    for predecessor_track_id in track_ids:
-        predecessor_obs = sorted(track_frames.get(predecessor_track_id, []), key=lambda item: item[0])
-        if not predecessor_obs:
-            continue
-        predecessor_last_frame, predecessor_last_det = predecessor_obs[-1]
-        for successor_track_id in track_ids:
-            if successor_track_id == predecessor_track_id:
-                continue
-            successor_obs = sorted(track_frames.get(successor_track_id, []), key=lambda item: item[0])
-            if not successor_obs:
-                continue
-            successor_first_frame, successor_first_det = successor_obs[0]
-            gap_frames = successor_first_frame - predecessor_last_frame - 1
-            if gap_frames <= 0 or gap_frames > max_gap:
-                continue
-            link = _score_identity_link(predecessor_last_det, successor_first_det, gap_frames, fps)
-            if link is None or link["score"] < IDENTITY_HYPOTHESIS_MIN_SCORE:
-                continue
-            candidates.append(
-                {
-                    "candidate_id": f"h{candidate_id}",
-                    "predecessor_track_id": predecessor_track_id,
-                    "successor_track_id": successor_track_id,
-                    "start_frame_idx": predecessor_last_frame,
-                    "end_frame_idx": successor_first_frame,
-                    "start_det": predecessor_last_det,
-                    "end_det": successor_first_det,
-                    **link,
-                }
-            )
-            candidate_id += 1
-
-    if not candidates:
-        return {"groups": [], "selected_links": [], "candidate_lookup": {}}
-
-    adjacency = {candidate["candidate_id"]: set() for candidate in candidates}
-    for idx, left in enumerate(candidates):
-        for right in candidates[idx + 1 :]:
-            if (
-                left["predecessor_track_id"] == right["predecessor_track_id"]
-                or left["successor_track_id"] == right["successor_track_id"]
-            ):
-                adjacency[left["candidate_id"]].add(right["candidate_id"])
-                adjacency[right["candidate_id"]].add(left["candidate_id"])
-
-    grouped_candidate_ids = []
-    seen = set()
-    for candidate in candidates:
-        candidate_id = candidate["candidate_id"]
-        if candidate_id in seen:
-            continue
-        stack = [candidate_id]
-        component = []
-        while stack:
-            current = stack.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            component.append(current)
-            stack.extend(adjacency[current] - seen)
-        grouped_candidate_ids.append(sorted(component))
-
-    candidate_lookup = {candidate["candidate_id"]: candidate for candidate in candidates}
-    selected_links = _find_identity_links(track_frames, fps, max_gap=max_gap)
-    selected_pairs = {
-        (link["predecessor_track_id"], link["successor_track_id"])
-        for link in selected_links
-    }
-
-    groups = []
-    for group_index, group_candidate_ids in enumerate(grouped_candidate_ids):
-        group_candidates = [candidate_lookup[candidate_id] for candidate_id in group_candidate_ids]
-        ranked = sorted(group_candidates, key=lambda item: (-item["score"], item["gap_frames"], item["successor_track_id"]))
-        best_score = ranked[0]["score"]
-        selected_in_group = [
-            candidate for candidate in ranked
-            if (candidate["predecessor_track_id"], candidate["successor_track_id"]) in selected_pairs
-        ]
-        if not selected_in_group:
-            group_status = "deferred"
-        else:
-            competing_scores = [
-                candidate["score"]
-                for candidate in ranked
-                if candidate not in selected_in_group
-            ]
-            best_competitor = max(competing_scores, default=0.0)
-            group_status = (
-                "ambiguous_selected"
-                if best_competitor >= best_score - IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN
-                else "selected"
-            )
-
-        serialized_candidates = []
-        for rank, candidate in enumerate(ranked[:IDENTITY_HYPOTHESIS_MAX_CANDIDATES_PER_GROUP], start=1):
-            is_selected = (candidate["predecessor_track_id"], candidate["successor_track_id"]) in selected_pairs
-            candidate_status = "selected" if is_selected else ("alternate" if selected_in_group else "deferred")
-            serialized_candidates.append(
-                {
-                    "candidate_id": candidate["candidate_id"],
-                    "rank": rank,
-                    "status": candidate_status,
-                    "predecessor_track_id": candidate["predecessor_track_id"],
-                    "successor_track_id": candidate["successor_track_id"],
-                    "start_frame_idx": int(candidate["start_frame_idx"]),
-                    "end_frame_idx": int(candidate["end_frame_idx"]),
-                    "gap_frames": int(candidate["gap_frames"]),
-                    "score": round(float(candidate["score"]), 4),
-                    "score_margin_to_best": round(float(best_score - candidate["score"]), 4),
-                    "reasons": candidate["reasons"],
-                }
-            )
-
-        groups.append(
-            {
-                "group_id": f"g{group_index}",
-                "status": group_status,
-                "start_frame_idx": int(min(candidate["start_frame_idx"] for candidate in group_candidates)),
-                "end_frame_idx": int(max(candidate["end_frame_idx"] for candidate in group_candidates)),
-                "predecessor_track_ids": sorted({int(candidate["predecessor_track_id"]) for candidate in group_candidates}),
-                "successor_track_ids": sorted({int(candidate["successor_track_id"]) for candidate in group_candidates}),
-                "candidate_count": len(group_candidates),
-                "selected_candidate_count": len(selected_in_group),
-                "candidates": serialized_candidates,
-            }
-        )
-
-    return {
-        "groups": groups,
-        "selected_links": selected_links,
-        "candidate_lookup": candidate_lookup,
-    }
+        candidate = {
+            "detection": detection,
+            "proposal": matched_proposal,
+            "proposal_score": round(float(proposal_score), 4),
+            "iou": round(float(iou), 4),
+            "center_distance_px": round(float(center_distance), 3),
+            "match_score": round(float(match_score), 4),
+        }
+        if best_match is None or candidate["match_score"] > best_match["match_score"]:
+            best_match = candidate
+    return best_match
 
 
 def repair_short_track_gaps(
@@ -2850,7 +3546,6 @@ def repair_short_track_gaps(
     max_gap=SHORT_GAP_REPAIR_MAX_GAP,
     return_hypothesis_summary=False,
 ):
-    frame_index = {frame["frame_idx"]: frame for frame in frames}
     track_frames = {}
     fps = float((video_meta or {}).get("fps") or 30.0)
     for frame in frames:
@@ -2863,121 +3558,31 @@ def repair_short_track_gaps(
             detection["_t_ms"] = frame["t_ms"]
             track_frames.setdefault(track_id, []).append((frame["frame_idx"], detection))
 
-    hypothesis_summary = _build_identity_hypothesis_summary(track_frames, fps, max_gap=max_gap)
-    identity_links = hypothesis_summary["selected_links"]
-
-    for group in hypothesis_summary["groups"]:
-        for frame_idx in range(group["start_frame_idx"], group["end_frame_idx"] + 1):
-            frame = frame_index.get(frame_idx)
-            if frame is None:
-                continue
-            frame.setdefault("identity_hypothesis_group_ids", [])
-            frame["identity_hypothesis_group_ids"].append(group["group_id"])
-
-    for link in identity_links:
-        predecessor_track_id = link["predecessor_track_id"]
-        successor_track_id = link["successor_track_id"]
-        canonical_track_id = track_frames[predecessor_track_id][0][1].get("identity_track_id", predecessor_track_id)
-        repair_meta = {
-            "kind": "short_gap_identity_bridge",
-            "predecessor_track_id": predecessor_track_id,
-            "successor_track_id": successor_track_id,
-            "canonical_track_id": canonical_track_id,
-            "gap_frames": link["gap_frames"],
-            "link_score": link["score"],
-            "reasons": link["reasons"],
-        }
-        for _frame_idx, detection in track_frames[successor_track_id]:
-            detection["identity_track_id"] = canonical_track_id
-            detection["identity_track_source"] = "repaired"
-            detection["identity_repair"] = repair_meta
-
-    for track_id, observations in track_frames.items():
-        observations.sort(key=lambda item: item[0])
-        for (start_idx, start_det), (end_idx, end_det) in zip(observations, observations[1:]):
-            gap = end_idx - start_idx - 1
-            if gap <= 0 or gap > max_gap:
-                continue
-            if (
-                RESET_IDENTITY_ON_DISCONTINUITY
-                and start_det.get("continuity_segment_id") != end_det.get("continuity_segment_id")
-            ):
-                continue
-            if not OCCLUSION_FIRST_WITHIN_SEGMENT:
-                continue
-            if not start_det.get("active_player_candidate") or not end_det.get("active_player_candidate"):
-                continue
-            for missing_frame_idx in range(start_idx + 1, end_idx):
-                frame = frame_index.get(missing_frame_idx)
-                if frame is None:
-                    continue
-                existing_track_ids = {
-                    detection.get("track_id")
-                    for detection in frame.get("detections", [])
-                }
-                if track_id in existing_track_ids:
-                    continue
-                alpha = (missing_frame_idx - start_idx) / float(end_idx - start_idx)
-                synthesized = _interpolate_detection(
-                    start_det,
-                    end_det,
-                    missing_frame_idx,
-                    frame["t_ms"],
-                    alpha,
-                )
-                frame.setdefault("detections", []).append(synthesized)
-
-    for link in identity_links:
-        start_idx = link["start_det"]["_frame_idx"]
-        end_idx = link["end_det"]["_frame_idx"]
-        start_det = link["start_det"]
-        end_det = link["end_det"]
-        canonical_track_id = start_det.get("identity_track_id", start_det.get("track_id"))
-        for missing_frame_idx in range(start_idx + 1, end_idx):
-            frame = frame_index.get(missing_frame_idx)
-            if frame is None:
-                continue
-            existing_identity_ids = {
-                detection.get("identity_track_id", detection.get("track_id"))
-                for detection in frame.get("detections", [])
-            }
-            if canonical_track_id in existing_identity_ids:
-                continue
-            alpha = (missing_frame_idx - start_idx) / float(end_idx - start_idx)
-            synthesized = _interpolate_detection(
-                start_det,
-                end_det,
-                missing_frame_idx,
-                frame["t_ms"],
-                alpha,
-            )
-            synthesized["identity_track_id"] = canonical_track_id
-            synthesized["identity_track_source"] = "repaired"
-            synthesized["identity_repair"] = {
-                "kind": "short_gap_identity_bridge",
-                "predecessor_track_id": link["predecessor_track_id"],
-                "successor_track_id": link["successor_track_id"],
-                "canonical_track_id": canonical_track_id,
-                "gap_frames": link["gap_frames"],
-                "link_score": link["score"],
-                "reasons": link["reasons"],
-            }
-            frame.setdefault("detections", []).append(synthesized)
-
-    for frame in frames:
-        frame["identity_hypothesis_group_ids"] = sorted(set(frame.get("identity_hypothesis_group_ids", [])))
-        frame["detections"].sort(
-            key=lambda detection: (
-                detection.get("identity_track_id") is None,
-                detection.get("identity_track_id") if detection.get("identity_track_id") is not None else 1_000_000,
-                detection.get("track_id") is None,
-                detection.get("track_id") if detection.get("track_id") is not None else 1_000_000,
-                not detection.get("synthesized", False),
-            )
+    if not IDENTITY_HYPOTHESES_ENABLED:
+        hypothesis_summary = empty_identity_hypothesis_summary()
+    else:
+        hypothesis_summary = build_identity_hypothesis_summary(
+            track_frames,
+            fps,
+            config=IDENTITY_RESOLUTION_CONFIG,
+            max_gap=max_gap,
         )
-        for detection in frame.get("detections", []):
-            detection.pop("_frame_idx", None)
-            detection.pop("_t_ms", None)
+
+    stitcher_config = TrackletStitcherConfig(
+        max_gap=max_gap,
+        continuity_partition_field=TRACKLET_STITCHER_CONFIG.continuity_partition_field,
+        reset_identity_on_discontinuity=TRACKLET_STITCHER_CONFIG.reset_identity_on_discontinuity,
+        occlusion_first_within_segment=TRACKLET_STITCHER_CONFIG.occlusion_first_within_segment,
+    )
+    stitch_tracklets(
+        frames,
+        track_frames,
+        hypothesis_summary,
+        config=stitcher_config,
+        interpolate_detection=_interpolate_detection,
+        match_discovery_recovery_detection=_match_discovery_recovery_detection,
+    )
+    identity_links = hypothesis_summary["selected_links"]
     if return_hypothesis_summary:
         return frames, {
             "kind": "bounded_identity_mht_v1",
@@ -2985,7 +3590,13 @@ def repair_short_track_gaps(
             "ambiguity_margin": IDENTITY_HYPOTHESIS_AMBIGUITY_MARGIN,
             "group_count": len(hypothesis_summary["groups"]),
             "selected_link_count": len(identity_links),
+            "decision_ledger_count": len(hypothesis_summary.get("decision_ledger") or []),
+            "global_hypothesis_count": len(hypothesis_summary.get("global_hypotheses") or []),
+            "track_identity_option_count": len(hypothesis_summary.get("track_identity_options") or []),
             "groups": hypothesis_summary["groups"],
+            "decision_ledger": hypothesis_summary.get("decision_ledger") or [],
+            "global_hypotheses": hypothesis_summary.get("global_hypotheses") or [],
+            "track_identity_options": hypothesis_summary.get("track_identity_options") or [],
         }
     return frames
 
@@ -3004,6 +3615,9 @@ def annotate_clip(
     player_recovery_backend="none",
     player_recovery_model=DEFAULT_SAM3_REPO_MODEL,
     player_recovery_prompt=DEFAULT_SAM3_TEXT_PROMPT,
+    ball_bootstrap_backend="none",
+    ball_bootstrap_model=DEFAULT_SAM3_REPO_MODEL,
+    ball_bootstrap_prompt=DEFAULT_SAM3_BALL_PROMPT,
 ):
     """Generate one full Layer 1 perception artifact for a single clip.
 
@@ -3023,11 +3637,29 @@ def annotate_clip(
 
     pose_model = YOLO(model_name)
     ball_model = YOLO(ball_model_name)
+    sam_ball_detector = None
+    sam_ball_status = "disabled"
+    if ball_bootstrap_backend == "sam3":
+        try:
+            sam_ball_detector = Sam3BallDetector(
+                model_name=ball_bootstrap_model,
+                text_prompt=ball_bootstrap_prompt,
+                device=device,
+            )
+            sam_ball_detector.load()
+            sam_ball_status = "ready"
+        except Exception as exc:
+            sam_ball_status = _sam_runtime_status_for_exception(exc)
+            sam_ball_detector = None
     frames = []
     frame_idx = 0
     clip_id = video_path.stem
     calibration = load_calibration(clip_id, calibration_file)
     previous_ball_predictive_state = None
+    previous_ball_missing_streak = 0
+    previous_frame_visual_signature = None
+    previous_person_track_ids = set()
+    previous_person_detection_count = 0
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -3057,6 +3689,21 @@ def annotate_clip(
             for det_idx in range(len(result.boxes)):
                 detections.append(build_detection(result, det_idx, pose_model.names, frame, h_matrix=h_matrix))
         person_detections = list(detections)
+        current_frame_visual_signature = _frame_visual_signature(frame)
+        current_person_track_ids = {
+            int(detection["track_id"])
+            for detection in person_detections
+            if detection.get("track_id") is not None
+        }
+        online_discontinuity = _online_ball_discontinuity(
+            previous_frame_visual_signature,
+            previous_person_track_ids,
+            current_frame_visual_signature,
+            current_person_track_ids,
+            abs(len(person_detections) - previous_person_detection_count),
+        )
+        if online_discontinuity["triggered"]:
+            previous_ball_predictive_state = None
         ball_predictive_summary = {
             "enabled": previous_ball_predictive_state is not None,
             "triggered": False,
@@ -3073,6 +3720,19 @@ def annotate_clip(
             "source": "player_local_rois_v2",
             "roi_bbox_xyxy": None,
             "candidate_count": 0,
+        }
+        ball_sam_summary = {
+            "enabled": ball_bootstrap_backend == "sam3",
+            "status": sam_ball_status,
+            "triggered": False,
+            "trigger_reason": None,
+            "candidate_count": 0,
+            "accepted": False,
+            "accepted_score": None,
+            "source": None,
+            "model_name": ball_bootstrap_model if ball_bootstrap_backend == "sam3" else None,
+            "text_prompt": ball_bootstrap_prompt if ball_bootstrap_backend == "sam3" else None,
+            "missing_streak_before": int(previous_ball_missing_streak),
         }
         if ball_results and ball_results[0].boxes is not None and len(ball_results[0].boxes) > 0:
             result = ball_results[0]
@@ -3105,6 +3765,29 @@ def annotate_clip(
             detections.extend(fallback_ball_detections)
             raw_ball_candidates = _serialize_ball_candidates(detections)
             best_ball_detection = _extract_best_ball_detection(detections)
+        ball_sam_trigger_reason = _ball_sam_trigger_reason(
+            best_ball_detection,
+            previous_ball_predictive_state,
+            previous_ball_missing_streak,
+            online_discontinuity,
+        )
+        sam_ball_detections, ball_sam_summary, sam_ball_status = _run_sam_ball_search(
+            sam_ball_detector,
+            frame,
+            h_matrix=h_matrix,
+            trigger_reason=ball_sam_trigger_reason,
+        )
+        ball_sam_summary["enabled"] = ball_bootstrap_backend == "sam3"
+        if sam_ball_detector is None and ball_bootstrap_backend == "sam3":
+            ball_sam_summary["status"] = sam_ball_status
+        ball_sam_summary["missing_streak_before"] = int(previous_ball_missing_streak)
+        ball_sam_summary["online_discontinuity"] = online_discontinuity
+        if sam_ball_status != "ready":
+            sam_ball_detector = None
+        if sam_ball_detections:
+            detections.extend(sam_ball_detections)
+            raw_ball_candidates = _serialize_ball_candidates(detections)
+            best_ball_detection = _extract_best_ball_detection(detections)
         ball_detection = best_ball_detection
         person_detections = [detection for detection in detections if not _is_ball_detection(detection)]
         previous_ball_predictive_state = _update_ball_predictive_state(
@@ -3113,6 +3796,10 @@ def annotate_clip(
             person_detections,
             frame_idx,
         )
+        if _ball_detection_needs_search(ball_detection):
+            previous_ball_missing_streak += 1
+        else:
+            previous_ball_missing_streak = 0
 
         frames.append({
             "frame_idx": frame_idx,
@@ -3123,10 +3810,14 @@ def annotate_clip(
             "raw_ball_detections": raw_ball_candidates,
             "ball_predictive_search": ball_predictive_summary,
             "ball_fallback": ball_fallback_summary,
-            "_frame_visual_signature": _frame_visual_signature(frame),
+            "ball_sam": ball_sam_summary,
+            "_frame_visual_signature": current_frame_visual_signature,
             "_frame_bgr": frame.copy(),
             "_h_matrix": None if h_matrix is None else h_matrix.tolist(),
         })
+        previous_frame_visual_signature = current_frame_visual_signature
+        previous_person_track_ids = current_person_track_ids
+        previous_person_detection_count = len(person_detections)
         frame_idx += 1
 
     cap.release()
@@ -3158,6 +3849,11 @@ def annotate_clip(
     for frame in frames:
         if frame.get("_h_matrix") is not None:
             frame["_h_matrix"] = _h_matrix_as_array(frame["_h_matrix"])
+    retro_ball_summary = retrofit_ball_detections_before_first_observation(
+        frames,
+        ball_model=ball_model,
+        device=device,
+    )
     ball_state_summary = annotate_ball_state(frames)
     player_recovery_summary = annotate_sam_player_recovery(
         frames,
@@ -3175,9 +3871,20 @@ def annotate_clip(
     )
     frames = smooth_track_motion(frames, video_meta)
     frames = annotate_active_players(frames, video_meta)
-    jersey_ocr = annotate_identity_jersey_numbers(frames)
+    jersey_ocr = annotate_identity_jersey_numbers(frames, identity_hypotheses=identity_hypotheses)
+    identity_global_resolution = resolve_identity_global_hypotheses_with_jersey(identity_hypotheses, jersey_ocr)
+    annotate_detections_with_jersey_global_resolution(frames, identity_global_resolution)
     live_play = annotate_live_play(frames, video_meta)
     scene_discovery_summary = annotate_scene_discovery_contracts(frames)
+    staged_perception_summary = _build_staged_perception_summary(
+        frames,
+        bootstrap_summary=bootstrap_summary,
+        grounding_summary=grounding_summary,
+        collapse_summary=collapse_summary,
+        scene_discovery_summary=scene_discovery_summary,
+        player_recovery_summary=player_recovery_summary,
+        identity_hypotheses=identity_hypotheses,
+    )
     segment_grounding = []
     for segment in continuity["segments"]:
         source_frame = next(
@@ -3203,13 +3910,16 @@ def annotate_clip(
         segment_grounding.append(segment["grounding"])
 
     artifact = {
-        "schema_version": "1.1.0",
+        "schema_version": "1.4.0",
         "clip_id": clip_id,
         "video_path": relative_path,
         "video": video_meta,
         "model": {
             "name": model_name,
             "ball_name": ball_model_name,
+            "ball_bootstrap_backend": ball_bootstrap_backend,
+            "ball_bootstrap_model": ball_bootstrap_model if ball_bootstrap_backend != "none" else None,
+            "ball_bootstrap_prompt": ball_bootstrap_prompt if ball_bootstrap_backend != "none" else None,
             "task": "pose_track_plus_ball_detect",
             "device": device,
             "classes": ["person", "sports_ball"],
@@ -3233,6 +3943,8 @@ def annotate_clip(
                     "occlusion_first_within_segment": OCCLUSION_FIRST_WITHIN_SEGMENT,
                     "hypotheses_enabled": IDENTITY_HYPOTHESES_ENABLED,
                 },
+                "evidence_model": IDENTITY_EVIDENCE_MODEL,
+                "hard_constraints": IDENTITY_HARD_CONSTRAINTS,
             },
             "active_player_score_threshold": ACTIVE_PLAYER_SCORE_THRESHOLD,
             "on_court_score_threshold": ON_COURT_SCORE_THRESHOLD,
@@ -3262,6 +3974,9 @@ def annotate_clip(
                 "ambiguity_margin": identity_hypotheses["ambiguity_margin"],
                 "group_count": identity_hypotheses["group_count"],
                 "selected_link_count": identity_hypotheses["selected_link_count"],
+                "decision_ledger_count": identity_hypotheses.get("decision_ledger_count", 0),
+                "global_hypothesis_count": identity_hypotheses.get("global_hypothesis_count", 0),
+                "track_identity_option_count": identity_hypotheses.get("track_identity_option_count", 0),
             },
             "appearance_cue": {
                 "kind": "torso_rgb_quantized_histogram_v1",
@@ -3280,6 +3995,9 @@ def annotate_clip(
                 "min_score": ball_state_summary["min_score"],
                 "max_jump_px": ball_state_summary["max_jump_px"],
                 "max_gap_frames": ball_state_summary["max_gap_frames"],
+                "retro_anchor_min_confidence": BALL_RETRO_ANCHOR_MIN_CONFIDENCE,
+                "retro_base_radius_px": BALL_RETRO_BASE_RADIUS_PX,
+                "retro_backfilled_frame_count": int(retro_ball_summary.get("backfilled_frame_count") or 0),
             },
             "live_play_gate": {
                 "kind": "heuristic_frame_and_segment_v1",
@@ -3309,15 +4027,26 @@ def annotate_clip(
                 "consensus_min_votes": JERSEY_OCR_CONSENSUS_MIN_VOTES,
                 "consensus_min_share": JERSEY_OCR_CONSENSUS_MIN_SHARE,
                 "identity_count_with_consensus": jersey_ocr["identity_count_with_consensus"],
+                "track_option_count_with_consensus": jersey_ocr.get("track_option_count_with_consensus", 0),
+                "ambiguous_track_option_count_with_consensus": jersey_ocr.get("ambiguous_track_option_count_with_consensus", 0),
+                "global_hypothesis_count": identity_global_resolution.get("global_hypothesis_count", 0),
+                "selected_global_hypothesis_id": identity_global_resolution.get("selected_global_hypothesis_id"),
+                "changed_selected_global_hypothesis": bool(identity_global_resolution.get("changed_selected_global_hypothesis")),
             },
         },
+        "staged_perception": staged_perception_summary,
         "calibration": {
             "enabled": calibration is not None,
             "source": str(calibration_file.relative_to(REPO_ROOT)) if calibration_file and calibration_file.exists() else None,
             "type": calibration.get("type") if calibration else None,
         },
         "identity_jersey_consensus": jersey_ocr["identity_consensus"],
+        "identity_jersey_track_options": jersey_ocr.get("track_option_consensus") or {},
         "identity_hypotheses": identity_hypotheses["groups"],
+        "identity_global_hypotheses": identity_hypotheses.get("global_hypotheses") or [],
+        "identity_global_hypothesis_resolution": identity_global_resolution,
+        "identity_track_options": identity_hypotheses.get("track_identity_options") or [],
+        "identity_link_decisions": identity_hypotheses.get("decision_ledger") or [],
         "continuity_segments": continuity["segments"],
         "live_play_segments": live_play["segments"],
         "bootstrap_foreground": {
@@ -3361,6 +4090,12 @@ def main():
         help="Optional SAM 3 recovered-player backend for unexplained DINO blobs and ambiguous YOLO detections",
     )
     parser.add_argument(
+        "--ball-bootstrap-backend",
+        choices=["none", "sam3"],
+        default="none",
+        help="Optional SAM 3 runtime bootstrap backend for initial and sustained-missing ball reacquisition",
+    )
+    parser.add_argument(
         "--player-recovery-model",
         default=DEFAULT_SAM3_REPO_MODEL,
         help="Model id used when the SAM 3 player recovery backend is enabled",
@@ -3369,6 +4104,16 @@ def main():
         "--player-recovery-prompt",
         default=DEFAULT_SAM3_TEXT_PROMPT,
         help="Text prompt passed to SAM 3 when the recovered-player backend is enabled",
+    )
+    parser.add_argument(
+        "--ball-bootstrap-model",
+        default=DEFAULT_SAM3_REPO_MODEL,
+        help="Model id used when the SAM 3 ball bootstrap backend is enabled",
+    )
+    parser.add_argument(
+        "--ball-bootstrap-prompt",
+        default=DEFAULT_SAM3_BALL_PROMPT,
+        help="Text prompt passed to SAM 3 when the ball bootstrap backend is enabled",
     )
     parser.add_argument("--device", default="cuda:0", help="Ultralytics device selector")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
@@ -3398,6 +4143,9 @@ def main():
         player_recovery_backend=args.player_recovery_backend,
         player_recovery_model=args.player_recovery_model,
         player_recovery_prompt=args.player_recovery_prompt,
+        ball_bootstrap_backend=args.ball_bootstrap_backend,
+        ball_bootstrap_model=args.ball_bootstrap_model,
+        ball_bootstrap_prompt=args.ball_bootstrap_prompt,
     )
     print(output_path)
 
