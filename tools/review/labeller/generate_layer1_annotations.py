@@ -1375,6 +1375,13 @@ def _initialize_identity_fields(detection):
     detection["identity_track_id"] = canonical_track_id
     detection["identity_track_source"] = "tracker"
     detection["identity_repair"] = None
+    detection["identity_option_track_id"] = detection.get("identity_option_track_id")
+    detection["identity_option_count"] = int(detection.get("identity_option_count") or 0)
+    detection["identity_is_ambiguous"] = bool(detection.get("identity_is_ambiguous") or False)
+    detection["identity_best_canonical_track_id"] = detection.get("identity_best_canonical_track_id", canonical_track_id)
+    detection["identity_option_canonical_track_ids"] = list(detection.get("identity_option_canonical_track_ids") or ([] if canonical_track_id is None else [canonical_track_id]))
+    detection["identity_option_group_hypothesis_ids"] = list(detection.get("identity_option_group_hypothesis_ids") or [])
+    detection["identity_options"] = list(detection.get("identity_options") or [])
     detection["identity_jersey_number"] = detection.get("identity_jersey_number")
     detection["identity_jersey_number_confidence"] = detection.get("identity_jersey_number_confidence")
     detection["identity_jersey_number_source"] = detection.get("identity_jersey_number_source")
@@ -3593,6 +3600,7 @@ def repair_short_track_gaps(
             "decision_ledger_count": len(hypothesis_summary.get("decision_ledger") or []),
             "global_hypothesis_count": len(hypothesis_summary.get("global_hypotheses") or []),
             "track_identity_option_count": len(hypothesis_summary.get("track_identity_options") or []),
+            "ambiguous_track_identity_option_count": sum(1 for item in (hypothesis_summary.get("track_identity_options") or []) if item.get("is_ambiguous")),
             "groups": hypothesis_summary["groups"],
             "decision_ledger": hypothesis_summary.get("decision_ledger") or [],
             "global_hypotheses": hypothesis_summary.get("global_hypotheses") or [],
@@ -3977,6 +3985,7 @@ def annotate_clip(
                 "decision_ledger_count": identity_hypotheses.get("decision_ledger_count", 0),
                 "global_hypothesis_count": identity_hypotheses.get("global_hypothesis_count", 0),
                 "track_identity_option_count": identity_hypotheses.get("track_identity_option_count", 0),
+                "ambiguous_track_identity_option_count": identity_hypotheses.get("ambiguous_track_identity_option_count", 0),
             },
             "appearance_cue": {
                 "kind": "torso_rgb_quantized_histogram_v1",

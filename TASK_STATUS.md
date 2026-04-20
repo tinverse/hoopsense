@@ -209,6 +209,9 @@ The current highest-priority frontier is:
   - [x] Surface base versus jersey-reranked global identity world status in the labeller UI for reviewed Layer 1 artifacts
   - [x] Show per-track preferred canonical identity changes caused by jersey-aware reranking in the labeller track inspector and selectors
   - [x] Add labeller regressions or frontend wiring checks for the new identity-world review surfaces and align plan/docs
+- [x] Materialize per-detection identity option summaries from bounded global hypotheses in stitched Layer 1 frames
+- [x] Preserve ambiguous track-option provenance on repaired and unrepaired detections without mutating committed identities
+- [x] Add regressions and artifact summary fields for runtime identity-option annotations
 - [ ] Add explicit playback transport controls and conservative jersey-OCR display gating in the labeller
 - [ ] Add bidirectional short-gap repair for clustered or briefly missed player tracks in Layer 1 artifacts
 - [x] Attach jersey-number evidence and consensus fields to persistent player identity without rewriting raw tracker IDs

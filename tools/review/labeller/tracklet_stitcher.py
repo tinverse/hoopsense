@@ -53,6 +53,67 @@ def _annotate_hypothesis_groups(frame_index, hypothesis_summary):
             frame["identity_hypothesis_group_ids"].append(group["group_id"])
 
 
+def _serialize_runtime_identity_options(track_option_record):
+    options = []
+    for option in track_option_record.get("options") or []:
+        options.append({
+            "canonical_track_id": int(option["canonical_track_id"]),
+            "chain_track_ids": [int(value) for value in option.get("chain_track_ids") or []],
+            "support_share": round(float(option.get("support_share") or 0.0), 4),
+            "best_total_score": round(float(option.get("best_total_score") or 0.0), 4),
+            "best_score_margin_to_best": round(float(option.get("best_score_margin_to_best") or 0.0), 4),
+            "hypothesis_ids": list(option.get("hypothesis_ids") or []),
+            "group_hypothesis_ids": list(option.get("group_hypothesis_ids") or []),
+        })
+    return options
+
+
+def _annotate_detection_identity_options(frames, hypothesis_summary):
+    option_lookup = {
+        int(record["track_id"]): record
+        for record in (hypothesis_summary.get("track_identity_options") or [])
+        if record.get("track_id") is not None
+    }
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            track_id = detection.get("track_id")
+            canonical_track_id = detection.get("identity_track_id")
+            if track_id is None:
+                detection["identity_option_track_id"] = None
+                detection["identity_option_count"] = 0
+                detection["identity_is_ambiguous"] = False
+                detection["identity_best_canonical_track_id"] = canonical_track_id
+                detection["identity_option_canonical_track_ids"] = [int(canonical_track_id)] if canonical_track_id is not None else []
+                detection["identity_option_group_hypothesis_ids"] = []
+                detection["identity_options"] = []
+                continue
+
+            record = option_lookup.get(int(track_id))
+            if record is None:
+                detection["identity_option_track_id"] = int(track_id)
+                detection["identity_option_count"] = 0
+                detection["identity_is_ambiguous"] = False
+                detection["identity_best_canonical_track_id"] = canonical_track_id if canonical_track_id is None else int(canonical_track_id)
+                detection["identity_option_canonical_track_ids"] = [int(canonical_track_id)] if canonical_track_id is not None else []
+                detection["identity_option_group_hypothesis_ids"] = []
+                detection["identity_options"] = []
+                continue
+
+            serialized_options = _serialize_runtime_identity_options(record)
+            group_ids = sorted({
+                group_id
+                for option in serialized_options
+                for group_id in option.get("group_hypothesis_ids") or []
+            })
+            detection["identity_option_track_id"] = int(record["track_id"])
+            detection["identity_option_count"] = int(record.get("option_count") or len(serialized_options))
+            detection["identity_is_ambiguous"] = bool(record.get("is_ambiguous"))
+            detection["identity_best_canonical_track_id"] = int(record.get("best_canonical_track_id")) if record.get("best_canonical_track_id") is not None else (int(canonical_track_id) if canonical_track_id is not None else None)
+            detection["identity_option_canonical_track_ids"] = [int(option["canonical_track_id"]) for option in serialized_options]
+            detection["identity_option_group_hypothesis_ids"] = group_ids
+            detection["identity_options"] = serialized_options
+
+
 def _apply_selected_identity_links(track_frames, hypothesis_summary):
     for link in hypothesis_summary["selected_links"]:
         predecessor_track_id = link["predecessor_track_id"]
@@ -189,5 +250,6 @@ def stitch_tracklets(frames, track_frames, hypothesis_summary, *, config, interp
         interpolate_detection=interpolate_detection,
         match_discovery_recovery_detection=match_discovery_recovery_detection,
     )
+    _annotate_detection_identity_options(frames, hypothesis_summary)
     _finalize_stitched_frames(frames)
     return frames

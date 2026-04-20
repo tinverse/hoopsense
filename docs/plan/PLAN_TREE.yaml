@@ -629,6 +629,21 @@ levels:
       title: Add labeller regressions or frontend wiring checks for the new identity-world review surfaces and align plan/docs
       owner: A0
       status: completed
+    - id: L3.159
+      parent: L3.66
+      title: Materialize per-detection identity option summaries from bounded global hypotheses in stitched Layer 1 frames
+      owner: A0
+      status: completed
+    - id: L3.160
+      parent: L3.66
+      title: Preserve ambiguous track-option provenance on repaired and unrepaired detections without mutating committed identities
+      owner: A0
+      status: completed
+    - id: L3.161
+      parent: L3.66
+      title: Add regressions and artifact summary fields for runtime identity-option annotations
+      owner: A0
+      status: completed
     - id: L3.67
       parent: L2.3
       title: Add video discontinuity detection and continuity segments to Layer 1 artifacts before stronger identity repair
