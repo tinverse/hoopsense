@@ -38,6 +38,21 @@ The current artifact graph is:
 - `promotion_record`
 - `deployment_compatibility_report`
 
+Layer 1 review artifacts are also governed MLOps artifacts while the perception stack is still being developed. A review artifact must be reproducible from:
+- a checked-in review preset
+- a generated run manifest
+- the source clip path
+- model identifiers and prompts
+- runner target, native or Docker
+- git revision and dirty-worktree state
+- local model-cache roots
+
+Current checked-in review presets live in `specs/layer1_review_presets.yaml`:
+- `detector_first_baseline` keeps heavyweight open-vocabulary stages disabled for fast baseline comparison.
+- `grounded_sam3_review` uses Grounding DINO for scene grounding and SAM3 for player and ball recovery.
+
+Layer 1 review runs should be launched through `scripts/generate_layer1_review_preset.sh` so each run writes a `run_manifest.json` under `tmp_runs/layer1_review_runs/` before generation starts.
+
 ## Training Lifecycle
 
 1. Ingest or generate source data.

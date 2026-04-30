@@ -26,7 +26,7 @@ What is implemented:
 - `Dockerfile` for cloud-oriented packaging
 - `Dockerfile.orin.sam3` and companion scripts for the experimental JetPack 6 / Python 3.12 SAM3 container path
 - `tools/infra/cloud_train_wrapper.sh` and `vertex_job.yaml` for cloud training entrypoints
-- cloud `Dockerfile` now makes `facebookresearch/dinov3` available for later bootstrap foreground/background segmentation experiments
+- cloud `Dockerfile` now makes Grounding DINO and related Hugging Face bootstrap dependencies available for later play-region grounding experiments
 - `guix.scm` and `guix_orin.scm` remain checked in as optional legacy developer shells and are not the primary operating path
 
 What is not implemented yet:
@@ -99,19 +99,43 @@ Layer 1 review path:
 ./scripts/generate_layer1_annotations.sh data/raw_clips/youth/DSC_4951_sample_0.mp4
 ```
 
-Optional DINOv3 bootstrap pre-pass for Layer 1 artifacts:
+Reproducible preset-driven review generation:
+
+```bash
+./scripts/generate_layer1_review_preset.sh \
+  data/raw_clips/youth/DSC_4951_sample_0.mp4 \
+  --preset grounded_sam3_review
+```
+
+Use `--dry-run` first when checking the exact command and manifest without running inference:
+
+```bash
+./scripts/generate_layer1_review_preset.sh \
+  data/raw_clips/youth/DSC_4951_sample_0.mp4 \
+  --preset grounded_sam3_review \
+  --dry-run
+```
+
+Notes:
+- presets live in `specs/layer1_review_presets.yaml`
+- each preset run writes a run manifest under `tmp_runs/layer1_review_runs/`
+- `grounded_sam3_review` defaults to the Docker runner because it depends on the experimental Grounding DINO plus SAM3 stack
+- keep `scripts/generate_layer1_annotations.sh` as the stable low-friction native path, but use the preset runner for artifact comparisons and review sets
+
+Optional Grounding DINO bootstrap pre-pass for Layer 1 artifacts:
 
 ```bash
 ./scripts/generate_layer1_annotations.sh \
   data/raw_clips/youth/DSC_4951_sample_0.mp4 \
-  --bootstrap-foreground-backend dinov3 \
-  --bootstrap-foreground-model facebook/dinov3-vits16-pretrain-lvd1689m
+  --bootstrap-foreground-backend grounding_dino \
+  --bootstrap-foreground-model IDEA-Research/grounding-dino-tiny \
+  --bootstrap-foreground-prompt "basketball court. basketball player. basketball hoop. basketball referee."
 ```
 
 Notes:
 - this bootstrap path is optional and artifact-oriented
 - it runs ahead of geometry/perception and emits a coarse foreground/background summary
-- it requires a CUDA-capable environment with DINOv3 support available
+- it requires a CUDA-capable environment with Grounding DINO support available
 - the artifact now carries a segment-oriented `bootstrap_context` handoff so continuity segments can re-bootstrap after detected discontinuities
 
 ### Mode C: Cloud Training
@@ -133,24 +157,24 @@ Use cloud for:
 - larger training runs
 - longer evaluations
 - repeatable artifact publication
-- research dependencies that are not yet part of the native Orin runtime path, such as `DINOv3`
+- research dependencies that are not yet part of the native Orin runtime path, such as `Grounding DINO`
 
-Current DINOv3 boundary:
-- `Dockerfile` clones `facebookresearch/dinov3` into `/opt/dinov3`
+Current Grounding DINO boundary:
+- `Dockerfile` carries the Hugging Face and transformers stack needed for Grounding DINO bootstrap experiments
 - the cloud image installs it in editable mode with `--no-deps`
 - this is intentionally a cloud/x86 packaging feature only
-- `Dockerfile.orin` is unchanged; DINOv3 is not yet part of the Jetson runtime contract
+- `Dockerfile.orin` is unchanged; Grounding DINO is not yet part of the Jetson runtime contract
 
 Rollback-safe experimental Orin path:
 - `Dockerfile.orin` remains the stable Jetson baseline
-- `Dockerfile.orin.dinov3` is a separate experimental variant for DINOv3 availability
+- `Dockerfile.orin.dinov3` is legacy naming for the old bootstrap experiment and should not be treated as the active Grounding DINO runtime contract
 - `Dockerfile.orin.sam3` is a separate experimental JetPack 6 path for official `facebookresearch/sam3`
 - rollback is operationally trivial:
   - keep using `Dockerfile.orin`
   - or stop tagging/publishing the experimental image
 - recommended image naming:
   - stable: `hoopsense-orin:stable`
-  - experimental: `hoopsense-orin:dinov3-exp1`
+  - experimental: `hoopsense-orin:grounding-dino-exp1`
   - experimental SAM3: `hoopsense-orin:sam3-exp1`
 
 Experimental SAM3 container notes:

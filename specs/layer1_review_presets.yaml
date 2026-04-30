@@ -1,0 +1,35 @@
+version: "1.0"
+kind: layer1_review_presets
+
+presets:
+  detector_first_baseline:
+    description: Stable detector-first Layer 1 review baseline. Keeps heavyweight open-vocabulary stages disabled.
+    runner: native
+    generator_args:
+      player_model: yolov8n.pt
+      player_tracker_backend: default
+      pose_model: yolov8n-pose.pt
+      ball_model: yolov8n.pt
+      player_conf: 0.12
+      pose_conf: 0.25
+      bootstrap_foreground_backend: none
+      player_recovery_backend: none
+      ball_bootstrap_backend: none
+
+  grounded_sam3_review:
+    description: Strong review preset that uses Grounding DINO for scene grounding and SAM3 for player and ball recovery.
+    runner: docker
+    generator_args:
+      player_model: yolov8n.pt
+      player_tracker_backend: default
+      pose_model: yolov8n-pose.pt
+      ball_model: yolov8n.pt
+      player_conf: 0.12
+      pose_conf: 0.25
+      bootstrap_foreground_backend: grounding_dino
+      bootstrap_foreground_model: IDEA-Research/grounding-dino-tiny
+      bootstrap_foreground_prompt: "basketball court. basketball player. basketball hoop. basketball referee."
+      player_recovery_backend: sam3
+      player_recovery_prompt: "basketball players on the court"
+      ball_bootstrap_backend: sam3
+      ball_bootstrap_prompt: "basketball"
