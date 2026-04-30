@@ -16,6 +16,7 @@ from pipelines.inference import (
     RuntimeDiscontinuityDetector,
     RuntimePanDriftDetector,
 )
+from pipelines.ball_tracking import BallSearchPlan, BallSearchRoi
 from pipelines.geometry import geometry_evidence_gate
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
 
@@ -84,6 +85,7 @@ class FrameResultAdapterTest(unittest.TestCase):
         self.assertEqual(writer.rows[0]["kind"], "ball")
         self.assertEqual(writer.rows[0]["t_ms"], 250)
         self.assertEqual(writer.rows[0]["state"], "observed")
+        self.assertIsNone(writer.rows[0]["search_plan"])
 
     def test_extract_ball_state_predicts_short_gap_after_missing_frame(self):
         writer = _RecordingWriter()
@@ -135,9 +137,186 @@ class FrameResultAdapterTest(unittest.TestCase):
         self.assertEqual(ball_state["state"], "observed")
         self.assertEqual(writer.rows[-1]["bootstrap_segment_id"], 3)
         self.assertTrue(writer.rows[-1]["bootstrap_enabled"])
-        self.assertGreater(ball_state["candidate_scores"][0]["foreground_prior"], 0.0)
+        self.assertGreater(ball_state["candidate_scores"][0]["score_parts"]["foreground_prior"], 0.0)
         self.assertGreater(writer.rows[-1]["play_region_prior"], 0.0)
         self.assertTrue(writer.rows[-1]["geometry_region_ok"])
+
+    def test_extract_ball_state_writes_search_plan_provenance(self):
+        writer = _RecordingWriter()
+        tracker = BallStateTracker()
+        search_plan = {
+            "kind": "runtime_ball_search_plan_v1",
+            "run_full_frame": False,
+            "reason": "roi_cadence",
+            "roi_count": 1,
+        }
+        FrameResultAdapter.extract_ball_state(
+            boxes_xywh=[np.array([300.0, 220.0, 12.0, 12.0])],
+            cls=[BALL_CLASS_ID],
+            conf=[0.67],
+            ball_tracker=tracker,
+            h_matrix=np.eye(3),
+            t_ms=250,
+            writer=writer,
+            ball_search_plan=search_plan,
+        )
+        self.assertEqual(writer.rows[-1]["search_plan"], search_plan)
+
+
+
+class DetectorFirstRuntimeTest(unittest.TestCase):
+    class _Tensor:
+        def __init__(self, array):
+            self.array = np.array(array, dtype=float)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.array
+
+    class _Boxes:
+        def __init__(self, xyxy):
+            self.xyxy = DetectorFirstRuntimeTest._Tensor(xyxy)
+
+        def __len__(self):
+            return len(self.xyxy.array)
+
+    class _Keypoints:
+        def __init__(self, xyn):
+            self.xyn = DetectorFirstRuntimeTest._Tensor(xyn)
+
+    class _Result:
+        def __init__(self, xyxy, keypoints=None):
+            self.boxes = DetectorFirstRuntimeTest._Boxes(xyxy)
+            self.keypoints = None if keypoints is None else DetectorFirstRuntimeTest._Keypoints(keypoints)
+
+    def test_match_pose_keypoints_projects_pose_onto_tracked_detector_boxes(self):
+        tracked_result = [self._Result([[100.0, 40.0, 150.0, 180.0]])]
+        pose_result = [self._Result([[102.0, 42.0, 148.0, 182.0]], keypoints=[[[0.5, 0.5]] * 17])]
+        matched = FrameResultAdapter.match_pose_keypoints(tracked_result, pose_result)
+        self.assertEqual(len(matched), 1)
+        self.assertIsNotNone(matched[0])
+        self.assertEqual(matched[0].shape, (17, 2))
+
+    def test_update_tracks_records_runtime_tracklet_payload(self):
+        extractor = GameDNAExtractor(
+            InferenceConfig(video_path="dummy.mp4", reid_sample_interval_frames=2),
+            models=type("Models", (), {"brain": None, "device": None})(),
+            calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+        )
+        extractor.frame_idx = 1
+        frame = np.full((96, 96, 3), 64, dtype=np.uint8)
+
+        player_map = extractor._update_tracks(
+            boxes_xywh=np.array([[48.0, 48.0, 20.0, 40.0]], dtype=np.float32),
+            conf=np.array([0.86], dtype=np.float32),
+            tids=np.array([5]),
+            classes=np.array([0]),
+            keypoints=[None],
+            h_matrix=np.eye(3),
+            frame=frame,
+        )
+
+        tracklet = player_map[5]["tracklet"]
+        self.assertEqual(tracklet["track_id"], 5)
+        self.assertEqual(tracklet["observation_count"], 1)
+        self.assertEqual(tracklet["reid"]["source"], "torso_color_histogram_v1")
+        self.assertEqual(tracklet["reid"]["sample_count"], 1)
+
+    def test_ball_search_player_detections_include_pixel_pose_keypoints(self):
+        extractor = GameDNAExtractor(
+            InferenceConfig(video_path="dummy.mp4"),
+            models=type("Models", (), {"brain": None, "device": None})(),
+            calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+        )
+        keypoints = np.zeros((1, 17, 2), dtype=np.float32)
+        keypoints[0, 9] = [0.5, 0.25]
+
+        players = extractor._ball_search_player_detections(
+            boxes_xywh=np.array([[320.0, 240.0, 80.0, 160.0]], dtype=np.float32),
+            tids=np.array([12]),
+            classes=np.array([0]),
+            keypoints=keypoints,
+            frame_shape=(720, 1280, 3),
+        )
+
+        self.assertEqual(players[0]["track_id"], 12)
+        self.assertEqual(players[0]["keypoints_xy"][9], [640.0, 180.0])
+        self.assertEqual(players[0]["bbox_xyxy"], [280.0, 160.0, 360.0, 320.0])
+        self.assertEqual(players[0]["class_id"], 0)
+        self.assertEqual(players[0]["keypoints_conf"][9], 1.0)
+
+    def test_write_court_pose_event_emits_runtime_pose_state(self):
+        extractor = GameDNAExtractor(
+            InferenceConfig(video_path="dummy.mp4"),
+            models=type("Models", (), {"brain": None, "device": None})(),
+            calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+        )
+        extractor.frame_idx = 7
+        extractor.bootstrap_state.context = {
+            "enabled": True,
+            "status": "ready",
+            "mask_shape": [1, 1],
+            "mask_grid": [[1]],
+            "backend": "grounding_dino",
+            "model_name": "fake",
+            "reason": "initial",
+        }
+        extractor.bootstrap_state.segment_id = 3
+        writer = _RecordingWriter()
+
+        extractor._write_court_pose_event(
+            np.zeros((100, 100, 3), dtype=np.uint8),
+            291,
+            np.eye(3),
+            [{"class_id": 0, "bbox_xyxy": [10.0, 20.0, 40.0, 80.0]}],
+            writer,
+        )
+
+        self.assertEqual(writer.rows[0]["kind"], "court_pose")
+        self.assertEqual(writer.rows[0]["state"], "calibrated")
+        self.assertEqual(writer.rows[0]["bootstrap_segment_id"], 3)
+        self.assertIn("grounding_scene_prior", writer.rows[0]["visible_features"])
+
+    def test_run_ball_search_skips_tiny_roi_crops(self):
+        class _BallModel:
+            def __init__(self):
+                self.called = False
+
+            def predict(self, *args, **kwargs):
+                self.called = True
+                raise AssertionError("tiny crops should not be sent to the ball model")
+
+        ball_model = _BallModel()
+        extractor = GameDNAExtractor(
+            InferenceConfig(video_path="dummy.mp4"),
+            models=type("Models", (), {"brain": None, "device": "cpu", "ball_model": ball_model})(),
+            calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
+        )
+        extractor.ball_search_scheduler = type(
+            "Scheduler",
+            (),
+            {
+                "plan": lambda self, *args, **kwargs: BallSearchPlan(
+                    run_full_frame=False,
+                    reason="roi_cadence",
+                    rois=[BallSearchRoi([5, 5, 6, 40], "last_ball_state")],
+                )
+            },
+        )()
+
+        boxes, classes, confidences, payload, metadata = extractor._run_ball_search(
+            np.zeros((64, 64, 3), dtype=np.uint8),
+            [],
+        )
+
+        self.assertFalse(ball_model.called)
+        self.assertEqual(boxes, [])
+        self.assertEqual(classes, [])
+        self.assertEqual(confidences, [])
+        self.assertEqual(metadata, [])
+        self.assertEqual(payload["roi_count"], 1)
 
 
 class RuntimeBootstrapTest(unittest.TestCase):
@@ -154,30 +333,31 @@ class RuntimeBootstrapTest(unittest.TestCase):
     def test_game_dna_extractor_rebootstraps_on_discontinuity(self):
         import pipelines.inference as inference_module
 
-        original_bootstrapper = inference_module.Dinov3Bootstrapper
+        original_bootstrapper = inference_module.GroundingDinoBootstrapper
 
         class _FakeBootstrapper:
-            def __init__(self, model_name, device):
+            def __init__(self, model_name, text_prompt=None, device=None):
                 self.model_name = model_name
+                self.text_prompt = text_prompt
                 self.device = device
 
             def run_on_frame(self, frame, frame_idx=0):
                 payload = {
                     "enabled": True,
                     "status": "ready",
-                    "backend": "fake_dino",
+                    "backend": "fake_grounding_dino",
                     "model_name": self.model_name,
                     "frame_idx": frame_idx,
                     "foreground_ratio": 0.25,
                 }
                 return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
 
-        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        inference_module.GroundingDinoBootstrapper = _FakeBootstrapper
         try:
             extractor = GameDNAExtractor(
                 InferenceConfig(
                     video_path="dummy.mp4",
-                    bootstrap_foreground_backend="dinov3",
+                    bootstrap_foreground_backend="grounding_dino",
                     bootstrap_discontinuity_threshold=10.0,
                 ),
                 models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
@@ -189,7 +369,7 @@ class RuntimeBootstrapTest(unittest.TestCase):
             extractor.frame_idx = 2
             extractor._maybe_refresh_bootstrap_context(np.full((16, 16, 3), 255, dtype=np.uint8), 66, writer)
         finally:
-            inference_module.Dinov3Bootstrapper = original_bootstrapper
+            inference_module.GroundingDinoBootstrapper = original_bootstrapper
 
         bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
         self.assertEqual(len(bootstrap_rows), 2)
@@ -221,30 +401,31 @@ class RuntimeBootstrapTest(unittest.TestCase):
     def test_game_dna_extractor_rebootstraps_on_pan_drift(self):
         import pipelines.inference as inference_module
 
-        original_bootstrapper = inference_module.Dinov3Bootstrapper
+        original_bootstrapper = inference_module.GroundingDinoBootstrapper
 
         class _FakeBootstrapper:
-            def __init__(self, model_name, device):
+            def __init__(self, model_name, text_prompt=None, device=None):
                 self.model_name = model_name
+                self.text_prompt = text_prompt
                 self.device = device
 
             def run_on_frame(self, frame, frame_idx=0):
                 payload = {
                     "enabled": True,
                     "status": "ready",
-                    "backend": "fake_dino",
+                    "backend": "fake_grounding_dino",
                     "model_name": self.model_name,
                     "frame_idx": frame_idx,
                     "foreground_ratio": 0.25,
                 }
                 return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
 
-        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        inference_module.GroundingDinoBootstrapper = _FakeBootstrapper
         try:
             extractor = GameDNAExtractor(
                 InferenceConfig(
                     video_path="dummy.mp4",
-                    bootstrap_foreground_backend="dinov3",
+                    bootstrap_foreground_backend="grounding_dino",
                     bootstrap_pan_recompute_cooldown_frames=0,
                 ),
                 models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
@@ -271,7 +452,7 @@ class RuntimeBootstrapTest(unittest.TestCase):
                 np.array([0, 0, 0, 0]),
             )
         finally:
-            inference_module.Dinov3Bootstrapper = original_bootstrapper
+            inference_module.GroundingDinoBootstrapper = original_bootstrapper
 
         bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
         self.assertEqual(len(bootstrap_rows), 2)
@@ -281,28 +462,29 @@ class RuntimeBootstrapTest(unittest.TestCase):
     def test_pan_drift_marks_context_stale_during_cooldown(self):
         import pipelines.inference as inference_module
 
-        original_bootstrapper = inference_module.Dinov3Bootstrapper
+        original_bootstrapper = inference_module.GroundingDinoBootstrapper
 
         class _FakeBootstrapper:
-            def __init__(self, model_name, device):
+            def __init__(self, model_name, text_prompt=None, device=None):
                 self.model_name = model_name
+                self.text_prompt = text_prompt
                 self.device = device
 
             def run_on_frame(self, frame, frame_idx=0):
                 payload = {
                     "enabled": True,
                     "status": "ready",
-                    "backend": "fake_dino",
+                    "backend": "fake_grounding_dino",
                     "model_name": self.model_name,
                     "frame_idx": frame_idx,
                     "foreground_ratio": 0.25,
                 }
                 return type("BootstrapResult", (), {"to_payload": lambda self: payload})()
 
-        inference_module.Dinov3Bootstrapper = _FakeBootstrapper
+        inference_module.GroundingDinoBootstrapper = _FakeBootstrapper
         try:
             extractor = GameDNAExtractor(
-                InferenceConfig(video_path="dummy.mp4", bootstrap_foreground_backend="dinov3"),
+                InferenceConfig(video_path="dummy.mp4", bootstrap_foreground_backend="grounding_dino"),
                 models=type("Models", (), {"brain": None, "device": "cuda:0"})(),
                 calibration=type("Calibration", (), {"homography_for_frame": lambda self, frame_idx: np.eye(3)})(),
             )
@@ -328,7 +510,7 @@ class RuntimeBootstrapTest(unittest.TestCase):
                 np.array([0, 0, 0, 0]),
             )
         finally:
-            inference_module.Dinov3Bootstrapper = original_bootstrapper
+            inference_module.GroundingDinoBootstrapper = original_bootstrapper
 
         bootstrap_rows = [row for row in writer.rows if row["kind"] == "bootstrap_context"]
         self.assertEqual(len(bootstrap_rows), 1)

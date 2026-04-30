@@ -8,6 +8,8 @@ import numpy as np
 import yaml
 
 from pipelines.behavior_engine import BehaviorStateMachine, PossessionEngine
+from pipelines.ball_tracking import BallSearchScheduler, BallSearchSchedulerConfig, BallStateTracker
+from pipelines.court_pose import CourtPoseTracker
 from pipelines.geometry import (
     geometry_evidence_gate,
     lift_keypoints_to_3d,
@@ -16,17 +18,22 @@ from pipelines.geometry import (
 )
 from pipelines.mvp_event_engine import MvpEventRuleEngine
 from pipelines.mvp_stat_accumulator import MvpStatAccumulator
+from pipelines.resource_policy import resolve_torch_device
+from pipelines.tracklet_store import ColorHistogramReIDExtractor, TrackletStore
 
-DEFAULT_DINOV3_MODEL = "facebook/dinov3-vits16-pretrain-lvd1689m"
+DEFAULT_GROUNDING_DINO_MODEL = "IDEA-Research/grounding-dino-tiny"
+DEFAULT_GROUNDING_DINO_PROMPT = "basketball court. basketball player. basketball hoop. basketball referee."
 try:
-    from tools.review.labeller.dinov3_bootstrap import (
-        DEFAULT_DINOV3_MODEL as _IMPORTED_DINOV3_MODEL,
-        Dinov3Bootstrapper,
+    from tools.review.labeller.grounding_dino_bootstrap import (
+        DEFAULT_GROUNDING_DINO_MODEL as _IMPORTED_GROUNDING_DINO_MODEL,
+        DEFAULT_GROUNDING_DINO_PROMPT as _IMPORTED_GROUNDING_DINO_PROMPT,
+        GroundingDinoBootstrapper,
     )
 
-    DEFAULT_DINOV3_MODEL = _IMPORTED_DINOV3_MODEL
+    DEFAULT_GROUNDING_DINO_MODEL = _IMPORTED_GROUNDING_DINO_MODEL
+    DEFAULT_GROUNDING_DINO_PROMPT = _IMPORTED_GROUNDING_DINO_PROMPT
 except Exception:  # pragma: no cover - fail-closed when optional deps are missing
-    Dinov3Bootstrapper = None
+    GroundingDinoBootstrapper = None
 
 
 def get_label_map(spec_path="specs/basketball_ncaa.yaml"):
@@ -57,11 +64,6 @@ LABEL_MAP_INV = get_label_map()
 PERSON_CLASS_ID = 0
 BALL_CLASS_ID = 32
 BALL_DEFAULT_Z = 50.0
-BALL_MIN_OBSERVED_CONFIDENCE = 0.30
-BALL_MAX_PREDICT_GAP_FRAMES = 4
-BALL_MAX_JUMP_PX = 180.0
-BALL_MIN_SIZE_PX = 4.0
-BALL_MAX_SIZE_PX = 80.0
 BOOTSTRAP_DISCONTINUITY_THRESHOLD = 22.0
 PAN_DRIFT_MIN_SHARED_TRACKS = 4
 PAN_DRIFT_MEDIAN_DISPLACEMENT_PX = 55.0
@@ -144,164 +146,6 @@ class TrackManager:
 
     def is_ready(self):
         return len(self.kpt_history) == 30
-
-
-class BallStateTracker:
-    """Keep one conservative ball state through short detector misses.
-
-    Stage 1 intentionally does not attempt full multi-hypothesis ball tracking.
-    It selects at most one candidate per frame, applies simple continuity-aware
-    scoring, and predicts through only short gaps.
-    """
-
-    def __init__(
-        self,
-        *,
-        min_observed_confidence=BALL_MIN_OBSERVED_CONFIDENCE,
-        max_predict_gap_frames=BALL_MAX_PREDICT_GAP_FRAMES,
-        max_jump_px=BALL_MAX_JUMP_PX,
-    ):
-        self.min_observed_confidence = float(min_observed_confidence)
-        self.max_predict_gap_frames = int(max_predict_gap_frames)
-        self.max_jump_px = float(max_jump_px)
-        self.center_xy = None
-        self.velocity_xy = np.array([0.0, 0.0], dtype=np.float32)
-        self.confidence = 0.0
-        self.missing_gap_frames = 0
-
-    def _size_score(self, bbox_xywh):
-        width = float(bbox_xywh[2]) if len(bbox_xywh) >= 3 else 0.0
-        height = float(bbox_xywh[3]) if len(bbox_xywh) >= 4 else 0.0
-        diameter = max(width, height)
-        if diameter < BALL_MIN_SIZE_PX or diameter > BALL_MAX_SIZE_PX:
-            return 0.0
-        midpoint = 0.5 * (BALL_MIN_SIZE_PX + BALL_MAX_SIZE_PX)
-        spread = max(1.0, midpoint - BALL_MIN_SIZE_PX)
-        return max(0.0, 1.0 - abs(diameter - midpoint) / spread)
-
-    def _continuity_score(self, candidate_center):
-        if self.center_xy is None:
-            return 0.5
-        distance = float(np.linalg.norm(candidate_center - self.center_xy))
-        if distance >= self.max_jump_px:
-            return 0.0
-        return max(0.0, 1.0 - distance / self.max_jump_px)
-
-    def _candidate_score(self, bbox_xywh, confidence, bootstrap_context=None):
-        candidate_center = np.array([float(bbox_xywh[0]), float(bbox_xywh[1])], dtype=np.float32)
-        confidence_score = max(0.0, min(1.0, float(confidence)))
-        continuity_score = self._continuity_score(candidate_center)
-        size_score = self._size_score(bbox_xywh)
-        foreground_prior = 0.0
-        if bootstrap_context and bootstrap_context.get("enabled"):
-            foreground_prior = play_region_prior_for_point(
-                bootstrap_context,
-                candidate_center[0],
-                candidate_center[1],
-            )
-        score = (
-            0.60 * confidence_score
-            + 0.20 * continuity_score
-            + 0.10 * size_score
-            + 0.10 * foreground_prior
-        )
-        return score, candidate_center, continuity_score, size_score, foreground_prior
-
-    def update(self, boxes_xywh, cls, conf, bootstrap_context=None):
-        candidates = []
-        for bbox_xywh, class_id, confidence in zip(boxes_xywh, cls, conf):
-            if int(class_id) != BALL_CLASS_ID:
-                continue
-            score, center_xy, continuity_score, size_score, foreground_prior = self._candidate_score(
-                bbox_xywh,
-                confidence,
-                bootstrap_context=bootstrap_context,
-            )
-            candidates.append(
-                {
-                    "bbox_xywh": [float(v) for v in bbox_xywh],
-                    "center_xy": center_xy,
-                    "confidence": float(confidence),
-                    "score": float(score),
-                    "continuity_score": float(continuity_score),
-                    "size_score": float(size_score),
-                    "foreground_prior": float(foreground_prior),
-                }
-            )
-
-        candidates.sort(key=lambda c: c["score"], reverse=True)
-        selected = candidates[0] if candidates else None
-        if selected and selected["score"] >= self.min_observed_confidence:
-            next_center = selected["center_xy"]
-            if self.center_xy is not None:
-                self.velocity_xy = next_center - self.center_xy
-            self.center_xy = next_center
-            self.confidence = float(selected["confidence"])
-            self.missing_gap_frames = 0
-            return {
-                "state": "observed",
-                "confidence": round(float(selected["confidence"]), 4),
-                "center_xy": [round(float(next_center[0]), 3), round(float(next_center[1]), 3)],
-                "bbox_xywh": [round(float(v), 3) for v in selected["bbox_xywh"]],
-                "velocity_xy": [round(float(self.velocity_xy[0]), 3), round(float(self.velocity_xy[1]), 3)],
-                "speed_px": round(float(np.linalg.norm(self.velocity_xy)), 3),
-                "missing_gap_frames": 0,
-                "source": "detector",
-                "candidate_count": len(candidates),
-                "candidate_scores": [
-                    {
-                        "confidence": round(float(candidate["confidence"]), 4),
-                        "score": round(float(candidate["score"]), 4),
-                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
-                    }
-                    for candidate in candidates[:3]
-                ],
-            }
-
-        if self.center_xy is not None and self.missing_gap_frames < self.max_predict_gap_frames:
-            self.missing_gap_frames += 1
-            self.center_xy = self.center_xy + self.velocity_xy
-            return {
-                "state": "predicted_short_gap",
-                "confidence": round(float(self.confidence * 0.85), 4),
-                "center_xy": [round(float(self.center_xy[0]), 3), round(float(self.center_xy[1]), 3)],
-                "bbox_xywh": None,
-                "velocity_xy": [round(float(self.velocity_xy[0]), 3), round(float(self.velocity_xy[1]), 3)],
-                "speed_px": round(float(np.linalg.norm(self.velocity_xy)), 3),
-                "missing_gap_frames": int(self.missing_gap_frames),
-                "source": "smoothed_prediction",
-                "candidate_count": len(candidates),
-                "candidate_scores": [
-                    {
-                        "confidence": round(float(candidate["confidence"]), 4),
-                        "score": round(float(candidate["score"]), 4),
-                        "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
-                    }
-                    for candidate in candidates[:3]
-                ],
-            }
-
-        self.missing_gap_frames = self.max_predict_gap_frames + 1
-        self.confidence = 0.0
-        return {
-            "state": "missing",
-            "confidence": 0.0,
-            "center_xy": None,
-            "bbox_xywh": None,
-            "velocity_xy": [0.0, 0.0],
-            "speed_px": 0.0,
-            "missing_gap_frames": int(self.missing_gap_frames),
-            "source": "smoothed_prediction",
-            "candidate_count": len(candidates),
-            "candidate_scores": [
-                {
-                    "confidence": round(float(candidate["confidence"]), 4),
-                    "score": round(float(candidate["score"]), 4),
-                    "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
-                }
-                for candidate in candidates[:3]
-            ],
-        }
 
 
 class RuntimeDiscontinuityDetector:
@@ -448,17 +292,28 @@ class InferenceConfig:
     video_path: str
     output_dir: str = "data"
     smoke_test: bool = False
+    player_model_name: str = "yolov8n.pt"
+    player_tracker_backend: str = "default"
     pose_model_name: str = "yolov8n-pose.pt"
     ball_model_name: str = "yolov8n.pt"
+    player_conf_threshold: float = 0.12
+    pose_conf_threshold: float = 0.20
     calibration_path: str = "data/training/camera_calibration.json"
     fallback_calibration_path: str = "data/calibration.json"
     brain_path: str = "data/models/action_brain.pt"
     output_filename: str = "intelligent_game_dna.jsonl"
     bootstrap_foreground_backend: str = "none"
-    bootstrap_foreground_model: str = DEFAULT_DINOV3_MODEL
+    bootstrap_foreground_model: str = DEFAULT_GROUNDING_DINO_MODEL
+    bootstrap_foreground_prompt: str = DEFAULT_GROUNDING_DINO_PROMPT
     bootstrap_discontinuity_threshold: float = BOOTSTRAP_DISCONTINUITY_THRESHOLD
     play_region_geometry_min_prior: float = PLAY_REGION_GEOMETRY_MIN_PRIOR
     bootstrap_pan_recompute_cooldown_frames: int = BOOTSTRAP_PAN_RECOMPUTE_COOLDOWN_FRAMES
+    reid_sample_interval_frames: int = 15
+    ball_full_frame_interval_frames: int = 1
+    ball_missing_full_frame_interval_frames: int = 1
+    ball_roi_search_enabled: bool = False
+    ball_roi_max_count: int = 4
+    device: str = "auto"
 
 
 class CalibrationResolver:
@@ -517,12 +372,16 @@ class ModelBundle:
     pipeline.
     """
 
-    def __init__(self, pose_model_name, ball_model_name, brain_path, label_map):
+    def __init__(self, player_model_name, pose_model_name, ball_model_name, brain_path, label_map, requested_device="auto"):
+        self.player_model_name = player_model_name
         self.pose_model_name = pose_model_name
         self.ball_model_name = ball_model_name
         self.brain_path = brain_path
         self.label_map = label_map
+        self.requested_device = requested_device
         self.device = None
+        self.resource_policy = None
+        self.player_model = None
         self.pose_model = None
         self.ball_model = None
         self.brain = None
@@ -533,7 +392,8 @@ class ModelBundle:
         from ultralytics import YOLO
         from core.vision.action_brain import ActionBrain
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device, self.resource_policy = resolve_torch_device(self.requested_device)
+        self.player_model = YOLO(self.player_model_name)
         self.pose_model = YOLO(self.pose_model_name)
         self.ball_model = YOLO(self.ball_model_name)
         if os.path.exists(self.brain_path):
@@ -546,6 +406,7 @@ class ModelBundle:
     def smoke_test(self):
         """Exercise YOLO initialization without running the full pipeline."""
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        self.player_model(dummy)
         self.pose_model(dummy)
         self.ball_model(dummy)
 
@@ -719,6 +580,82 @@ class FrameResultAdapter:
         return boxes_xywh, cls, conf, tids, classes, keypoints
 
     @staticmethod
+    def extract_tracked_arrays(result):
+        """Extract tracked detector arrays when the source has no keypoints."""
+        result0 = result[0]
+        boxes_xywh = result0.boxes.xywh
+        cls = result0.boxes.cls
+        conf = result0.boxes.conf
+        tids = result0.boxes.id.int().cpu().numpy()
+        classes = result0.boxes.cls.int().cpu().numpy()
+        return boxes_xywh, cls, conf, tids, classes
+
+    @staticmethod
+    def _bbox_iou_xyxy(box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        denom = area_a + area_b - inter_area
+        if denom <= 0.0:
+            return 0.0
+        return inter_area / denom
+
+    @staticmethod
+    def _center_distance_ratio(box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+        bx1, by1, bx2, by2 = [float(v) for v in box_b]
+        center_a = np.array([(ax1 + ax2) * 0.5, (ay1 + ay2) * 0.5], dtype=np.float32)
+        center_b = np.array([(bx1 + bx2) * 0.5, (by1 + by2) * 0.5], dtype=np.float32)
+        distance = float(np.linalg.norm(center_a - center_b))
+        norm = max(ay2 - ay1, by2 - by1, 1.0)
+        return distance / norm
+
+    @staticmethod
+    def match_pose_keypoints(tracked_result, pose_result):
+        """Project pose detections onto tracked person boxes by IoU and center distance."""
+        if not tracked_result or tracked_result[0].boxes is None or len(tracked_result[0].boxes) == 0:
+            return None
+        if (
+            not pose_result
+            or pose_result[0].boxes is None
+            or len(pose_result[0].boxes) == 0
+            or pose_result[0].keypoints is None
+        ):
+            return [None for _ in range(len(tracked_result[0].boxes))]
+        tracked_boxes = tracked_result[0].boxes.xyxy.cpu().numpy()
+        pose_boxes = pose_result[0].boxes.xyxy.cpu().numpy()
+        pose_keypoints = pose_result[0].keypoints.xyn.cpu().numpy()
+        matched = [None for _ in range(len(tracked_boxes))]
+        used_pose_indices = set()
+        for tracked_idx, tracked_box in enumerate(tracked_boxes):
+            best_idx = None
+            best_score = None
+            for pose_idx, pose_box in enumerate(pose_boxes):
+                if pose_idx in used_pose_indices:
+                    continue
+                iou = FrameResultAdapter._bbox_iou_xyxy(tracked_box, pose_box)
+                distance_ratio = FrameResultAdapter._center_distance_ratio(tracked_box, pose_box)
+                if iou < 0.35 and distance_ratio > 0.45:
+                    continue
+                score = float(iou) - 0.2 * float(distance_ratio)
+                if best_score is None or score > best_score:
+                    best_idx = pose_idx
+                    best_score = score
+            if best_idx is None:
+                continue
+            matched[tracked_idx] = pose_keypoints[best_idx]
+            used_pose_indices.add(best_idx)
+        return matched
+
+    @staticmethod
     def extract_ball_arrays(result):
         """Extract raw ball detector arrays from a detection-model result."""
         if not result or result[0].boxes is None or len(result[0].boxes) == 0:
@@ -741,6 +678,8 @@ class FrameResultAdapter:
         bootstrap_context=None,
         bootstrap_segment_id=None,
         play_region_geometry_min_prior=PLAY_REGION_GEOMETRY_MIN_PRIOR,
+        ball_search_plan=None,
+        ball_candidate_metadata=None,
     ):
         """Select one auditable ball state and emit it as the runtime ball row."""
         ball_state = ball_tracker.update(
@@ -748,6 +687,7 @@ class FrameResultAdapter:
             cls,
             conf,
             bootstrap_context=bootstrap_context,
+            candidate_metadata=ball_candidate_metadata,
         )
         center_xy = ball_state.get("center_xy")
         updated_ball_2d = np.array(center_xy, dtype=np.float32) if center_xy else np.array([0.0, 0.0], dtype=np.float32)
@@ -766,6 +706,9 @@ class FrameResultAdapter:
                 "y": float(center_xy[1]) if center_xy else None,
                 "missing_gap_frames": int(ball_state.get("missing_gap_frames") or 0),
                 "candidate_count": int(ball_state.get("candidate_count") or 0),
+                "candidate_scores": ball_state.get("candidate_scores") or [],
+                "selected_candidate": ball_state.get("selected_candidate"),
+                "rejected_candidates": ball_state.get("rejected_candidates") or [],
                 "source": ball_state.get("source"),
                 "bootstrap_segment_id": int(bootstrap_segment_id) if bootstrap_segment_id is not None else None,
                 "bootstrap_enabled": bool(bootstrap_context and bootstrap_context.get("enabled")),
@@ -781,6 +724,7 @@ class FrameResultAdapter:
                         min_prior=play_region_geometry_min_prior,
                     )["geometry_region_ok"]
                 ) if center_xy is not None else False,
+                "search_plan": ball_search_plan,
             }
         )
         return ball_state, updated_ball_2d, ball_3d
@@ -808,6 +752,18 @@ class GameDNAExtractor:
         self.possession_engine = PossessionEngine()
         self.mvp_event_adapter = MvpEventAdapter()
         self.mvp_stat_accumulator = MvpStatAccumulator()
+        self.tracklet_store = TrackletStore(
+            reid_extractor=ColorHistogramReIDExtractor(),
+            reid_sample_interval_frames=self.config.reid_sample_interval_frames,
+        )
+        self.ball_search_scheduler = BallSearchScheduler(
+            BallSearchSchedulerConfig(
+                full_frame_interval_frames=self.config.ball_full_frame_interval_frames,
+                missing_full_frame_interval_frames=self.config.ball_missing_full_frame_interval_frames,
+                roi_search_enabled=self.config.ball_roi_search_enabled,
+                max_roi_count=self.config.ball_roi_max_count,
+            )
+        )
         self.ball_tracker = BallStateTracker()
         self.ball_state = None
         self.last_ball_2d = np.array([0.0, 0.0])
@@ -819,6 +775,7 @@ class GameDNAExtractor:
         self.pan_drift_detector = RuntimePanDriftDetector()
         self.bootstrapper = None
         self.last_bootstrap_frame_idx = None
+        self.court_pose_tracker = CourtPoseTracker()
 
     def run(self):
         """Drive the frame loop and stream JSONL output for the whole video."""
@@ -829,6 +786,17 @@ class GameDNAExtractor:
         capture = cv2.VideoCapture(self.config.video_path)
         fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
         with JsonlEventWriter(output_path) as writer:
+            writer.write(
+                {
+                    "kind": "resource_context",
+                    "device": str(self.models.device),
+                    "resource_policy": (
+                        self.models.resource_policy.to_payload()
+                        if self.models.resource_policy is not None
+                        else None
+                    ),
+                }
+            )
             while capture.isOpened():
                 success, frame = capture.read()
                 if not success:
@@ -850,21 +818,26 @@ class GameDNAExtractor:
     def _process_frame(self, frame, t_ms, h_matrix, writer):
         """Run one frame through perception, tracking, logic, and writing."""
         self._maybe_refresh_bootstrap_context(frame, t_ms, writer)
-        result = self.models.pose_model.track(
+        player_track_kwargs = {
+            "persist": True,
+            "classes": [PERSON_CLASS_ID],
+            "conf": self.config.player_conf_threshold,
+            "device": self.models.device,
+            "verbose": False,
+        }
+        if self.config.player_tracker_backend != "default":
+            player_track_kwargs["tracker"] = self.config.player_tracker_backend
+        player_result = self.models.player_model.track(frame, **player_track_kwargs)
+        pose_result = self.models.pose_model.predict(
             frame,
-            persist=True,
             classes=[PERSON_CLASS_ID],
-            verbose=False,
-        )
-        ball_result = self.models.ball_model.predict(
-            frame,
-            classes=[BALL_CLASS_ID],
-            conf=0.05,
+            conf=self.config.pose_conf_threshold,
             device=self.models.device,
             verbose=False,
         )
-        ball_boxes_xywh, ball_cls, ball_conf = FrameResultAdapter.extract_ball_arrays(ball_result)
-        if not FrameResultAdapter.has_track_ids(result):
+        if not FrameResultAdapter.has_track_ids(player_result):
+            self._write_court_pose_event(frame, t_ms, h_matrix, [], writer)
+            ball_boxes_xywh, ball_cls, ball_conf, ball_search_plan, ball_candidate_metadata = self._run_ball_search(frame, [])
             self.ball_state, self.last_ball_2d, _ = FrameResultAdapter.extract_ball_state(
                 ball_boxes_xywh,
                 ball_cls,
@@ -876,10 +849,13 @@ class GameDNAExtractor:
                 bootstrap_context=self.bootstrap_state.context,
                 bootstrap_segment_id=self.bootstrap_state.segment_id,
                 play_region_geometry_min_prior=self.config.play_region_geometry_min_prior,
+                ball_search_plan=ball_search_plan,
+                ball_candidate_metadata=ball_candidate_metadata,
             )
             return
 
-        boxes_xywh, cls, conf, tids, classes, keypoints = FrameResultAdapter.extract_arrays(result)
+        boxes_xywh, cls, conf, tids, classes = FrameResultAdapter.extract_tracked_arrays(player_result)
+        keypoints = FrameResultAdapter.match_pose_keypoints(player_result, pose_result)
         self._maybe_refresh_bootstrap_context_after_tracking(
             frame,
             t_ms,
@@ -888,6 +864,9 @@ class GameDNAExtractor:
             tids,
             classes,
         )
+        ball_search_players = self._ball_search_player_detections(boxes_xywh, tids, classes, keypoints, frame.shape)
+        self._write_court_pose_event(frame, t_ms, h_matrix, ball_search_players, writer)
+        ball_boxes_xywh, ball_cls, ball_conf, ball_search_plan, ball_candidate_metadata = self._run_ball_search(frame, ball_search_players)
         # Ball state is updated before player features are built so Action Brain
         # sees the freshest available ball position for this frame.
         self.ball_state, self.last_ball_2d, ball_3d = FrameResultAdapter.extract_ball_state(
@@ -901,10 +880,170 @@ class GameDNAExtractor:
             bootstrap_context=self.bootstrap_state.context,
             bootstrap_segment_id=self.bootstrap_state.segment_id,
             play_region_geometry_min_prior=self.config.play_region_geometry_min_prior,
+            ball_search_plan=ball_search_plan,
+            ball_candidate_metadata=ball_candidate_metadata,
         )
-        player_map = self._update_tracks(boxes_xywh, tids, classes, keypoints, h_matrix)
+        player_map = self._update_tracks(boxes_xywh, conf, tids, classes, keypoints, h_matrix, frame)
         self._write_possession_events(player_map, ball_3d, t_ms, writer)
         self._write_player_events(player_map, h_matrix, t_ms, writer)
+
+    def _ball_search_player_detections(self, boxes_xywh, tids, classes, keypoints=None, frame_shape=None):
+        players = []
+        frame_height = float(frame_shape[0]) if frame_shape is not None else 1.0
+        frame_width = float(frame_shape[1]) if frame_shape is not None else 1.0
+        for idx, track_id in enumerate(tids):
+            if int(classes[idx]) != PERSON_CLASS_ID:
+                continue
+            keypoints_xy = None
+            if keypoints is not None and idx < len(keypoints) and keypoints[idx] is not None:
+                keypoint_entry = keypoints[idx]
+                keypoint_list = keypoint_entry.tolist() if hasattr(keypoint_entry, "tolist") else keypoint_entry
+                keypoints_xy = [
+                    [float(point[0]) * frame_width, float(point[1]) * frame_height]
+                    if point is not None and len(point) >= 2
+                    else [0.0, 0.0]
+                    for point in keypoint_list
+                ]
+                keypoints_conf = [
+                    1.0
+                    if point is not None and len(point) >= 2 and (float(point[0]) > 0.0 or float(point[1]) > 0.0)
+                    else 0.0
+                    for point in keypoint_list
+                ]
+            else:
+                keypoints_conf = None
+            players.append(
+                {
+                    "track_id": int(track_id),
+                    "bbox_xywh": [float(v) for v in boxes_xywh[idx]],
+                    "bbox_xyxy": self._bbox_xywh_to_xyxy(boxes_xywh[idx]),
+                    "class_id": PERSON_CLASS_ID,
+                    "keypoints_xy": keypoints_xy,
+                    "keypoints_conf": keypoints_conf,
+                }
+            )
+        return players
+
+    @staticmethod
+    def _bbox_xywh_to_xyxy(bbox_xywh):
+        cx, cy, width, height = [float(v) for v in bbox_xywh]
+        return [
+            cx - 0.5 * width,
+            cy - 0.5 * height,
+            cx + 0.5 * width,
+            cy + 0.5 * height,
+        ]
+
+    def _runtime_scene_prior(self):
+        context = self.bootstrap_state.context or {}
+        return {
+            "prior_status": "ready" if context.get("enabled") and context.get("status") == "ready" else "inactive",
+            "region_mask_shape": context.get("mask_shape"),
+            "region_mask_grid": context.get("mask_grid"),
+            "source_backend": context.get("backend"),
+            "source_model": context.get("model_name"),
+            "trigger_reason": context.get("reason"),
+        }
+
+    def _write_court_pose_event(self, frame, t_ms, h_matrix, player_detections, writer):
+        payload_frame = {
+            "frame_idx": int(self.frame_idx),
+            "_h_matrix": h_matrix,
+            "scene_prior": self._runtime_scene_prior(),
+            "detections": player_detections,
+        }
+        pose = self.court_pose_tracker.update(
+            payload_frame,
+            video_meta={"width": int(frame.shape[1]), "height": int(frame.shape[0])},
+        )
+        writer.write(
+            {
+                **pose.to_payload(),
+                "kind": "court_pose",
+                "t_ms": int(t_ms),
+                "bootstrap_segment_id": int(self.bootstrap_state.segment_id),
+            }
+        )
+
+    def _run_ball_search(self, frame, player_detections):
+        plan = self.ball_search_scheduler.plan(
+            frame.shape,
+            frame_idx=int(self.frame_idx),
+            ball_state=self.ball_state,
+            player_detections=player_detections,
+        )
+        boxes_xywh = []
+        classes = []
+        confidences = []
+        candidate_metadata = []
+        if plan.run_full_frame:
+            ball_result = self.models.ball_model.predict(
+                frame,
+                classes=[BALL_CLASS_ID],
+                conf=0.05,
+                device=self.models.device,
+                verbose=False,
+            )
+            self._extend_ball_arrays(
+                boxes_xywh,
+                classes,
+                confidences,
+                candidate_metadata,
+                ball_result,
+                source="full_frame",
+            )
+        if plan.rois and not boxes_xywh:
+            crops = []
+            offsets = []
+            roi_records = []
+            for roi in plan.rois:
+                x1, y1, x2, y2 = roi.bbox_xyxy
+                crop = frame[y1:y2, x1:x2]
+                if crop.size == 0 or crop.shape[0] < 2 or crop.shape[1] < 2:
+                    continue
+                crops.append(crop)
+                offsets.append((x1, y1))
+                roi_records.append(roi)
+            if crops:
+                roi_results = self.models.ball_model.predict(
+                    crops,
+                    classes=[BALL_CLASS_ID],
+                    conf=0.05,
+                    device=self.models.device,
+                    verbose=False,
+                )
+                for result, offset, roi in zip(roi_results, offsets, roi_records):
+                    self._extend_ball_arrays(
+                        boxes_xywh,
+                        classes,
+                        confidences,
+                        candidate_metadata,
+                        [result],
+                        offset_xy=offset,
+                        source=roi.source,
+                        roi=roi,
+                    )
+        return boxes_xywh, classes, confidences, plan.to_payload(), candidate_metadata
+
+    @staticmethod
+    def _extend_ball_arrays(boxes_xywh, classes, confidences, candidate_metadata, result, *, offset_xy=(0, 0), source="unknown", roi=None):
+        detected_boxes, detected_classes, detected_confidences = FrameResultAdapter.extract_ball_arrays(result)
+        offset_x, offset_y = [float(v) for v in offset_xy]
+        for bbox_xywh, class_id, confidence in zip(detected_boxes, detected_classes, detected_confidences):
+            adjusted = np.array(bbox_xywh, dtype=np.float32).copy()
+            adjusted[0] += offset_x
+            adjusted[1] += offset_y
+            boxes_xywh.append(adjusted)
+            classes.append(int(class_id))
+            confidences.append(float(confidence))
+            candidate_metadata.append(
+                {
+                    "source": source,
+                    "roi_bbox_xyxy": list(roi.bbox_xyxy) if roi is not None else None,
+                    "track_id": roi.track_id if roi is not None else None,
+                    "motion_mode": roi.motion_mode if roi is not None else None,
+                }
+            )
 
     def _maybe_refresh_bootstrap_context(self, frame, t_ms, writer):
         """Run the optional bootstrap pre-pass only on the first frame or after cuts."""
@@ -927,12 +1066,13 @@ class GameDNAExtractor:
             "model_name": self.config.bootstrap_foreground_model,
             "frame_idx": int(self.frame_idx),
         }
-        if self.config.bootstrap_foreground_backend == "dinov3":
-            if Dinov3Bootstrapper is None:
+        if self.config.bootstrap_foreground_backend == "grounding_dino":
+            if GroundingDinoBootstrapper is None:
                 payload["status"] = "bootstrap_unavailable"
             elif self.bootstrapper is None:
-                self.bootstrapper = Dinov3Bootstrapper(
+                self.bootstrapper = GroundingDinoBootstrapper(
                     model_name=self.config.bootstrap_foreground_model,
+                    text_prompt=self.config.bootstrap_foreground_prompt,
                     device=str(self.models.device),
                 )
             if self.bootstrapper is not None:
@@ -989,12 +1129,14 @@ class GameDNAExtractor:
         )
         self.bootstrap_state.context["pan_drift"] = pan_drift
 
-    def _update_tracks(self, boxes_xywh, tids, classes, keypoints, h_matrix):
+    def _update_tracks(self, boxes_xywh, conf, tids, classes, keypoints, h_matrix, frame):
         """Project and update all player tracks visible in the current frame."""
         player_map = {}
+        visible_track_ids = []
         for idx, tid in enumerate(tids):
             if classes[idx] != PERSON_CLASS_ID:
                 continue
+            visible_track_ids.append(int(tid))
             # Track objects are created lazily so stable tracker ids become the
             # runtime identity handle for subsequent smoothing and history use.
             track = self.tracks.setdefault(tid, TrackManager(tid))
@@ -1010,14 +1152,27 @@ class GameDNAExtractor:
             track.update_position(court_xy[0], court_xy[1])
             track.play_region_prior = float(geometry_gate["play_region_prior"])
             track.geometry_region_ok = bool(geometry_gate["geometry_region_ok"])
-            current_keypoints = keypoints[idx].tolist() if keypoints is not None else None
+            tracklet = self.tracklet_store.update(
+                track_id=int(tid),
+                frame_idx=int(self.frame_idx),
+                bbox_xywh=boxes_xywh[idx],
+                court_xy=court_xy,
+                confidence=float(conf[idx]),
+                frame_bgr=frame,
+            )
+            current_keypoints = None
+            if keypoints is not None:
+                keypoint_entry = keypoints[idx]
+                current_keypoints = keypoint_entry.tolist() if hasattr(keypoint_entry, "tolist") else keypoint_entry
             track.add_keypoints(current_keypoints, h_matrix)
             player_map[tid] = {
                 "pos_3d": track.pos_3d,
                 "team": track.team,
                 "play_region_prior": track.play_region_prior,
                 "geometry_region_ok": track.geometry_region_ok,
+                "tracklet": tracklet.to_payload(),
             }
+        self.tracklet_store.mark_missing_except(visible_track_ids, frame_idx=int(self.frame_idx))
         return player_map
 
     def _write_possession_events(self, player_map, ball_3d, t_ms, writer):
@@ -1060,6 +1215,12 @@ class GameDNAExtractor:
                     "bootstrap_segment_id": int(self.bootstrap_state.segment_id),
                     "play_region_prior": round(float(track.play_region_prior), 4),
                     "geometry_region_ok": bool(track.geometry_region_ok),
+                    "runtime_identity": {
+                        "kind": "tracklet_store_v1",
+                        "tracklet_id": int(tid),
+                        "final_identity_committed": False,
+                        "tracklet": player_map[tid].get("tracklet"),
+                    },
                 }
             )
             shot_attempt = self._maybe_build_shot_attempt_candidate(
@@ -1151,7 +1312,8 @@ def extract_game_dna(
     output_dir="data",
     smoke_test=False,
     bootstrap_foreground_backend="none",
-    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+    bootstrap_foreground_model=DEFAULT_GROUNDING_DINO_MODEL,
+    bootstrap_foreground_prompt=DEFAULT_GROUNDING_DINO_PROMPT,
 ):
     """Backward-compatible entrypoint for the current inference pipeline.
 
@@ -1166,12 +1328,15 @@ def extract_game_dna(
         smoke_test=smoke_test,
         bootstrap_foreground_backend=bootstrap_foreground_backend,
         bootstrap_foreground_model=bootstrap_foreground_model,
+        bootstrap_foreground_prompt=bootstrap_foreground_prompt,
     )
     models = ModelBundle(
+        config.player_model_name,
         config.pose_model_name,
         config.ball_model_name,
         config.brain_path,
         LABEL_MAP_INV,
+        requested_device=config.device,
     ).load()
     if config.smoke_test:
         models.smoke_test()
@@ -1193,22 +1358,98 @@ if __name__ == "__main__":
     parser.add_argument("video_path", nargs="?", default=None, help="Path to input video file")
     parser.add_argument("--smoke-test", action="store_true", help="Run a quick model initialization check")
     parser.add_argument("--output-dir", default="data", help="Output directory for results")
+    parser.add_argument("--player-model", default="yolov8n.pt", help="Detection model used for player proposals")
+    parser.add_argument(
+        "--player-tracker-backend",
+        default="default",
+        help="Ultralytics tracker backend for player tracking: default, bytetrack.yaml, or botsort.yaml",
+    )
+    parser.add_argument("--player-conf", type=float, default=0.12, help="Player proposal confidence threshold")
+    parser.add_argument("--pose-conf", type=float, default=0.20, help="Pose extraction confidence threshold")
+    parser.add_argument(
+        "--reid-sample-interval-frames",
+        type=int,
+        default=15,
+        help="Frame cadence for cheap runtime ReID evidence extraction on active tracklets",
+    )
+    parser.add_argument(
+        "--ball-full-frame-interval-frames",
+        type=int,
+        default=1,
+        help="Run full-frame ball detection every N frames; 1 preserves every-frame detection",
+    )
+    parser.add_argument(
+        "--ball-missing-full-frame-interval-frames",
+        type=int,
+        default=1,
+        help="Run full-frame ball detection every N frames while no recent ball exists; 1 preserves every-frame reacquisition",
+    )
+    parser.add_argument(
+        "--ball-roi-search",
+        action="store_true",
+        help="Enable ROI ball search around last ball state and nearby players between full-frame scans",
+    )
+    parser.add_argument(
+        "--ball-roi-max-count",
+        type=int,
+        default=4,
+        help="Maximum number of runtime ball-search ROIs per frame",
+    )
     parser.add_argument(
         "--bootstrap-foreground-backend",
-        choices=["none", "dinov3"],
+        choices=["none", "grounding_dino"],
         default="none",
         help="Optional runtime bootstrap foreground prior backend",
     )
     parser.add_argument(
         "--bootstrap-foreground-model",
-        default=DEFAULT_DINOV3_MODEL,
-        help="Model name for runtime DINOv3 bootstrap pre-pass",
+        default=DEFAULT_GROUNDING_DINO_MODEL,
+        help="Model name for runtime Grounding DINO bootstrap pre-pass",
+    )
+    parser.add_argument(
+        "--bootstrap-foreground-prompt",
+        default=DEFAULT_GROUNDING_DINO_PROMPT,
+        help="Prompt text for runtime Grounding DINO bootstrap pre-pass",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Runtime device selector: auto, cpu, cuda, or cuda:0",
     )
     args = parser.parse_args()
-    extract_game_dna(
-        video_path=args.video_path,
+    config_override = InferenceConfig(
+        video_path=resolve_video_path(args.video_path),
         output_dir=args.output_dir,
         smoke_test=args.smoke_test,
+        player_model_name=args.player_model,
+        player_tracker_backend=args.player_tracker_backend,
+        player_conf_threshold=args.player_conf,
+        pose_conf_threshold=args.pose_conf,
+        reid_sample_interval_frames=args.reid_sample_interval_frames,
+        ball_full_frame_interval_frames=args.ball_full_frame_interval_frames,
+        ball_missing_full_frame_interval_frames=args.ball_missing_full_frame_interval_frames,
+        ball_roi_search_enabled=args.ball_roi_search,
+        ball_roi_max_count=args.ball_roi_max_count,
         bootstrap_foreground_backend=args.bootstrap_foreground_backend,
         bootstrap_foreground_model=args.bootstrap_foreground_model,
+        bootstrap_foreground_prompt=args.bootstrap_foreground_prompt,
+        device=args.device,
     )
+    models = ModelBundle(
+        config_override.player_model_name,
+        config_override.pose_model_name,
+        config_override.ball_model_name,
+        config_override.brain_path,
+        LABEL_MAP_INV,
+        requested_device=config_override.device,
+    ).load()
+    if config_override.smoke_test:
+        models.smoke_test()
+    else:
+        clip_id = Path(config_override.video_path).stem
+        calibration = CalibrationResolver(
+            config_override.calibration_path,
+            config_override.fallback_calibration_path,
+        ).load_for_clip(clip_id)
+        extractor = GameDNAExtractor(config_override, models, calibration)
+        extractor.run()
