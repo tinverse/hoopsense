@@ -28,6 +28,7 @@ venv/
 
 # Local agent state
 .local_models/
+.local_wiki/
 tmp_runs/
 .gemini/
 venv_temp/

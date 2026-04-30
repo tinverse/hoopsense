@@ -7,8 +7,8 @@ The old chapter-style status model is retired. This file now tracks the current 
 ## Current Frontier
 
 The current highest-priority frontier is:
-- `L3.96` define an explicit DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
-  - `L3.97` rerun person YOLO inside DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
+- `L3.96` define an explicit Grounding DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
+  - `L3.97` rerun person YOLO inside Grounding DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
   - `L3.98` surface grounding-policy provenance and regression coverage in Layer 1 artifacts and review tooling
   - `L3.99` trigger segment regrounding on sustained live-play detection collapse without requiring a hard discontinuity
   - `L3.100` route SAM recovery proposals through explicit grounding-anchor regions instead of only implicit bootstrap blobs
@@ -40,17 +40,80 @@ The current highest-priority frontier is:
 - `L3.93` add a rollback-safe experimental Orin Docker image variant on JetPack 6 / CUDA 12.x for official SAM 3 validation
   - `L3.94` containerize the full Layer 1 artifact generation path so the existing pipeline can be exercised end to end inside the SAM 3-capable image
   - `L3.95` add a bounded GPU validation and rollback workflow for the experimental Orin SAM 3 image without mutating the stable Orin runtime
-- `L3.89` add optional SAM 3-assisted player recovery on unexplained DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
+- `L3.89` add optional SAM 3-assisted player recovery on unexplained Grounding DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
   - `L3.90` route official SAM 3 text-prompted ROI refinement through the Layer 1 artifact pipeline with explicit fail-closed runtime statuses
   - `L3.91` keep Orin setup honest about SAM 3 runtime prerequisites and skip installation when the pinned Python runtime is too old
   - `L3.92` add regression coverage for SAM ROI proposal generation and recovered-detection wiring without requiring live SAM weights
 - `L3.88` split the labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
 - `L3.87` discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - `L3.86` add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
-- `L3.84` make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- `L3.84` make Grounding DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - `L3.85` feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - `L3.72` extend attributed MVP event emission to shot and rebound evidence once ball-result signals are available
+- `L3.181` completed the target-game engagement contract for Layer 1 so parallel-court players can be separated from the active game without throwing away high-recall detections
+  - `L3.182` completed per-detection target-court support from calibrated court bounds and play-region priors and now emit machine-readable engagement reasons
+  - `L3.183` completed short-window ball-affinity and temporal engagement scoring per track so off-court and parallel-court detections can be down-ranked conservatively
+  - `L3.184` completed engagement-penalty integration into active-player scoring and staged-perception summaries without replacing the detector-first recall path
+  - `L3.185` completed validation and tuning packaging for reviewed multi-court clips, with refreshed artifact metadata and a manual-review overlay for `DSC_4959_sample_31`
+- `L3.186` add a tracklet-level temporal evidence smoothing layer so Layer 1 can stabilize active-player plausibility before MHT consumes identity candidates
+  - `L3.187` completed the per-tracklet temporal evidence contract so Layer 1 now emits auditable smoothing state per detection
+  - `L3.188` completed rolling tracklet evidence summaries and delayed promotion or demotion signals for active-player classification
+  - `L3.189` completed active-player scoring integration for smoothed tracklet evidence while preserving raw detections and reasons
+  - `L3.190` validate tracklet smoothing on reviewed clips and tune spectator leakage versus missed-player regressions before extending the MHT handoff
+- `L3.191` completed a reproducible Layer 1 review MLOps preset contract for detector-first and Grounding DINO plus SAM3 artifact generation
+  - `L3.192` completed per-run Layer 1 review generation manifests with preset, command, output, git, and model-cache provenance
+  - `L3.193` regenerate reviewed clips through the Grounding DINO plus SAM3 preset and compare overlay quality against detector-first artifacts
+  - `L3.194` promote Layer 1 review presets into regression gates once artifact quality targets are stable
+- `L3.195` improve ball continuity during passes and shots with mode-aware predictive ROIs and longer keep-alive provenance
+  - `L3.196` completed mode-aware predictive ROI advancement by stale-frame gap for pass, loose-ball, shot, and lob modes
+  - `L3.197` completed decaying short-gap ball prediction provenance with explicit motion mode and keep-alive kind
+  - `L3.198` completed validation on the 60s `DSC_4959_sample_31` clip; runtime mode-aware ROI executes but still trails the existing Layer 1 ball artifact substantially
+  - `L3.215` in progress: close the runtime versus Layer 1 review ball-recall gap by feeding stronger SAM or grounding-assisted ball seeds into the runtime ball tracker
+    - `L3.216` completed rejected runtime ball candidate provenance with bbox, confidence, source, score parts, and rejection reasons
+    - `L3.217` completed ball-specific mask semantics so airborne ball candidates are not suppressed by player or court-floor priors
+    - `L3.218` completed airborne reacquisition ROIs above active players and widened search after sustained missing-ball gaps
+    - `L3.219` completed pose-derived shot and pass corridor ROIs from wrist and head launch regions with velocity-aware expansion
+    - `L3.220` in progress: tune source-aware ball candidate acceptance for airborne and pose-corridor candidates using rejected-candidate provenance
+    - `L3.221` completed SAM3 ball detection on the 30-40s missed-frame window; 205/221 runtime-missing frames had SAM3 basketball detections, dominated by runtime detector absence rather than tracker rejection
+    - `L3.226` completed short-clip SAM3 basketball comparisons against runtime/Layer 1 ball states; SAM3 often finds candidates where runtime is missing, but full-frame SAM3 and runtime frequently disagree by hundreds of pixels without court/possession context
+- `L3.199` add a Layer 1 evaluation harness so detector, grounding, SAM, smoothing, and threshold variants can be compared quantitatively
+  - `L3.200` build offline scorecards from Layer 1 artifacts with clip-level health metrics and feedback-case pressure metrics
+  - `L3.203` profile Layer 1 runtime on short reproducible clips and remove dominant hot spots before promoting heavier presets
+    - `L3.208` make player tracker backend selection explicit in Layer 1 and runtime so ByteTrack versus slower defaults can be benchmarked and promoted intentionally
+    - `L3.222` completed shared resource policy for runtime and Layer 1 review generation: `auto` resolves to CUDA when available, CPU thread pools are capped, Docker exports thread limits, and artifacts/JSONL emit resource provenance
+    - `L3.223` completed frame-quality blur and global-motion provenance plus a runtime quality/miss evaluator; on `DSC_4959_sample_31`, severe-blur frames have the highest ball-missing rate, but sharp frames still miss heavily
+    - `L3.224` completed weak-feature continuous court-pose tracking that carries calibration confidence through sparse court-line visibility using grounding masks and player foot anchors
+      - `L3.225` completed runtime weak-feature court-pose JSONL emission so downstream ball and action logic can consume the same continuous court-pose state as Layer 1 artifacts
+      - `L3.227` completed a bounded target-court first-pass bootstrap that samples frames, aggregates court/hoop/play-region/player-foot evidence, emits per-frame `target_court_prior`, and degrades to weak foot-anchor support when model regions are unavailable
+      - `L3.228` completed camera-pan-aware target-court first-pass output: artifacts now emit `target_court_first_pass_v2` with pose segments and per-frame segment-specific `target_court_prior`
+      - `L3.229` completed Grounding DINO default enablement for plain Layer 1 generation scripts with opt-out via `HOOPSENSE_LAYER1_GROUNDING_DINO=0` or explicit `--bootstrap-foreground-backend`
+      - `L3.230` completed segment-aware Grounding DINO bootstrapping: the first-pass path now reruns Grounding DINO per camera-pose segment instead of reusing frame-0 proposals through panning clips
+      - `L3.231` completed target-court-aware ball-state scoring on the first 20 seconds of `DSC_4959_sample_31`; the final guarded run raised observed ball frames from 41 to 105 while keeping observed transitions inside the 180 px continuity gate
+        - `L3.232` completed full-minute `DSC_4959_sample_31` validation; ball coverage is 82.71 percent observed-or-predicted, observed transitions stay within the 180 px gate, and a web-safe review overlay is available in `tmp_runs`
+        - `L3.233` pending: tighten active-player promotion with sideline, adjacent-court, and static-tracklet demotion while preserving high-recall raw detections
+    - `L3.209` completed a runtime tracklet store that treats online tracker ids as temporary local tracklets and records persistence, gaps, motion, and ReID evidence
+      - `L3.210` completed an efficient ReID evidence interface with a low-cost baseline extractor before introducing learned embeddings
+    - `L3.211` completed runtime ball-state tracking extraction behind a dedicated module boundary so detector calls, smoothing, and future ROI scheduling can evolve independently
+      - `L3.212` completed a runtime ball-search scheduler with explicit full-frame cadence and ROI-search planning around last ball state and nearby players
+        - `L3.213` completed runtime ball-search cadence benchmarking on a short reviewed clip and recorded the speed versus ball-recall tradeoff
+        - `L3.214` completed pose-conditioned ball motion classification and mode-aware runtime ROI planning for dribbles, passes, carries, and shots
+  - `L3.201` support named run comparisons so preset and threshold experiments can be ranked by metric deltas without overwriting baseline artifacts
+  - `L3.202` promote stable evaluation reports into review gates once manual labels and held-out clips are strong enough
+- `L3.204` build a repo-local research wiki and source cache so papers, gists, and implementation notes compound instead of being re-searched in chat
+  - `L3.205` add a lightweight source-ingestion utility plus a git-ignored raw-source cache for local wiki material
+  - `L3.206` seed the local wiki with Karpathy's LLM Wiki pattern and current Layer 1 perception papers
+  - `L3.207` link future experiment runs, timing findings, and model choices back into the wiki so evaluation and design decisions stay queryable
+- `L3.176` completed the detector-first player recall stage so Layer 1 and runtime stop depending on the pose model as the only person detector
+  - `L3.177` unioned full-frame and grounded person-detector proposals before filtering instead of overwriting the detection set during re-grounding
+  - `L3.178` preserved raw player proposal provenance in Layer 1 artifacts so missed-player recall can be audited
+  - `L3.179` demoted pose to a second-stage attribute extractor over retained player proposals instead of treating it as the only player detector
+  - `L3.180` regenerated and rendered `DSC_4959_sample_31` so the detector-first recall path can be reviewed visually
 - `L3.66` add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
+  - `L3.171` define a clip-local learned re-identification evidence contract that combines visual embeddings, geometry, motion, and jersey evidence without collapsing identities greedily
+    - `L3.172` extract and cache per-detection player appearance crops and learned embedding vectors for tracklet-level identity matching
+    - `L3.173` build tracklet-level appearance prototypes and recency-weighted embedding summaries for bounded identity linking and recovery
+    - `L3.174` score identity hypotheses with a fused evidence model over embeddings, kinematics, court occupancy, team cues, and jersey OCR
+    - `L3.175` validate clip-local re-identification on longer reviewed clips and compare fragmentation and duplicate identities against the current stitcher path
   - `L3.132` run a bounded longer-clip BoT-SORT evaluation outside the checked-in runtime path and measure track fragmentation and suspicious identity jumps before deciding on any tracker work
   - `L3.133` formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract
   - `L3.134` implement explicit Layer 1 identity decision staging with hard-filtered candidate records, soft-evidence scoring, and selected-link provenance
@@ -185,11 +248,13 @@ The current highest-priority frontier is:
 - [x] Define a staged Stage-1 ball-state contract and implementation plan from primary-source review
 - [x] Materialize Stage-1 `ball_state` selection and short-gap persistence in runtime and Layer 1 artifacts
 - [x] Introduce a separate runtime and review ball-detector model instead of relying on the pose model for class-32 detections
-- [x] Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
-- [x] Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
-- [x] Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
-- [x] Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
-- [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- [x] Add Grounding DINO availability to the cloud/Docker environment for future bootstrap segmentation work
+- [x] Add a rollback-safe experimental Orin Dockerfile variant for Grounding DINO without mutating the stable Orin image
+- [x] Add an optional Grounding DINO bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
+- [x] Port segment-aware Grounding DINO bootstrap context into the main inference loop and rebootstrap after discontinuities
+- [x] Render the full reviewed clip length from a Layer 1 artifact and emit both raw fallback and H.264 web-safe overlay review videos
+- [x] Pin a non-Guix Docker ffmpeg fallback for Layer 1 overlay rendering when the host ffmpeg path is unusable
+- [ ] Make Grounding DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - [ ] Add a minimal ball artifact to Layer 1 review outputs and use it to refine live-play gating
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
@@ -295,7 +360,7 @@ The current highest-priority frontier is:
 - [ ] Split the labeller overlay into promoted versus demoted detection states so review can preserve raw evidence without confusing it for trusted on-court players
 - [ ] Discount camera-pan-induced apparent motion in Layer 1 player plausibility scoring so seated spectators are not promoted by shared frame drift
 - [ ] Add multi-signal on-court player plausibility scoring so spectators and merged detections are down-ranked before active-player promotion
-- [ ] Make DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
+- [ ] Make Grounding DINO play-region priors ephemeral and invalidate them on strong camera pan or layout drift
 - [ ] Feed the current play-region prior into geometry fitting so court evidence is restricted to likely in-play regions
 - [ ] Add bounded multi-hypothesis identity infrastructure for ambiguous short-gap track continuity
   - [x] Formalize the Layer 1 player identity evidence model and hard constraints into a machine-readable policy and emitted artifact contract

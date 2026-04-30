@@ -14,7 +14,7 @@ meta:
     - docs/architecture/devops/MLOPS.md
     - docs/architecture/devops/DEVOPS.md
     - TASK_STATUS.md
-  last_updated: "2026-04-16"
+  last_updated: "2026-04-22"
 
 levels:
   L0:
@@ -659,6 +659,321 @@ levels:
       title: Add regressions for ambiguity-aware staged identity summaries and audit signals
       owner: A0
       status: completed
+    - id: L3.171
+      parent: L3.66
+      title: Define a clip-local learned re-identification evidence contract that combines visual embeddings, geometry, motion, and jersey evidence without collapsing identities greedily
+      owner: A0
+      status: in_progress
+    - id: L3.172
+      parent: L3.171
+      title: Extract and cache per-detection player appearance crops and learned embedding vectors for tracklet-level identity matching
+      owner: A0
+      status: pending
+    - id: L3.173
+      parent: L3.171
+      title: Build tracklet-level appearance prototypes and recency-weighted embedding summaries for bounded identity linking and recovery
+      owner: A0
+      status: pending
+    - id: L3.174
+      parent: L3.171
+      title: Score identity hypotheses with a fused evidence model over embeddings, kinematics, court occupancy, team cues, and jersey OCR
+      owner: A0
+      status: pending
+    - id: L3.175
+      parent: L3.171
+      title: Validate clip-local re-identification on longer reviewed clips and compare fragmentation and duplicate identities against the current stitcher path
+      owner: A0
+      status: pending
+    - id: L3.176
+      parent: L2.32
+      title: Introduce a detector-first player recall stage so Layer 1 and runtime stop depending on the pose model as the only person detector
+      owner: A0
+      status: completed
+    - id: L3.177
+      parent: L3.176
+      title: Union full-frame and grounded person-detector proposals before filtering instead of overwriting the detection set during re-grounding
+      owner: A0
+      status: completed
+    - id: L3.178
+      parent: L3.176
+      title: Preserve raw player proposal provenance and acceptance or rejection evidence in Layer 1 artifacts so missed-player recall can be audited
+      owner: A0
+      status: completed
+    - id: L3.179
+      parent: L3.176
+      title: Demote pose to a second-stage attribute extractor over retained player proposals instead of treating it as the only player detector
+      owner: A0
+      status: completed
+    - id: L3.180
+      parent: L3.176
+      title: Regenerate and inspect DSC_4959_sample_31 perception overlays to measure whether detector-first recall recovers the dribbler and shooter misses
+      owner: A0
+      status: completed
+    - id: L3.181
+      parent: L2.32
+      title: Define a target-game engagement contract for Layer 1 so parallel-court players can be separated from the active game without throwing away high-recall detections
+      owner: A0
+      status: completed
+    - id: L3.182
+      parent: L3.181
+      title: Compute per-detection target-court support from calibrated court bounds and play-region priors and emit machine-readable engagement reasons
+      owner: A0
+      status: completed
+    - id: L3.183
+      parent: L3.181
+      title: Add short-window ball-affinity and temporal engagement scores per track so off-court and parallel-court detections can be down-ranked conservatively
+      owner: A0
+      status: completed
+    - id: L3.184
+      parent: L3.181
+      title: Fold engagement penalties into active-player scoring and summaries without replacing the underlying detector-first recall path
+      owner: A0
+      status: completed
+    - id: L3.185
+      parent: L3.181
+      title: Validate engagement scoring on reviewed multi-court clips and tune adjacent-court suppression against real overlays
+      owner: A0
+      status: completed
+    - id: L3.186
+      parent: L2.32
+      title: Add a tracklet-level temporal evidence smoothing layer so Layer 1 can stabilize active-player plausibility before MHT consumes identity candidates
+      owner: A0
+      status: in_progress
+    - id: L3.187
+      parent: L3.186
+      title: Define and emit a per-tracklet temporal evidence contract that aggregates engagement, motion, and persistence without mutating raw detections
+      owner: A0
+      status: completed
+    - id: L3.188
+      parent: L3.186
+      title: Compute rolling tracklet evidence summaries and delayed promotion or demotion signals for active-player classification
+      owner: A0
+      status: completed
+    - id: L3.189
+      parent: L3.186
+      title: Feed smoothed tracklet evidence into Layer 1 active-player decisions while preserving raw detections and auditable reasons
+      owner: A0
+      status: completed
+    - id: L3.190
+      parent: L3.186
+      title: Validate tracklet smoothing on reviewed clips and tune spectator leakage versus missed-player regressions before extending the MHT handoff
+      owner: A0
+      status: pending
+    - id: L3.191
+      parent: L2.17
+      title: Add a reproducible Layer 1 review MLOps preset contract for detector-first and Grounding DINO plus SAM3 artifact generation
+      owner: A0
+      status: completed
+    - id: L3.192
+      parent: L3.191
+      title: Emit per-run Layer 1 review generation manifests with preset, command, output, git, and model-cache provenance
+      owner: A0
+      status: completed
+    - id: L3.193
+      parent: L3.191
+      title: Regenerate reviewed clips through the Grounding DINO plus SAM3 preset and compare overlay quality against detector-first artifacts
+      owner: A0
+      status: pending
+    - id: L3.194
+      parent: L3.191
+      title: Promote Layer 1 review presets into regression gates once artifact quality targets are stable
+      owner: A0
+      status: pending
+    - id: L3.195
+      parent: L2.32
+      title: Improve ball continuity during passes and shots with mode-aware predictive ROIs and longer keep-alive provenance
+      owner: A0
+      status: in_progress
+    - id: L3.196
+      parent: L3.195
+      title: Advance predictive ball ROIs by stale-frame gap and expand search windows for pass, loose-ball, shot, and lob modes
+      owner: A0
+      status: completed
+    - id: L3.197
+      parent: L3.195
+      title: Extend ball-state short-gap prediction with decaying confidence and emitted keep-alive provenance for pass and shot intervals
+      owner: A0
+      status: completed
+    - id: L3.198
+      parent: L3.195
+      title: Validate pass and shot ball continuity on reviewed clips and compare missing-run lengths before and after regeneration
+      owner: A0
+      status: completed
+    - id: L3.215
+      parent: L3.195
+      title: Close the runtime versus Layer 1 review ball-recall gap by feeding stronger SAM or grounding-assisted ball seeds into the runtime ball tracker
+      owner: A0
+      status: in_progress
+    - id: L3.216
+      parent: L3.215
+      title: Emit rejected runtime ball candidate provenance with bbox, confidence, source, score parts, and rejection reasons
+      owner: A0
+      status: completed
+    - id: L3.217
+      parent: L3.215
+      title: Add ball-specific mask semantics so airborne ball candidates are not suppressed by player or court-floor priors
+      owner: A0
+      status: completed
+    - id: L3.218
+      parent: L3.215
+      title: Add airborne reacquisition ROIs above active players and widen search after sustained missing-ball gaps
+      owner: A0
+      status: completed
+    - id: L3.219
+      parent: L3.215
+      title: Add pose-derived shot and pass corridor ROIs from wrist and head launch regions with velocity-aware expansion
+      owner: A0
+      status: completed
+    - id: L3.220
+      parent: L3.215
+      title: Tune source-aware ball candidate acceptance for airborne and pose-corridor candidates using rejected-candidate provenance
+      owner: A0
+      status: in_progress
+    - id: L3.221
+      parent: L3.215
+      title: Run SAM3 ball detection on missed runtime-ball frames in a weak window and classify misses as detector absence versus tracker rejection
+      owner: A0
+      status: completed
+    - id: L3.199
+      parent: L2.17
+      title: Add a Layer 1 evaluation harness so detector, grounding, SAM, smoothing, and threshold variants can be compared quantitatively
+      owner: A0
+      status: in_progress
+    - id: L3.200
+      parent: L3.199
+      title: Build offline scorecards from Layer 1 artifacts with clip-level health metrics and feedback-case pressure metrics
+      owner: A0
+      status: in_progress
+    - id: L3.203
+      parent: L3.199
+      title: Profile Layer 1 runtime on short reproducible clips and remove dominant hot spots before promoting heavier presets
+      owner: A0
+      status: in_progress
+    - id: L3.208
+      parent: L3.203
+      title: Make player tracker backend selection explicit in Layer 1 and runtime so ByteTrack versus slower defaults can be benchmarked and promoted intentionally
+      owner: A0
+      status: in_progress
+    - id: L3.222
+      parent: L3.203
+      title: Make Layer 1 resource usage explicit by selecting CUDA when available, capping CPU thread oversubscription, and emitting runtime resource provenance
+      owner: A0
+      status: completed
+    - id: L3.223
+      parent: L3.203
+      title: Emit frame-quality blur and global-motion provenance so ball and player misses can be compared against unreliable measurement frames
+      owner: A0
+      status: completed
+    - id: L3.224
+      parent: L3.203
+      title: Add weak-feature continuous court-pose tracking that carries calibration confidence through sparse court-line visibility using grounding masks and player foot anchors
+      owner: A0
+      status: completed
+    - id: L3.225
+      parent: L3.224
+      title: Carry the weak-feature court-pose tracker into runtime inference and emit per-frame court-pose JSONL for downstream ball and action reasoning
+      owner: A0
+      status: completed
+    - id: L3.226
+      parent: L3.215
+      title: Compare SAM3 basketball detections against cheaper runtime or Layer 1 ball states on short clips to quantify proposal misses and tracker rejections
+      owner: A0
+      status: completed
+    - id: L3.227
+      parent: L3.224
+      title: Add a bounded target-court first-pass bootstrap that samples early clip frames and aggregates court, hoop, play-region, and player-foot evidence before ball/player scoring
+      owner: A0
+      status: completed
+    - id: L3.228
+      parent: L3.227
+      title: Make target-court first-pass output camera-pan aware by emitting time-varying pose segments instead of one static clip-wide prior
+      owner: A0
+      status: completed
+    - id: L3.229
+      parent: L3.227
+      title: Enable Grounding DINO by default in Layer 1 review generation scripts while preserving explicit opt-out and baseline overrides
+      owner: A0
+      status: completed
+    - id: L3.230
+      parent: L3.229
+      title: Re-run Grounding DINO per camera-pose segment during first-pass target-court discovery so panning clips do not reuse frame-0 court proposals
+      owner: A0
+      status: completed
+    - id: L3.231
+      parent: L3.230
+      title: Feed segment-aware target-court priors into Layer 1 ball-state scoring and rerun ball detections on the first 20 seconds of DSC_4959_sample_31
+      owner: A0
+      status: completed
+    - id: L3.232
+      parent: L3.231
+      title: Run a full-minute DSC_4959_sample_31 validation artifact and overlay with current target-court-aware ball detection metrics
+      owner: A0
+      status: completed
+    - id: L3.233
+      parent: L3.232
+      title: Tighten active-player promotion with sideline, adjacent-court, and static-tracklet demotion while preserving high-recall raw detections
+      owner: A0
+      status: pending
+    - id: L3.209
+      parent: L3.203
+      title: Add a runtime tracklet store that treats online tracker ids as temporary local tracklets and records persistence, gaps, motion, and ReID evidence
+      owner: A0
+      status: completed
+    - id: L3.210
+      parent: L3.209
+      title: Add an efficient ReID evidence interface with a low-cost baseline extractor before introducing learned embeddings
+      owner: A0
+      status: completed
+    - id: L3.211
+      parent: L3.203
+      title: Extract runtime ball-state tracking behind a dedicated module boundary so detector calls, smoothing, and future ROI scheduling can evolve independently
+      owner: A0
+      status: completed
+    - id: L3.212
+      parent: L3.211
+      title: Add a runtime ball-search scheduler with explicit full-frame cadence and ROI-search planning around last ball state and nearby players
+      owner: A0
+      status: completed
+    - id: L3.213
+      parent: L3.212
+      title: Benchmark runtime ball-search cadence variants on a short reviewed clip and record the speed versus ball-recall tradeoff
+      owner: A0
+      status: completed
+    - id: L3.214
+      parent: L3.212
+      title: Add pose-conditioned ball motion classification and mode-aware runtime ROI planning for dribbles, passes, carries, and shots
+      owner: A0
+      status: completed
+    - id: L3.201
+      parent: L3.199
+      title: Support named run comparisons so preset and threshold experiments can be ranked by metric deltas without overwriting baseline artifacts
+      owner: A0
+      status: pending
+    - id: L3.202
+      parent: L3.199
+      title: Promote stable evaluation reports into review gates once manual labels and held-out clips are strong enough
+      owner: A0
+      status: pending
+    - id: L3.204
+      parent: L2.21
+      title: Build a repo-local research wiki and source cache so papers, gists, and implementation notes compound instead of being re-searched in chat
+      owner: A0
+      status: in_progress
+    - id: L3.205
+      parent: L3.204
+      title: Add a lightweight source-ingestion utility plus a git-ignored raw-source cache for local wiki material
+      owner: A0
+      status: in_progress
+    - id: L3.206
+      parent: L3.204
+      title: Seed the local wiki with Karpathy's LLM Wiki pattern and current Layer 1 perception papers
+      owner: A0
+      status: in_progress
+    - id: L3.207
+      parent: L3.204
+      title: Link future experiment runs, timing findings, and model choices back into the wiki so evaluation and design decisions stay queryable
+      owner: A0
+      status: pending
     - id: L3.165
       parent: L2.32
       title: Raise review-clip generation defaults from 5 seconds to minute-scale windows so labeller review can inspect detection progression over time
@@ -721,12 +1036,12 @@ levels:
       status: in_progress
     - id: L3.80
       parent: L2.17
-      title: Add DINOv3 availability to the cloud/Docker environment for future bootstrap segmentation work
+      title: Add Grounding DINO availability to the cloud/Docker environment for future bootstrap segmentation work
       owner: A0
       status: completed
     - id: L3.81
       parent: L2.16
-      title: Add a rollback-safe experimental Orin Dockerfile variant for DINOv3 without mutating the stable Orin image
+      title: Add a rollback-safe experimental Orin Dockerfile variant for Grounding DINO without mutating the stable Orin image
       owner: A0
       status: completed
     - id: L3.93
@@ -746,12 +1061,12 @@ levels:
       status: in_progress
     - id: L3.82
       parent: L2.32
-      title: Add an optional DINOv3 bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
+      title: Add an optional Grounding DINO bootstrap foreground/background pre-pass to the Layer 1 artifact workflow
       owner: A0
       status: completed
     - id: L3.83
       parent: L2.18
-      title: Port segment-aware DINOv3 bootstrap context into the main inference loop and rebootstrap after discontinuities
+      title: Port segment-aware Grounding DINO bootstrap context into the main inference loop and rebootstrap after discontinuities
       owner: A0
       status: completed
     - id: L3.84
@@ -781,7 +1096,7 @@ levels:
       status: in_progress
     - id: L3.89
       parent: L2.32
-      title: Add optional SAM 3-assisted player recovery on unexplained DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
+      title: Add optional SAM 3-assisted player recovery on unexplained Grounding DINO play-region blobs and ambiguous YOLO ROIs in Layer 1 artifacts
       owner: A0
       status: in_progress
     - id: L3.90
@@ -801,12 +1116,12 @@ levels:
       status: completed
     - id: L3.96
       parent: L2.18
-      title: Define an explicit DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
+      title: Define an explicit Grounding DINO to SAM to YOLO grounding handoff contract for Layer 1 bootstrap and segment re-grounding
       owner: A0
       status: in_progress
     - id: L3.97
       parent: L3.96
-      title: Rerun person YOLO inside DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
+      title: Rerun person YOLO inside Grounding DINO-grounded play-region policy after segment bootstrap and discontinuity refresh
       owner: A0
       status: in_progress
     - id: L3.98
@@ -814,6 +1129,21 @@ levels:
       title: Surface grounding-policy provenance and regression coverage in Layer 1 artifacts and review tooling
       owner: A0
       status: in_progress
+    - id: L3.168
+      parent: L3.98
+      title: Render web-safe offline overlay videos directly from Layer 1 perception artifacts for review and regression inspection
+      owner: A0
+      status: completed
+    - id: L3.169
+      parent: L3.168
+      title: Render the full reviewed clip length from a Layer 1 artifact so visual inspection covers the entire bounded review window
+      owner: A0
+      status: completed
+    - id: L3.170
+      parent: L3.168
+      title: Provision or pin a non-Guix ffmpeg path so overlay renders can be emitted as H.264 faststart MP4s on Orin-class hosts
+      owner: A0
+      status: completed
     - id: L3.99
       parent: L3.96
       title: Trigger segment regrounding on sustained live-play detection collapse without requiring a hard discontinuity
@@ -836,7 +1166,7 @@ levels:
       status: in_progress
     - id: L3.119
       parent: L3.96
-      title: Emit an artifact-level staged perception summary so the DINO to SAM to YOLO handoff is auditable
+      title: Emit an artifact-level staged perception summary so the Grounding DINO to SAM to YOLO handoff is auditable
       owner: A0
       status: completed
     - id: L3.122
