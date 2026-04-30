@@ -10,6 +10,7 @@ HF_CACHE_DIR="${HOOPSENSE_HF_CACHE_DIR:-${REPO_ROOT}/.local_models/huggingface}"
 TORCH_CACHE_DIR="${HOOPSENSE_TORCH_CACHE_DIR:-${REPO_ROOT}/.local_models/torch}"
 YOLO_CACHE_DIR="${HOOPSENSE_YOLO_CACHE_DIR:-${REPO_ROOT}/.local_models/ultralytics}"
 EASYOCR_CACHE_DIR="${HOOPSENSE_EASYOCR_CACHE_DIR:-${REPO_ROOT}/.local_models/easyocr}"
+CPU_THREADS="${HOOPSENSE_CPU_THREADS:-4}"
 EXTRA_DOCKER_ARGS="${HOOPSENSE_ORIN_SAM3_DOCKER_ARGS:-}"
 
 mkdir -p "${HF_CACHE_DIR}" "${TORCH_CACHE_DIR}" "${YOLO_CACHE_DIR}" "${EASYOCR_CACHE_DIR}"
@@ -37,6 +38,10 @@ DOCKER_CMD=(
   -e HF_HOME=/cache/huggingface
   -e TORCH_HOME=/cache/torch
   -e YOLO_CONFIG_DIR=/cache/ultralytics
+  -e OMP_NUM_THREADS="${CPU_THREADS}"
+  -e OPENBLAS_NUM_THREADS="${CPU_THREADS}"
+  -e MKL_NUM_THREADS="${CPU_THREADS}"
+  -e NUMEXPR_NUM_THREADS="${CPU_THREADS}"
   -e LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cu12/lib:/usr/lib/aarch64-linux-gnu/tegra:/usr/local/cuda/lib64
   -e NVIDIA_VISIBLE_DEVICES=all
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video

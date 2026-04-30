@@ -69,14 +69,6 @@ RUN python3 -m pip install --no-cache-dir \
 
 RUN python3 -m pip install --no-cache-dir --no-deps ultralytics
 
-ARG DINOV3_REF=main
-ARG INSTALL_DINOV3=0
-ENV HOOPSENSE_DINOV3_DIR=/opt/dinov3
-RUN if [ "${INSTALL_DINOV3}" = "1" ]; then \
-      git clone --depth 1 --branch "${DINOV3_REF}" https://github.com/facebookresearch/dinov3.git "${HOOPSENSE_DINOV3_DIR}" \
-      && python3 -m pip install --no-cache-dir --no-deps -e "${HOOPSENSE_DINOV3_DIR}"; \
-    fi
-
 # Official SAM 3 repo install. This is the whole point of the experimental image.
 ARG SAM3_REF=main
 ENV HOOPSENSE_SAM3_DIR=/opt/sam3
@@ -84,7 +76,7 @@ RUN git clone --depth 1 --branch "${SAM3_REF}" https://github.com/facebookresear
     && python3 -m pip install --no-cache-dir -e "${HOOPSENSE_SAM3_DIR}"
 
 WORKDIR /app
-ENV PYTHONPATH="/app:${HOOPSENSE_DINOV3_DIR}:${HOOPSENSE_SAM3_DIR}"
+ENV PYTHONPATH="/app:${HOOPSENSE_SAM3_DIR}"
 ENV HF_HOME=/cache/huggingface
 ENV TORCH_HOME=/cache/torch
 
