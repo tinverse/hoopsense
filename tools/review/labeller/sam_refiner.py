@@ -139,7 +139,7 @@ def build_sam_recovery_rois(frame, *, ambiguous_iou_threshold=SAM_PROPOSAL_IOU_M
             if max_iou < ambiguous_iou_threshold:
                 rois.append(
                     {
-                        "kind": "unexplained_dino_blob",
+                        "kind": "unexplained_grounding_dino_region",
                         "bbox_xyxy": bbox,
                         "source_iou": round(float(max_iou), 4),
                         "area_ratio": component["area_ratio"],
@@ -267,7 +267,8 @@ class Sam3RoiRefiner:
         if not self._gpu_ready():
             return SamRefineResult(False, "cuda_unavailable", "sam3_repo_v1", self.model_name, [])
         try:
-            self.load()
+            if self.model is None or self.processor is None:
+                self.load()
         except Exception as exc:
             return SamRefineResult(False, self._status_for_exception(exc), "sam3_repo_v1", self.model_name, [])
 

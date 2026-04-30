@@ -1,6 +1,8 @@
 import argparse
 import json
 import re
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 import cv2
@@ -9,13 +11,19 @@ import yaml
 from ultralytics import YOLO
 
 from pipelines.geometry import lift_keypoints_to_3d, project_pixel_to_court
-from tools.review.labeller.dinov3_bootstrap import (
-    DEFAULT_DINOV3_MODEL,
-    Dinov3Bootstrapper,
+from pipelines.frame_quality import annotate_frame_quality, summarize_detection_misses_by_quality
+from pipelines.court_pose import annotate_court_pose
+from pipelines.resource_policy import resolve_torch_device
+from pipelines.target_court_bootstrap import annotate_camera_pose_segments, build_target_court_first_pass
+from tools.review.labeller.grounding_dino_bootstrap import (
+    DEFAULT_GROUNDING_DINO_MODEL,
+    DEFAULT_GROUNDING_DINO_PROMPT,
+    GroundingDinoBootstrapper,
     bootstrap_mask_to_image,
     component_boxes_from_mask,
     foreground_prior_for_point,
 )
+from tools.review.labeller.ball_tracking import BallTrackSmoother, BallTrackingConfig
 from tools.review.labeller.identity_resolution import (
     IdentityResolutionConfig,
     build_identity_hypothesis_summary,
@@ -66,6 +74,7 @@ JERSEY_OCR_MIN_SHARPNESS = 25.0
 JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY = 5
 JERSEY_OCR_CONSENSUS_MIN_VOTES = 2
 JERSEY_OCR_CONSENSUS_MIN_SHARE = 0.62
+JERSEY_OCR_MIN_ON_COURT_TRACK_FRAMES = 2
 JERSEY_IDENTITY_TIEBREAK_WEIGHT = 0.18
 APPEARANCE_TEAM_DISTANCE_THRESHOLD = 0.42
 APPEARANCE_LOW_MOTION_THRESHOLD_PX = 3.0
@@ -73,7 +82,7 @@ BALL_CLASS_ID = 32
 BALL_MIN_LIVE_PLAY_CONFIDENCE = 0.35
 BALL_STATE_MIN_SCORE = 0.30
 BALL_STATE_MAX_JUMP_PX = 180.0
-BALL_STATE_MAX_GAP_FRAMES = 4
+BALL_STATE_MAX_GAP_FRAMES = 8
 BALL_STATE_MIN_SIZE_PX = 4.0
 BALL_STATE_MAX_SIZE_PX = 80.0
 BALL_FALLBACK_MIN_FULL_FRAME_CONFIDENCE = 0.20
@@ -83,20 +92,49 @@ BALL_ROI_PAD_Y_DOWN_RATIO = 0.20
 BALL_ROI_MAX_PLAYER_WINDOWS = 8
 BALL_ROI_DEDUPE_IOU = 0.35
 BALL_ROI_DEDUPE_CENTER_DISTANCE_PX = 18.0
-BALL_PREDICTIVE_MAX_STALE_FRAMES = 3
+BALL_ROI_MAX_COURT_DISTANCE_PX = 180.0
+BALL_PREDICTIVE_MAX_STALE_FRAMES = 8
 BALL_PREDICTIVE_TRIGGER_MIN_CONFIDENCE = 0.08
-BALL_PREDICTIVE_BASE_RADIUS_PX = 72.0
+BALL_PREDICTIVE_BASE_RADIUS_PX = 80.0
 BALL_RETRO_ANCHOR_MIN_CONFIDENCE = 0.20
 BALL_RETRO_BASE_RADIUS_PX = 96.0
 BALL_RETRO_MAX_MISS_STREAK = 6
 BALL_SAM_MIN_SCORE = 0.45
-BALL_SAM_REACQUIRE_MISSING_FRAMES = 15
+BALL_SAM_REACQUIRE_MISSING_FRAMES = 8
+BALL_TRACK_SMOOTHER = BallTrackSmoother(
+    BallTrackingConfig(
+        max_stale_frames=BALL_PREDICTIVE_MAX_STALE_FRAMES,
+        base_radius_px=BALL_PREDICTIVE_BASE_RADIUS_PX,
+    )
+)
 PLAYER_RECOVERY_MIN_SAM_SCORE = 0.35
+DEFAULT_PLAYER_MODEL = "yolov8n.pt"
+DEFAULT_PLAYER_PROPOSAL_CONFIDENCE = 0.12
+DEFAULT_POSE_EXTRACTION_CONFIDENCE = 0.20
+PLAYER_PROPOSAL_MATCH_IOU = 0.35
+PLAYER_PROPOSAL_MERGE_IOU = 0.65
+PLAYER_PROPOSAL_CENTER_DISTANCE_RATIO = 0.45
+ENGAGEMENT_WINDOW_SECONDS = 1.25
+ENGAGEMENT_BALL_DISTANCE_HEIGHT_FACTOR = 2.25
+ENGAGEMENT_BALL_DISTANCE_MIN_PX = 48.0
+ENGAGEMENT_ADJACENT_COURT_MARGIN = 320.0
+TRACKLET_TEMPORAL_WINDOW_SECONDS = 1.0
+TRACKLET_PROMOTION_MIN_FRAMES = 3
+TRACKLET_DEMOTION_MIN_FRAMES = 4
+TRACKLET_PROMOTION_SCORE_THRESHOLD = 0.58
+TRACKLET_DEMOTION_RISK_THRESHOLD = 0.62
 GROUNDED_YOLO_MIN_SIDE_PX = 96
 DISCOVERY_BRIDGE_MATCH_MIN_IOU = 0.15
 DISCOVERY_BRIDGE_MATCH_MAX_CENTER_DISTANCE_PX = 64.0
 _EASYOCR_READER = None
 _EASYOCR_READER_ATTEMPTED = False
+
+
+def _timed_call(stage_timings, stage_name, fn, *args, **kwargs):
+    start = time.perf_counter()
+    result = fn(*args, **kwargs)
+    stage_timings[stage_name] += time.perf_counter() - start
+    return result
 
 
 def load_layer1_identity_policy(policy_file=IDENTITY_POLICY_FILE):
@@ -522,21 +560,7 @@ def _nearest_player_for_ball(person_detections, center_xy):
 
 
 def _infer_ball_motion_mode(ball_detection, velocity_xy, nearby_player):
-    vx, vy = [float(v) for v in velocity_xy]
-    speed = float(np.linalg.norm(np.array([vx, vy], dtype=np.float32)))
-    if nearby_player is None:
-        return "pass_or_loose" if speed >= 45.0 else "unknown_recent"
-    bbox = nearby_player.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
-    x1, y1, x2, y2 = [float(v) for v in bbox]
-    _, cy = [float(v) for v in (ball_detection.get("center_xy") or [0.0, 0.0])]
-    box_h = max(1.0, y2 - y1)
-    if speed < 35.0:
-        return "carry_or_hold"
-    if abs(vy) >= abs(vx) * 0.8 and cy >= y1 + 0.35 * box_h:
-        return "dribble_like"
-    if speed >= 45.0:
-        return "pass_or_loose"
-    return "unknown_recent"
+    return BALL_TRACK_SMOOTHER.infer_motion_mode(ball_detection, velocity_xy, nearby_player)
 
 
 def _update_ball_predictive_state(previous_state, ball_detection, person_detections, frame_idx):
@@ -561,37 +585,8 @@ def _update_ball_predictive_state(previous_state, ball_detection, person_detecti
     }
 
 
-def _predictive_ball_search_roi(frame_shape, predictive_state):
-    if predictive_state is None:
-        return None
-    center_xy = predictive_state.get("center_xy")
-    if not center_xy:
-        return None
-    cx, cy = [float(v) for v in center_xy]
-    vx, vy = [float(v) for v in (predictive_state.get("velocity_xy") or [0.0, 0.0])]
-    speed = float(np.linalg.norm(np.array([vx, vy], dtype=np.float32)))
-    mode = predictive_state.get("motion_mode") or "unknown_recent"
-    predicted_cx = cx + vx
-    predicted_cy = cy + vy
-    nearby_bbox = predictive_state.get("nearby_player_bbox_xyxy")
-    if mode == "carry_or_hold" and nearby_bbox:
-        x1, y1, x2, y2 = [float(v) for v in nearby_bbox]
-        box_w = max(1.0, x2 - x1)
-        box_h = max(1.0, y2 - y1)
-        roi = [x1 - 0.25 * box_w, y1 - 0.55 * box_h, x2 + 0.25 * box_w, y2 + 0.10 * box_h]
-    elif mode == "dribble_like" and nearby_bbox:
-        x1, y1, x2, y2 = [float(v) for v in nearby_bbox]
-        box_w = max(1.0, x2 - x1)
-        box_h = max(1.0, y2 - y1)
-        roi = [x1 - 0.20 * box_w, y1 + 0.10 * box_h, x2 + 0.20 * box_w, y2 + 0.65 * box_h]
-    elif mode == "pass_or_loose":
-        radius_x = BALL_PREDICTIVE_BASE_RADIUS_PX + 1.0 * abs(vx)
-        radius_y = BALL_PREDICTIVE_BASE_RADIUS_PX + 0.8 * abs(vy)
-        roi = [predicted_cx - radius_x, predicted_cy - radius_y, predicted_cx + radius_x, predicted_cy + radius_y]
-    else:
-        radius = BALL_PREDICTIVE_BASE_RADIUS_PX + 0.8 * speed
-        roi = [predicted_cx - radius, predicted_cy - radius, predicted_cx + radius, predicted_cy + radius]
-    return _clip_roi_xyxy(roi, frame_shape)
+def _predictive_ball_search_roi(frame_shape, predictive_state, *, frame_idx=None):
+    return BALL_TRACK_SMOOTHER.predictive_search_roi(frame_shape, predictive_state, frame_idx=frame_idx)
 
 
 def _run_ball_predictive_search(ball_model, frame, predictive_state, *, frame_idx, device, h_matrix=None):
@@ -600,7 +595,7 @@ def _run_ball_predictive_search(ball_model, frame, predictive_state, *, frame_id
         and int(frame_idx) - int(predictive_state.get("last_seen_frame_idx", frame_idx)) <= BALL_PREDICTIVE_MAX_STALE_FRAMES
         and float(predictive_state.get("confidence") or 0.0) >= BALL_PREDICTIVE_TRIGGER_MIN_CONFIDENCE
     )
-    roi_bbox = _predictive_ball_search_roi(frame.shape, predictive_state) if is_recent else None
+    roi_bbox = _predictive_ball_search_roi(frame.shape, predictive_state, frame_idx=frame_idx) if is_recent else None
     summary = {
         "enabled": predictive_state is not None,
         "triggered": roi_bbox is not None,
@@ -610,12 +605,17 @@ def _run_ball_predictive_search(ball_model, frame, predictive_state, *, frame_id
         "motion_mode": predictive_state.get("motion_mode") if predictive_state else None,
         "last_seen_frame_idx": predictive_state.get("last_seen_frame_idx") if predictive_state else None,
         "nearby_player_track_id": predictive_state.get("nearby_player_track_id") if predictive_state else None,
+        "stale_frames": (
+            max(0, int(frame_idx) - int(predictive_state.get("last_seen_frame_idx", frame_idx)))
+            if predictive_state else None
+        ),
     }
     if roi_bbox is None:
         return [], summary
     x1, y1, x2, y2 = roi_bbox
     crop = frame[y1:y2, x1:x2]
-    if crop.size == 0:
+    if crop.size == 0 or crop.shape[0] < 4 or crop.shape[1] < 4:
+        summary["skipped_reason"] = "degenerate_predictive_roi"
         return [], summary
     ball_results = ball_model.predict(
         crop,
@@ -793,10 +793,21 @@ def _detection_sort_key_for_ball_roi(detection):
     )
 
 
+def _ball_roi_detection_is_candidate(detection):
+    court_foot_xy = detection.get("court_foot_xy") or detection.get("court_xy")
+    if court_foot_xy is None or len(court_foot_xy) != 2:
+        return True
+    dx = _distance_outside_range(float(court_foot_xy[0]), COURT_X_RANGE)
+    dy = _distance_outside_range(float(court_foot_xy[1]), COURT_Y_RANGE)
+    distance_outside = float(np.linalg.norm([dx, dy]))
+    return distance_outside <= BALL_ROI_MAX_COURT_DISTANCE_PX
+
+
 def _player_ball_search_rois(frame_shape, person_detections):
     height, width = frame_shape[:2]
     boxes = []
-    ranked = sorted(person_detections, key=_detection_sort_key_for_ball_roi, reverse=True)
+    candidates = [detection for detection in person_detections if _ball_roi_detection_is_candidate(detection)]
+    ranked = sorted(candidates, key=_detection_sort_key_for_ball_roi, reverse=True)
     for detection in ranked[:BALL_ROI_MAX_PLAYER_WINDOWS]:
         bbox = detection.get("bbox_xyxy")
         if not bbox or len(bbox) != 4:
@@ -868,6 +879,108 @@ def _scene_prior_for_point(scene_prior, x, y, *, frame_width, frame_height):
     return _clip01(max(mask_score, proposal_score))
 
 
+def _distance_outside_range(value, allowed_range):
+    low, high = float(allowed_range[0]), float(allowed_range[1])
+    value = float(value)
+    if value < low:
+        return low - value
+    if value > high:
+        return value - high
+    return 0.0
+
+
+def _compute_detection_target_court_support(
+    detection,
+    *,
+    frame_width,
+    frame_height,
+    bootstrap_context=None,
+    scene_prior=None,
+):
+    bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    bbox_cx = (x1 + x2) * 0.5
+    bbox_cy = (y1 + y2) * 0.5
+    footpoint = _estimate_detection_footpoint(detection)
+    footpoint_xy = footpoint["xy"]
+
+    center_foreground_prior = 0.0
+    foot_foreground_prior = 0.0
+    if bootstrap_context and bootstrap_context.get("enabled"):
+        center_foreground_prior = foreground_prior_for_point(
+            bootstrap_context,
+            bbox_cx,
+            bbox_cy,
+        )
+        foot_foreground_prior = foreground_prior_for_point(
+            bootstrap_context,
+            float(footpoint_xy[0]),
+            float(footpoint_xy[1]),
+        )
+
+    scene_center_prior = _scene_prior_for_point(
+        scene_prior,
+        bbox_cx,
+        bbox_cy,
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    scene_foot_prior = _scene_prior_for_point(
+        scene_prior,
+        float(footpoint_xy[0]),
+        float(footpoint_xy[1]),
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    effective_center_prior = max(float(center_foreground_prior), float(scene_center_prior))
+    effective_foot_prior = max(float(foot_foreground_prior), float(scene_foot_prior))
+
+    court_ground_xy = detection.get("court_foot_xy") or detection.get("court_xy")
+    court_in_bounds = None
+    court_distance_outside = None
+    court_boundary_score = 0.0
+    grounding_score = 0.20
+    if court_ground_xy is not None and len(court_ground_xy) == 2:
+        cx, cy = float(court_ground_xy[0]), float(court_ground_xy[1])
+        dx = _distance_outside_range(cx, COURT_X_RANGE)
+        dy = _distance_outside_range(cy, COURT_Y_RANGE)
+        court_distance_outside = float(np.linalg.norm([dx, dy]))
+        court_in_bounds = bool(dx == 0.0 and dy == 0.0)
+        court_boundary_score = 1.0 if court_in_bounds else _clip01(
+            1.0 - (court_distance_outside / ENGAGEMENT_ADJACENT_COURT_MARGIN)
+        )
+        grounding_score = court_boundary_score
+
+    target_court_score = _clip01(
+        max(
+            float(court_boundary_score),
+            float(effective_foot_prior),
+            float(effective_center_prior) * 0.7,
+        )
+    )
+    return {
+        "footpoint_xy": [float(footpoint_xy[0]), float(footpoint_xy[1])],
+        "footpoint_source": footpoint["source"],
+        "footpoint_confidence": float(footpoint["confidence"]),
+        "bootstrap_foreground_prior": float(center_foreground_prior),
+        "bootstrap_foot_prior": float(foot_foreground_prior),
+        "scene_center_prior": float(scene_center_prior),
+        "scene_foot_prior": float(scene_foot_prior),
+        "effective_foreground_prior": float(effective_center_prior),
+        "effective_foot_prior": float(effective_foot_prior),
+        "court_ground_xy": (
+            [float(court_ground_xy[0]), float(court_ground_xy[1])]
+            if court_ground_xy is not None and len(court_ground_xy) == 2
+            else None
+        ),
+        "court_in_bounds": court_in_bounds,
+        "court_distance_outside": court_distance_outside,
+        "court_boundary_score": float(court_boundary_score),
+        "grounding_score": float(grounding_score),
+        "target_court_score": float(target_court_score),
+    }
+
+
 def _dedupe_ball_detections(detections):
     deduped = []
     for detection in sorted(detections, key=lambda item: float(item.get("confidence") or 0.0), reverse=True):
@@ -901,21 +1014,25 @@ def _run_ball_roi_fallback(ball_model, frame, person_detections, *, device, h_ma
         return [], summary
     detections = []
     summary["triggered"] = True
+    crop_records = []
     for roi_index, roi_bbox in enumerate(roi_bboxes):
         x1, y1, x2, y2 = roi_bbox
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             continue
-        ball_results = ball_model.predict(
-            crop,
-            classes=[BALL_CLASS_ID],
-            conf=0.02,
-            device=device,
-            verbose=False,
-        )
-        if not ball_results or ball_results[0].boxes is None or len(ball_results[0].boxes) <= 0:
+        crop_records.append((roi_index, x1, y1, crop))
+    if not crop_records:
+        return [], summary
+    ball_results = ball_model.predict(
+        [record[3] for record in crop_records],
+        classes=[BALL_CLASS_ID],
+        conf=0.02,
+        device=device,
+        verbose=False,
+    )
+    for (roi_index, x1, y1, crop), result in zip(crop_records, ball_results):
+        if result.boxes is None or len(result.boxes) <= 0:
             continue
-        result = ball_results[0]
         for det_idx in range(len(result.boxes)):
             detection = build_detection(result, det_idx, ball_model.names, crop, h_matrix=None)
             bbox_xyxy = detection.get("bbox_xyxy") or [0.0, 0.0, 0.0, 0.0]
@@ -1206,32 +1323,111 @@ def _ball_continuity_score(detection, previous_center_xy):
     return max(0.0, 1.0 - distance / BALL_STATE_MAX_JUMP_PX)
 
 
-def _score_ball_candidate(detection, previous_center_xy):
+def _target_court_prior_for_ball(center_xy, target_court_prior):
+    bbox = (target_court_prior or {}).get("bbox_xyxy")
+    if not bbox or len(bbox) != 4 or not center_xy or len(center_xy) != 2:
+        return {
+            "target_court_prior": 0.0,
+            "target_court_relation": "missing_prior",
+            "target_court_distance_px": None,
+        }
+    x, y = [float(v) for v in center_xy]
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+    margin = 0.08 * max(width, height)
+    if x1 <= x <= x2 and y1 <= y <= y2:
+        return {
+            "target_court_prior": 1.0,
+            "target_court_relation": "inside_target_court_region",
+            "target_court_distance_px": 0.0,
+        }
+    dx = max(x1 - x, 0.0, x - x2)
+    dy = max(y1 - y, 0.0, y - y2)
+    distance = float(np.linalg.norm([dx, dy]))
+    if x1 <= x <= x2 and y < y1 and (y1 - y) <= 0.45 * height:
+        # Airborne shots/passes often project above the floor-region box.
+        prior = max(0.25, 0.65 * (1.0 - min(1.0, (y1 - y) / max(0.45 * height, 1.0))))
+        relation = "above_target_court_airspace"
+    elif distance <= margin:
+        prior = max(0.0, 0.45 * (1.0 - distance / max(margin, 1.0)))
+        relation = "near_target_court_region"
+    else:
+        prior = 0.0
+        relation = "outside_target_court_region"
+    return {
+        "target_court_prior": round(float(prior), 4),
+        "target_court_relation": relation,
+        "target_court_distance_px": round(float(distance), 3),
+    }
+
+
+def _score_ball_candidate(detection, previous_center_xy, target_court_prior=None):
     confidence = float(detection.get("confidence") or 0.0)
     continuity = _ball_continuity_score(detection, previous_center_xy)
     size_score = _ball_size_score(detection)
-    score = 0.65 * confidence + 0.25 * continuity + 0.10 * size_score
+    center_xy = detection.get("center_xy") or [0.0, 0.0]
+    target_prior = _target_court_prior_for_ball(center_xy, target_court_prior)
+    score = 0.55 * confidence + 0.22 * continuity + 0.08 * size_score + 0.15 * float(target_prior["target_court_prior"])
     return {
         "detection": detection,
         "confidence": confidence,
         "continuity_score": continuity,
         "size_score": size_score,
+        **target_prior,
+        "jump_guard_applied": False,
+        "hard_rejection_reason": None,
         "score": score,
     }
+
+
+def _apply_ball_candidate_hard_guards(candidate, previous_center_xy):
+    confidence = float(candidate.get("confidence") or 0.0)
+    continuity = float(candidate.get("continuity_score") or 0.0)
+    foreground_prior = float(candidate.get("foreground_prior") or 0.0)
+    target_relation = candidate.get("target_court_relation")
+    if previous_center_xy is None or continuity > 0.0:
+        return candidate
+
+    rejection_reason = None
+    if confidence < 0.60:
+        rejection_reason = "low_confidence_large_jump"
+    elif confidence < 0.90:
+        rejection_reason = "large_jump_below_high_confidence"
+    elif (
+        target_relation == "outside_target_court_region"
+        and foreground_prior <= 0.05
+        and confidence < 0.98
+    ):
+        rejection_reason = "outside_target_court_large_jump"
+
+    if rejection_reason:
+        candidate["jump_guard_applied"] = True
+        candidate["hard_rejection_reason"] = rejection_reason
+        candidate["score"] = min(float(candidate.get("score") or 0.0), BALL_STATE_MIN_SCORE - 0.001)
+    return candidate
+
+
+def _ball_state_motion_mode_from_velocity(velocity_xy, detection=None):
+    return BALL_TRACK_SMOOTHER.state_motion_mode_from_velocity(velocity_xy, detection)
 
 
 def annotate_ball_state(frames):
     previous_center_xy = None
     previous_velocity_xy = np.array([0.0, 0.0], dtype=np.float32)
     previous_confidence = 0.0
+    previous_motion_mode = "unknown_recent"
     missing_gap_frames = 0
 
     for frame in frames:
-        raw_ball_detection = frame.get("ball_detection")
+        raw_ball_detections = list(frame.get("raw_ball_detections") or [])
+        if not raw_ball_detections and frame.get("ball_detection") is not None:
+            raw_ball_detections = [frame["ball_detection"]]
         bootstrap_context = frame.get("bootstrap_context")
+        target_court_prior = frame.get("target_court_prior")
         candidates = []
-        if raw_ball_detection is not None:
-            candidate = _score_ball_candidate(raw_ball_detection, previous_center_xy)
+        for raw_ball_detection in raw_ball_detections:
+            candidate = _score_ball_candidate(raw_ball_detection, previous_center_xy, target_court_prior=target_court_prior)
             foreground_prior = 0.0
             if bootstrap_context and bootstrap_context.get("enabled"):
                 center_xy = raw_ball_detection.get("center_xy") or [0.0, 0.0]
@@ -1242,9 +1438,11 @@ def annotate_ball_state(frames):
                 )
                 candidate["score"] += 0.10 * foreground_prior
             candidate["foreground_prior"] = foreground_prior
+            _apply_ball_candidate_hard_guards(candidate, previous_center_xy)
             candidates.append(candidate)
 
-        selected = max(candidates, key=lambda item: item["score"], default=None)
+        candidates.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        selected = candidates[0] if candidates else None
         ball_state = None
         if selected is not None and selected["score"] >= BALL_STATE_MIN_SCORE:
             detection = selected["detection"]
@@ -1259,6 +1457,7 @@ def annotate_ball_state(frames):
             previous_center_xy = np.array(center_xy, dtype=np.float32)
             previous_velocity_xy = np.array(velocity_xy, dtype=np.float32)
             previous_confidence = float(detection.get("confidence") or 0.0)
+            previous_motion_mode = _ball_state_motion_mode_from_velocity(velocity_xy, detection)
             missing_gap_frames = 0
             ball_state = {
                 "state": "observed",
@@ -1269,7 +1468,9 @@ def annotate_ball_state(frames):
                 "court_xy": detection.get("court_xy"),
                 "velocity_xy": velocity_xy,
                 "speed_px": round(_vector_norm(velocity_xy), 3),
+                "motion_mode": previous_motion_mode,
                 "missing_gap_frames": 0,
+                "keep_alive_kind": "observed",
                 "source": "detector",
                 "candidate_count": len(candidates),
                 "candidate_scores": [
@@ -1277,6 +1478,11 @@ def annotate_ball_state(frames):
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
                         "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
+                        "target_court_prior": round(float(candidate.get("target_court_prior") or 0.0), 4),
+                        "target_court_relation": candidate.get("target_court_relation"),
+                        "target_court_distance_px": candidate.get("target_court_distance_px"),
+                        "jump_guard_applied": bool(candidate.get("jump_guard_applied")),
+                        "hard_rejection_reason": candidate.get("hard_rejection_reason"),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -1285,16 +1491,20 @@ def annotate_ball_state(frames):
             missing_gap_frames += 1
             predicted_center = previous_center_xy + previous_velocity_xy
             previous_center_xy = predicted_center
+            predicted_confidence = BALL_TRACK_SMOOTHER.predicted_confidence(previous_confidence, missing_gap_frames)
+            keep_alive_kind = BALL_TRACK_SMOOTHER.keep_alive_kind(missing_gap_frames, previous_motion_mode)
             ball_state = {
                 "state": "predicted_short_gap",
-                "confidence": round(previous_confidence * 0.85, 4),
+                "confidence": round(predicted_confidence, 4),
                 "center_xy": [round(float(predicted_center[0]), 3), round(float(predicted_center[1]), 3)],
                 "bbox_xyxy": None,
                 "bbox_xywh": None,
                 "court_xy": None,
                 "velocity_xy": [round(float(previous_velocity_xy[0]), 3), round(float(previous_velocity_xy[1]), 3)],
                 "speed_px": round(_vector_norm(previous_velocity_xy), 3),
+                "motion_mode": previous_motion_mode,
                 "missing_gap_frames": int(missing_gap_frames),
+                "keep_alive_kind": keep_alive_kind,
                 "source": "smoothed_prediction",
                 "candidate_count": len(candidates),
                 "candidate_scores": [
@@ -1302,12 +1512,21 @@ def annotate_ball_state(frames):
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
                         "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
+                        "target_court_prior": round(float(candidate.get("target_court_prior") or 0.0), 4),
+                        "target_court_relation": candidate.get("target_court_relation"),
+                        "target_court_distance_px": candidate.get("target_court_distance_px"),
+                        "jump_guard_applied": bool(candidate.get("jump_guard_applied")),
+                        "hard_rejection_reason": candidate.get("hard_rejection_reason"),
                     }
                     for candidate in candidates[:3]
                 ],
             }
         else:
             missing_gap_frames = max(missing_gap_frames, BALL_STATE_MAX_GAP_FRAMES + 1)
+            previous_center_xy = None
+            previous_velocity_xy = np.array([0.0, 0.0], dtype=np.float32)
+            previous_confidence = 0.0
+            previous_motion_mode = "unknown_recent"
             ball_state = {
                 "state": "missing",
                 "confidence": 0.0,
@@ -1317,7 +1536,9 @@ def annotate_ball_state(frames):
                 "court_xy": None,
                 "velocity_xy": [0.0, 0.0],
                 "speed_px": 0.0,
+                "motion_mode": previous_motion_mode,
                 "missing_gap_frames": int(missing_gap_frames),
+                "keep_alive_kind": "expired",
                 "source": "smoothed_prediction",
                 "candidate_count": len(candidates),
                 "candidate_scores": [
@@ -1325,6 +1546,11 @@ def annotate_ball_state(frames):
                         "score": round(float(candidate["score"]), 4),
                         "confidence": round(float(candidate["confidence"]), 4),
                         "foreground_prior": round(float(candidate.get("foreground_prior") or 0.0), 4),
+                        "target_court_prior": round(float(candidate.get("target_court_prior") or 0.0), 4),
+                        "target_court_relation": candidate.get("target_court_relation"),
+                        "target_court_distance_px": candidate.get("target_court_distance_px"),
+                        "jump_guard_applied": bool(candidate.get("jump_guard_applied")),
+                        "hard_rejection_reason": candidate.get("hard_rejection_reason"),
                     }
                     for candidate in candidates[:3]
                 ],
@@ -1335,7 +1561,305 @@ def annotate_ball_state(frames):
         "min_score": BALL_STATE_MIN_SCORE,
         "max_jump_px": BALL_STATE_MAX_JUMP_PX,
         "max_gap_frames": BALL_STATE_MAX_GAP_FRAMES,
+        "target_court_prior": {
+            "enabled": True,
+            "weight": 0.15,
+            "airspace_policy": "allow_above_target_court_region_with_partial_prior",
+        },
     }
+
+
+def _distance_point_to_bbox(x, y, bbox_xyxy):
+    if not bbox_xyxy or len(bbox_xyxy) != 4:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in bbox_xyxy]
+    nearest_x = min(max(float(x), x1), x2)
+    nearest_y = min(max(float(y), y1), y2)
+    return float(np.linalg.norm([float(x) - nearest_x, float(y) - nearest_y]))
+
+
+def _score_detection_ball_affinity(detection, ball_state, *, frame_width, frame_height):
+    center_xy = (ball_state or {}).get("center_xy")
+    ball_state_name = str((ball_state or {}).get("state") or "missing")
+    if center_xy is None or len(center_xy) != 2:
+        return {
+            "score": 0.0,
+            "ball_state": ball_state_name,
+            "ball_visible": False,
+            "distance_to_bbox_px": None,
+            "distance_scale_px": None,
+        }
+    bbox_xyxy = detection.get("bbox_xyxy") or []
+    distance_to_bbox = _distance_point_to_bbox(float(center_xy[0]), float(center_xy[1]), bbox_xyxy)
+    _, bbox_h = _bbox_size_xy(detection)
+    distance_scale_px = max(
+        float(bbox_h) * ENGAGEMENT_BALL_DISTANCE_HEIGHT_FACTOR,
+        float(frame_height) * 0.14,
+        ENGAGEMENT_BALL_DISTANCE_MIN_PX,
+    )
+    if distance_to_bbox is None:
+        score = 0.0
+    elif distance_to_bbox <= 1e-6:
+        score = 1.0
+    else:
+        score = _clip01(1.0 - (float(distance_to_bbox) / max(distance_scale_px, 1e-6)))
+    return {
+        "score": round(float(score), 4),
+        "ball_state": ball_state_name,
+        "ball_visible": ball_state_name != "missing",
+        "distance_to_bbox_px": round(float(distance_to_bbox), 3) if distance_to_bbox is not None else None,
+        "distance_scale_px": round(float(distance_scale_px), 3),
+    }
+
+
+def annotate_player_engagement(frames, video_meta):
+    summary = {
+        "kind": "target_game_engagement_v1",
+        "window_seconds": ENGAGEMENT_WINDOW_SECONDS,
+        "frame_count": len(frames),
+        "state_counts": {},
+        "adjacent_or_other_detection_count": 0,
+        "engaged_detection_count": 0,
+    }
+    if not frames:
+        return summary
+
+    fps = float((video_meta or {}).get("fps") or 30.0)
+    frame_width = int((video_meta or {}).get("width") or 0)
+    frame_height = int((video_meta or {}).get("height") or 0)
+    window_frames = max(8, int(round(fps * ENGAGEMENT_WINDOW_SECONDS)))
+    summary["window_frames"] = int(window_frames)
+    track_counts = _track_frame_counts(frames)
+    history = defaultdict(
+        lambda: {
+            "target": deque(maxlen=window_frames),
+            "ball": deque(maxlen=window_frames),
+        }
+    )
+
+    for frame in frames:
+        scene_prior = frame.get("scene_prior") or _build_scene_prior_contract(frame)
+        bootstrap_context = frame.get("bootstrap_context")
+        ball_state = frame.get("ball_state") or {}
+        frame_state_counts = {}
+        for detection in frame.get("detections", []):
+            if _is_ball_detection(detection):
+                continue
+            target_support = _compute_detection_target_court_support(
+                detection,
+                frame_width=frame_width,
+                frame_height=frame_height,
+                bootstrap_context=bootstrap_context,
+                scene_prior=scene_prior,
+            )
+            ball_affinity = _score_detection_ball_affinity(
+                detection,
+                ball_state,
+                frame_width=frame_width,
+                frame_height=frame_height,
+            )
+            track_id = detection.get("track_id")
+            if track_id is not None:
+                track_key = int(track_id)
+                history[track_key]["target"].append(float(target_support["target_court_score"]))
+                history[track_key]["ball"].append(float(ball_affinity["score"]))
+                rolling_target = float(sum(history[track_key]["target"]) / len(history[track_key]["target"]))
+                rolling_ball_avg = float(sum(history[track_key]["ball"]) / len(history[track_key]["ball"]))
+                rolling_ball_peak = float(max(history[track_key]["ball"]))
+            else:
+                rolling_target = float(target_support["target_court_score"])
+                rolling_ball_avg = float(ball_affinity["score"])
+                rolling_ball_peak = float(ball_affinity["score"])
+            rolling_ball_score = 0.65 * rolling_ball_peak + 0.35 * rolling_ball_avg
+            persistence_score = min(track_counts.get(track_id, 1), 5) / 5.0
+            motion_score = _clip01(float(detection.get("motion_speed_px") or 0.0) / MOTION_SCORE_THRESHOLD_PX)
+            engagement_score = _clip01(
+                0.55 * rolling_target
+                + 0.20 * rolling_ball_score
+                + 0.15 * motion_score
+                + 0.10 * persistence_score
+            )
+            other_game_risk = _clip01(
+                0.75 * _clip01((0.42 - rolling_target) / 0.42)
+                + 0.15 * _clip01((0.14 - rolling_ball_peak) / 0.14)
+                + 0.10 * _clip01((0.25 - float(target_support["effective_foot_prior"])) / 0.25)
+            )
+            if rolling_target >= 0.60 and engagement_score >= 0.62:
+                engagement_state = "target_game_engaged"
+            elif rolling_target >= 0.42 and engagement_score >= 0.45:
+                engagement_state = "target_court_present"
+            elif rolling_target <= 0.25 and rolling_ball_peak <= 0.10:
+                engagement_state = "adjacent_or_other"
+            else:
+                engagement_state = "uncertain"
+
+            detection["target_court_score"] = round(float(rolling_target), 4)
+            detection["engagement_score"] = round(float(engagement_score), 4)
+            detection["engagement_state"] = engagement_state
+            detection["engagement"] = {
+                "kind": "target_game_engagement_v1",
+                "target_court_score": round(float(rolling_target), 4),
+                "target_court_score_immediate": round(float(target_support["target_court_score"]), 4),
+                "ball_affinity_score": round(float(rolling_ball_score), 4),
+                "ball_affinity_score_immediate": round(float(ball_affinity["score"]), 4),
+                "ball_affinity_peak": round(float(rolling_ball_peak), 4),
+                "ball_affinity_avg": round(float(rolling_ball_avg), 4),
+                "other_game_risk": round(float(other_game_risk), 4),
+                "engagement_score": round(float(engagement_score), 4),
+                "engagement_state": engagement_state,
+                "court_distance_outside": target_support["court_distance_outside"],
+                "court_boundary_score": round(float(target_support["court_boundary_score"]), 4),
+                "effective_foot_prior": round(float(target_support["effective_foot_prior"]), 4),
+                "effective_center_prior": round(float(target_support["effective_foreground_prior"]), 4),
+                "ball_state": ball_affinity["ball_state"],
+                "ball_visible": bool(ball_affinity["ball_visible"]),
+                "ball_distance_to_bbox_px": ball_affinity["distance_to_bbox_px"],
+                "ball_distance_scale_px": ball_affinity["distance_scale_px"],
+                "window_frames": int(window_frames),
+            }
+            frame_state_counts[engagement_state] = frame_state_counts.get(engagement_state, 0) + 1
+            summary["state_counts"][engagement_state] = summary["state_counts"].get(engagement_state, 0) + 1
+            if engagement_state == "adjacent_or_other":
+                summary["adjacent_or_other_detection_count"] += 1
+            if engagement_state == "target_game_engaged":
+                summary["engaged_detection_count"] += 1
+        frame["engagement_summary"] = {
+            "state_counts": frame_state_counts,
+            "ball_state": (ball_state or {}).get("state"),
+        }
+    return summary
+
+
+def _tracklet_evidence_key(detection):
+    identity_track_id = detection.get("identity_track_id")
+    if identity_track_id is not None:
+        return ("identity_track_id", int(identity_track_id))
+    track_id = detection.get("track_id")
+    if track_id is not None:
+        return ("track_id", int(track_id))
+    return None
+
+
+
+def annotate_tracklet_temporal_evidence(frames, video_meta):
+    summary = {
+        "kind": "tracklet_temporal_evidence_v1",
+        "frame_count": len(frames),
+        "track_count": 0,
+        "window_seconds": TRACKLET_TEMPORAL_WINDOW_SECONDS,
+        "window_frames": 0,
+        "state_counts": {},
+        "promotion_ready_detection_count": 0,
+        "demotion_ready_detection_count": 0,
+    }
+    if not frames:
+        return summary
+
+    fps = float((video_meta or {}).get("fps") or 30.0)
+    window_frames = max(6, int(round(fps * TRACKLET_TEMPORAL_WINDOW_SECONDS)))
+    summary["window_frames"] = int(window_frames)
+    track_counts = _track_frame_counts(frames, key_fn=_tracklet_evidence_key)
+    summary["track_count"] = len(track_counts)
+    history = defaultdict(
+        lambda: {
+            "engagement": deque(maxlen=window_frames),
+            "target": deque(maxlen=window_frames),
+            "risk": deque(maxlen=window_frames),
+            "motion": deque(maxlen=window_frames),
+        }
+    )
+
+    for frame in frames:
+        frame_state_counts = {}
+        for detection in frame.get("detections", []):
+            if _is_ball_detection(detection):
+                continue
+            engagement = detection.get("engagement") or {}
+            evidence_key = _tracklet_evidence_key(detection)
+            evidence_key_kind = evidence_key[0] if evidence_key is not None else None
+            evidence_key_id = evidence_key[1] if evidence_key is not None else None
+            track_length = int(track_counts.get(evidence_key, 1))
+            engagement_score = float(engagement.get("engagement_score") or detection.get("engagement_score") or 0.0)
+            target_score = float(engagement.get("target_court_score") or detection.get("target_court_score") or 0.0)
+            other_game_risk = float(engagement.get("other_game_risk") or 0.0)
+            motion_score = _clip01(float(detection.get("motion_speed_px") or 0.0) / MOTION_SCORE_THRESHOLD_PX)
+
+            if evidence_key is not None:
+                history[evidence_key]["engagement"].append(engagement_score)
+                history[evidence_key]["target"].append(target_score)
+                history[evidence_key]["risk"].append(other_game_risk)
+                history[evidence_key]["motion"].append(motion_score)
+                sample_count = len(history[evidence_key]["engagement"])
+                avg_engagement = float(sum(history[evidence_key]["engagement"]) / sample_count)
+                avg_target = float(sum(history[evidence_key]["target"]) / sample_count)
+                avg_risk = float(sum(history[evidence_key]["risk"]) / sample_count)
+                avg_motion = float(sum(history[evidence_key]["motion"]) / sample_count)
+            else:
+                sample_count = 1
+                avg_engagement = float(engagement_score)
+                avg_target = float(target_score)
+                avg_risk = float(other_game_risk)
+                avg_motion = float(motion_score)
+
+            persistence_score = min(sample_count, 6) / 6.0
+            smoothed_score = _clip01(
+                0.40 * avg_engagement
+                + 0.30 * avg_target
+                + 0.15 * avg_motion
+                + 0.15 * persistence_score
+            )
+            adjacent_risk = _clip01(
+                0.60 * avg_risk
+                + 0.25 * _clip01((0.38 - avg_target) / 0.38)
+                + 0.15 * _clip01((0.20 - avg_motion) / 0.20)
+            )
+            promotion_ready = bool(
+                sample_count >= TRACKLET_PROMOTION_MIN_FRAMES
+                and smoothed_score >= TRACKLET_PROMOTION_SCORE_THRESHOLD
+                and avg_risk <= 0.45
+            )
+            demotion_ready = bool(
+                sample_count >= TRACKLET_DEMOTION_MIN_FRAMES
+                and adjacent_risk >= TRACKLET_DEMOTION_RISK_THRESHOLD
+                and avg_target <= 0.35
+            )
+            if demotion_ready:
+                temporal_state = "demote_candidate"
+            elif promotion_ready:
+                temporal_state = "promote_candidate"
+            elif sample_count < TRACKLET_PROMOTION_MIN_FRAMES:
+                temporal_state = "pending_tracklet"
+            else:
+                temporal_state = "hold_tracklet"
+
+            detection["tracklet_temporal"] = {
+                "kind": "tracklet_temporal_evidence_v1",
+                "track_length_frames": int(track_length),
+                "window_frames": int(window_frames),
+                "sample_count": int(sample_count),
+                "evidence_key_kind": evidence_key_kind,
+                "evidence_key_id": int(evidence_key_id) if evidence_key_id is not None else None,
+                "avg_engagement_score": round(float(avg_engagement), 4),
+                "avg_target_court_score": round(float(avg_target), 4),
+                "avg_other_game_risk": round(float(avg_risk), 4),
+                "avg_motion_score": round(float(avg_motion), 4),
+                "smoothed_score": round(float(smoothed_score), 4),
+                "adjacent_risk": round(float(adjacent_risk), 4),
+                "promotion_ready": promotion_ready,
+                "demotion_ready": demotion_ready,
+                "state": temporal_state,
+            }
+            detection["tracklet_temporal_state"] = temporal_state
+            frame_state_counts[temporal_state] = frame_state_counts.get(temporal_state, 0) + 1
+            summary["state_counts"][temporal_state] = summary["state_counts"].get(temporal_state, 0) + 1
+            if promotion_ready:
+                summary["promotion_ready_detection_count"] += 1
+            if demotion_ready:
+                summary["demotion_ready_detection_count"] += 1
+        frame["tracklet_temporal_summary"] = {
+            "state_counts": frame_state_counts,
+        }
+    return summary
 
 
 def _vector_norm(vec):
@@ -1681,9 +2205,21 @@ def _build_track_option_consensus(track_samples, identity_hypotheses):
 
 
 def annotate_identity_jersey_numbers(frames, *, identity_hypotheses=None):
-    reader = get_easyocr_reader()
+    reader = None
     identity_samples = {}
     track_samples = {}
+    plausible_identity_counts = defaultdict(int)
+    plausible_track_counts = defaultdict(int)
+    for frame in frames:
+        for detection in frame.get("detections", []):
+            identity_track_id = detection.get("identity_track_id")
+            if identity_track_id is None:
+                continue
+            if detection.get("active_player_candidate") or detection.get("on_court_candidate"):
+                plausible_identity_counts[int(identity_track_id)] += 1
+                track_id = detection.get("track_id")
+                if track_id is not None:
+                    plausible_track_counts[int(track_id)] += 1
     for frame in frames:
         for detection in frame.get("detections", []):
             identity_track_id = detection.get("identity_track_id")
@@ -1691,6 +2227,21 @@ def annotate_identity_jersey_numbers(frames, *, identity_hypotheses=None):
                 detection["identity_jersey_evidence_count"] = 0
                 continue
             detection["identity_jersey_evidence_count"] = 0
+            if not detection.get("on_court_candidate") and not detection.get("active_player_candidate"):
+                continue
+            track_id = detection.get("track_id")
+            identity_count = plausible_identity_counts.get(int(identity_track_id), 0)
+            track_count = plausible_track_counts.get(int(track_id), 0) if track_id is not None else 0
+            if max(identity_count, track_count) < JERSEY_OCR_MIN_ON_COURT_TRACK_FRAMES:
+                continue
+            identity_bucket = identity_samples.get(identity_track_id, [])
+            track_bucket = track_samples.get(int(track_id), []) if track_id is not None else []
+            if len(identity_bucket) >= JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY and (
+                track_id is None or len(track_bucket) >= JERSEY_OCR_MAX_SAMPLES_PER_IDENTITY
+            ):
+                continue
+            if reader is None:
+                reader = get_easyocr_reader()
             evidence = _collect_jersey_evidence(reader, detection)
             if evidence is None:
                 continue
@@ -1703,7 +2254,6 @@ def annotate_identity_jersey_numbers(frames, *, identity_hypotheses=None):
             identity_bucket = identity_samples.setdefault(identity_track_id, [])
             identity_bucket.append(sample)
             identity_samples[identity_track_id] = _sort_and_clip_jersey_samples(identity_bucket)
-            track_id = detection.get("track_id")
             if track_id is not None:
                 track_bucket = track_samples.setdefault(int(track_id), [])
                 track_bucket.append(sample)
@@ -2032,28 +2582,28 @@ def score_active_player(
         edge_penalty += 0.05
     reasons["edge_penalty"] = round(edge_penalty, 4)
 
-    footpoint = _estimate_detection_footpoint(detection)
-    footpoint_xy = footpoint["xy"]
+    target_court_support = _compute_detection_target_court_support(
+        detection,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        bootstrap_context=bootstrap_context,
+        scene_prior=scene_prior,
+    )
+    footpoint_xy = target_court_support["footpoint_xy"]
+    court_ground_xy = target_court_support["court_ground_xy"]
+    court_in_bounds = target_court_support["court_in_bounds"]
+    grounding_score = float(target_court_support["grounding_score"])
     reasons["footpoint_xy"] = [round(float(footpoint_xy[0]), 2), round(float(footpoint_xy[1]), 2)]
-    reasons["footpoint_source"] = footpoint["source"]
-    reasons["footpoint_confidence"] = round(float(footpoint["confidence"]), 4)
-
-    court_ground_xy = detection.get("court_foot_xy") or detection.get("court_xy")
-    court_in_bounds = None
-    grounding_score = 0.20
-    if court_ground_xy is not None and len(court_ground_xy) == 2:
-        cx, cy = float(court_ground_xy[0]), float(court_ground_xy[1])
-        court_in_bounds = (
-            COURT_X_RANGE[0] <= cx <= COURT_X_RANGE[1]
-            and COURT_Y_RANGE[0] <= cy <= COURT_Y_RANGE[1]
-        )
-        grounding_score = 1.0 if court_in_bounds else 0.0
+    reasons["footpoint_source"] = target_court_support["footpoint_source"]
+    reasons["footpoint_confidence"] = round(float(target_court_support["footpoint_confidence"]), 4)
     reasons["court_in_bounds"] = court_in_bounds
     reasons["court_ground_xy"] = (
         [round(float(court_ground_xy[0]), 2), round(float(court_ground_xy[1]), 2)]
         if court_ground_xy is not None and len(court_ground_xy) == 2
         else None
     )
+    reasons["court_distance_outside"] = round(float(target_court_support["court_distance_outside"]), 3) if target_court_support["court_distance_outside"] is not None else None
+    reasons["court_boundary_score"] = round(float(target_court_support["court_boundary_score"]), 4)
 
     persistence_score = min(track_frame_count, 5) / 5.0
     reasons["track_frame_count"] = int(track_frame_count)
@@ -2080,43 +2630,20 @@ def score_active_player(
     reasons["frame_coherent_motion_px"] = round(coherent_speed, 3)
     reasons["frame_shared_motion"] = shared_motion
 
-    center_foreground_prior = 0.0
-    foot_foreground_prior = 0.0
-    if bootstrap_context and bootstrap_context.get("enabled"):
-        center_foreground_prior = foreground_prior_for_point(
-            bootstrap_context,
-            bbox_cx,
-            bbox_cy,
-        )
-        foot_foreground_prior = foreground_prior_for_point(
-            bootstrap_context,
-            float(footpoint_xy[0]),
-            float(footpoint_xy[1]),
-        )
+    center_foreground_prior = float(target_court_support["bootstrap_foreground_prior"])
+    foot_foreground_prior = float(target_court_support["bootstrap_foot_prior"])
+    scene_center_prior = float(target_court_support["scene_center_prior"])
+    scene_foot_prior = float(target_court_support["scene_foot_prior"])
+    effective_center_prior = float(target_court_support["effective_foreground_prior"])
+    effective_foot_prior = float(target_court_support["effective_foot_prior"])
     reasons["bootstrap_foreground_prior"] = round(float(center_foreground_prior), 4)
     reasons["bootstrap_foot_prior"] = round(float(foot_foreground_prior), 4)
-
-    scene_center_prior = _scene_prior_for_point(
-        scene_prior,
-        bbox_cx,
-        bbox_cy,
-        frame_width=frame_width,
-        frame_height=frame_height,
-    )
-    scene_foot_prior = _scene_prior_for_point(
-        scene_prior,
-        float(footpoint_xy[0]),
-        float(footpoint_xy[1]),
-        frame_width=frame_width,
-        frame_height=frame_height,
-    )
-    effective_center_prior = max(float(center_foreground_prior), float(scene_center_prior))
-    effective_foot_prior = max(float(foot_foreground_prior), float(scene_foot_prior))
     reasons["scene_prior_status"] = (scene_prior or {}).get("prior_status")
     reasons["scene_center_prior"] = round(float(scene_center_prior), 4)
     reasons["scene_foot_prior"] = round(float(scene_foot_prior), 4)
     reasons["effective_foreground_prior"] = round(float(effective_center_prior), 4)
     reasons["effective_foot_prior"] = round(float(effective_foot_prior), 4)
+    reasons["target_court_score"] = round(float(target_court_support["target_court_score"]), 4)
 
     pose_info = _score_pose_coherence(detection)
     reasons["pose_visible_count"] = int(pose_info["visible_count"])
@@ -2157,7 +2684,33 @@ def score_active_player(
         )
     reasons["appearance_penalty"] = round(appearance_penalty, 4)
 
-    geometry_prior = max(float(grounding_score), float(effective_foot_prior), float(effective_center_prior) * 0.7)
+    engagement = detection.get("engagement") or {}
+    engagement_score = float(engagement.get("engagement_score") or 0.0)
+    target_game_score = float(engagement.get("target_court_score") or target_court_support["target_court_score"])
+    other_game_risk = float(engagement.get("other_game_risk") or 0.0)
+    engagement_state = str(engagement.get("engagement_state") or detection.get("engagement_state") or "unknown")
+    reasons["engagement_score"] = round(float(engagement_score), 4)
+    reasons["engagement_state"] = engagement_state
+    reasons["other_game_risk"] = round(float(other_game_risk), 4)
+
+    tracklet_temporal = detection.get("tracklet_temporal") or {}
+    tracklet_temporal_score = float(tracklet_temporal.get("smoothed_score") or 0.0)
+    tracklet_temporal_risk = float(tracklet_temporal.get("adjacent_risk") or 0.0)
+    tracklet_temporal_state = str(tracklet_temporal.get("state") or detection.get("tracklet_temporal_state") or "none")
+    tracklet_promotion_ready = bool(tracklet_temporal.get("promotion_ready"))
+    tracklet_demotion_ready = bool(tracklet_temporal.get("demotion_ready"))
+    reasons["tracklet_temporal_score"] = round(float(tracklet_temporal_score), 4)
+    reasons["tracklet_temporal_risk"] = round(float(tracklet_temporal_risk), 4)
+    reasons["tracklet_temporal_state"] = tracklet_temporal_state
+    reasons["tracklet_promotion_ready"] = tracklet_promotion_ready
+    reasons["tracklet_demotion_ready"] = tracklet_demotion_ready
+
+    geometry_prior = max(
+        float(grounding_score),
+        float(effective_foot_prior),
+        float(effective_center_prior) * 0.7,
+        float(target_game_score),
+    )
     reasons["geometry_prior"] = round(float(geometry_prior), 4)
     ungrounded_shared_motion_penalty = 0.0
     if float(geometry_prior) <= 0.45 and shared_motion and relative_motion_speed <= MOTION_SCORE_THRESHOLD_PX:
@@ -2165,6 +2718,14 @@ def score_active_player(
             (coherent_speed - relative_motion_speed) / max(MOTION_SCORE_THRESHOLD_PX * 2.0, 1e-6)
         )
     reasons["ungrounded_shared_motion_penalty"] = round(float(ungrounded_shared_motion_penalty), 4)
+    engagement_bonus = 0.06 * float(engagement_score) + 0.04 * float(target_game_score)
+    engagement_penalty = float(other_game_risk) * (0.14 if float(target_game_score) < 0.45 else 0.05)
+    tracklet_temporal_bonus = (0.08 if tracklet_promotion_ready else 0.03) * float(tracklet_temporal_score)
+    tracklet_temporal_penalty = (0.10 if tracklet_demotion_ready else 0.0) * float(tracklet_temporal_risk)
+    reasons["engagement_bonus"] = round(float(engagement_bonus), 4)
+    reasons["engagement_penalty"] = round(float(engagement_penalty), 4)
+    reasons["tracklet_temporal_bonus"] = round(float(tracklet_temporal_bonus), 4)
+    reasons["tracklet_temporal_penalty"] = round(float(tracklet_temporal_penalty), 4)
     on_court_score = (
         float(ON_COURT_POSITIVE_WEIGHTS["confidence"]) * confidence_score
         + float(ON_COURT_POSITIVE_WEIGHTS["bbox_height"]) * height_score
@@ -2175,10 +2736,14 @@ def score_active_player(
         + float(ON_COURT_POSITIVE_WEIGHTS["track_persistence"]) * float(persistence_score)
         + float(ON_COURT_POSITIVE_WEIGHTS["motion"]) * float(motion_score)
         + float(ON_COURT_POSITIVE_WEIGHTS["sam3_support"]) * _clip01(sam3_score / 0.8)
+        + float(engagement_bonus)
+        + float(tracklet_temporal_bonus)
         - float(ON_COURT_PENALTY_WEIGHTS["edge"]) * float(edge_penalty)
         - float(ON_COURT_PENALTY_WEIGHTS["merge_risk"]) * float(merge_info["score"])
         - float(ON_COURT_PENALTY_WEIGHTS["appearance_mismatch"]) * float(appearance_penalty)
         - float(ON_COURT_PENALTY_WEIGHTS["ungrounded_shared_motion"]) * float(ungrounded_shared_motion_penalty)
+        - float(engagement_penalty)
+        - float(tracklet_temporal_penalty)
     )
     spectator_risk = _clip01(
         float(ON_COURT_SPECTATOR_RISK_WEIGHTS["edge"]) * _clip01(edge_penalty / 0.20)
@@ -2186,6 +2751,7 @@ def score_active_player(
         + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["merge_risk"]) * float(merge_info["score"])
         + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["appearance_mismatch"]) * _clip01(appearance_penalty / 0.14)
         + float(ON_COURT_SPECTATOR_RISK_WEIGHTS["weak_pose"]) * (1.0 - float(pose_info["score"]))
+        + 0.20 * float(other_game_risk)
     )
     on_court_score = round(_clip01(on_court_score), 4)
     reasons["on_court_score"] = on_court_score
@@ -2195,7 +2761,11 @@ def score_active_player(
         on_court_score
         + 0.09 * float(motion_score)
         + 0.04 * float(persistence_score)
+        + 0.04 * float(engagement_score)
+        + 0.05 * float(tracklet_temporal_score)
         - 0.03 * float(merge_info["score"])
+        - 0.04 * float(other_game_risk)
+        - 0.05 * float(tracklet_temporal_risk)
     )
 
     active_score = round(float(active_score), 4)
@@ -2288,6 +2858,200 @@ def build_detection(result, det_idx, model_names, frame, h_matrix=None):
     return detection
 
 
+
+
+def _copy_pose_fields_from_detection(target, pose_detection, frame, h_matrix=None):
+    for key in ("keypoints_xy", "keypoints_conf", "lifted_keypoints_xyz"):
+        if key in pose_detection:
+            target[key] = pose_detection[key]
+    target["pose_detection_confidence"] = float(pose_detection.get("confidence") or 0.0)
+    target["pose_detection_source"] = "pose_enrichment"
+    uniform_stats = estimate_uniform_bucket(
+        frame,
+        target["bbox_xyxy"],
+        keypoints_xy=target.get("keypoints_xy"),
+        keypoints_conf=target.get("keypoints_conf"),
+    )
+    target["uniform_bucket"] = uniform_stats["bucket"]
+    target["uniform_luma_mean"] = uniform_stats["luma_mean"]
+    jersey_crop, jersey_sharpness = _extract_jersey_crop(frame, target)
+    if jersey_crop is not None:
+        target["_jersey_crop_bgr"] = jersey_crop
+        target["_jersey_crop_sharpness"] = jersey_sharpness
+        appearance_hist = estimate_torso_color_histogram(jersey_crop)
+        if appearance_hist is not None:
+            target["appearance_histogram_rgbq"] = appearance_hist
+    if h_matrix is not None and target.get("keypoints_xy"):
+        keypoints_np = np.array(target["keypoints_xy"], dtype=float)
+        lifted = lift_keypoints_to_3d(keypoints_np, h_matrix)
+        target["lifted_keypoints_xyz"] = [
+            [float(x), float(y), float(z)] for x, y, z in lifted.tolist()
+        ]
+
+
+def _bbox_center_distance_ratio(box_a, box_b):
+    ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+    bx1, by1, bx2, by2 = [float(v) for v in box_b]
+    center_a = np.array([(ax1 + ax2) * 0.5, (ay1 + ay2) * 0.5], dtype=np.float32)
+    center_b = np.array([(bx1 + bx2) * 0.5, (by1 + by2) * 0.5], dtype=np.float32)
+    distance = float(np.linalg.norm(center_a - center_b))
+    norm = max(ay2 - ay1, by2 - by1, 1.0)
+    return distance / norm
+
+
+def _ensure_player_detection_source(detection, source, stage=None):
+    sources = list(detection.get("player_detection_sources") or [])
+    if source and source not in sources:
+        sources.append(source)
+    if sources:
+        detection["player_detection_sources"] = sources
+    if source and not detection.get("player_detection_source"):
+        detection["player_detection_source"] = source
+    stages = list(detection.get("player_proposal_stages") or [])
+    if stage and stage not in stages:
+        stages.append(stage)
+    if stages:
+        detection["player_proposal_stages"] = stages
+
+
+def _serialize_player_candidates(detections):
+    payload = []
+    for detection in detections:
+        if _is_ball_detection(detection):
+            continue
+        payload.append(
+            {
+                "track_id": int(detection["track_id"]) if detection.get("track_id") is not None else None,
+                "confidence": round(float(detection.get("confidence") or 0.0), 4),
+                "bbox_xyxy": [round(float(v), 3) for v in (detection.get("bbox_xyxy") or [])],
+                "player_detection_source": detection.get("player_detection_source") or "unknown",
+                "player_detection_sources": list(detection.get("player_detection_sources") or []),
+                "player_proposal_stages": list(detection.get("player_proposal_stages") or []),
+                "pose_supported": bool(detection.get("keypoints_xy")),
+                "recovered_candidate": bool(detection.get("recovered_candidate")),
+                "recovered_candidate_source": detection.get("recovered_candidate_source"),
+            }
+        )
+    return payload
+
+
+def _extend_raw_player_candidates(frame, detections):
+    existing = list(frame.get("raw_player_detections") or [])
+    existing.extend(_serialize_player_candidates(detections))
+    frame["raw_player_detections"] = existing
+
+
+def _match_pose_to_person_detections(person_detections, pose_result, pose_model_names, frame, h_matrix=None):
+    if not pose_result or pose_result[0].boxes is None or len(pose_result[0].boxes) == 0:
+        return person_detections
+    pose_candidates = []
+    result = pose_result[0]
+    for det_idx in range(len(result.boxes)):
+        pose_detection = build_detection(result, det_idx, pose_model_names, frame, h_matrix=h_matrix)
+        if int(pose_detection.get("class_id", -1)) != 0:
+            continue
+        pose_candidates.append(pose_detection)
+    used = set()
+    for detection in person_detections:
+        if _is_ball_detection(detection):
+            continue
+        detection_bbox = detection.get("bbox_xyxy") or []
+        best_idx = None
+        best_score = None
+        best_iou = 0.0
+        best_distance_ratio = None
+        for idx, pose_detection in enumerate(pose_candidates):
+            if idx in used:
+                continue
+            pose_bbox = pose_detection.get("bbox_xyxy") or []
+            iou = _bbox_iou_xyxy(detection_bbox, pose_bbox)
+            distance_ratio = _bbox_center_distance_ratio(detection_bbox, pose_bbox)
+            if iou < PLAYER_PROPOSAL_MATCH_IOU and distance_ratio > PLAYER_PROPOSAL_CENTER_DISTANCE_RATIO:
+                continue
+            score = float(iou) - 0.2 * float(distance_ratio)
+            if best_score is None or score > best_score:
+                best_idx = idx
+                best_score = score
+                best_iou = float(iou)
+                best_distance_ratio = float(distance_ratio)
+        if best_idx is None:
+            continue
+        pose_detection = pose_candidates[best_idx]
+        used.add(best_idx)
+        _copy_pose_fields_from_detection(detection, pose_detection, frame, h_matrix=h_matrix)
+        detection["pose_match"] = {
+            "iou": round(best_iou, 4),
+            "center_distance_ratio": round(float(best_distance_ratio or 0.0), 4),
+            "confidence": round(float(pose_detection.get("confidence") or 0.0), 4),
+        }
+    return person_detections
+
+
+def _build_person_detections(result, model_names, frame, h_matrix=None, *, source, proposal_stage, include_track_ids=True):
+    detections = []
+    if not result or result[0].boxes is None or len(result[0].boxes) == 0:
+        return detections
+    result0 = result[0]
+    for det_idx in range(len(result0.boxes)):
+        detection = build_detection(result0, det_idx, model_names, frame, h_matrix=h_matrix)
+        if int(detection.get("class_id", -1)) != 0:
+            continue
+        if not include_track_ids:
+            detection["track_id"] = None
+        detection["player_detection_source"] = source
+        detection["player_detection_sources"] = [source]
+        detection["player_proposal_stages"] = [proposal_stage]
+        detections.append(detection)
+    return detections
+
+
+def _merge_player_detections(existing_detections, proposal_detections):
+    merged = list(existing_detections)
+    novel_count = 0
+    supported_count = 0
+    for proposal in proposal_detections:
+        proposal_bbox = proposal.get("bbox_xyxy") or []
+        best_match = None
+        best_iou = 0.0
+        best_distance_ratio = None
+        for detection in merged:
+            if _is_ball_detection(detection):
+                continue
+            detection_bbox = detection.get("bbox_xyxy") or []
+            iou = _bbox_iou_xyxy(detection_bbox, proposal_bbox)
+            distance_ratio = _bbox_center_distance_ratio(detection_bbox, proposal_bbox)
+            if iou >= PLAYER_PROPOSAL_MERGE_IOU or (
+                iou >= PLAYER_PROPOSAL_MATCH_IOU and distance_ratio <= PLAYER_PROPOSAL_CENTER_DISTANCE_RATIO
+            ):
+                if best_match is None or iou > best_iou:
+                    best_match = detection
+                    best_iou = float(iou)
+                    best_distance_ratio = float(distance_ratio)
+        if best_match is None:
+            merged.append(proposal)
+            novel_count += 1
+            continue
+        source = proposal.get("player_detection_source") or "unknown"
+        for src in proposal.get("player_detection_sources") or [source]:
+            _ensure_player_detection_source(best_match, src)
+        for stage in proposal.get("player_proposal_stages") or []:
+            _ensure_player_detection_source(best_match, source=None, stage=stage)
+        support_payload = {
+            "source": source,
+            "confidence": round(float(proposal.get("confidence") or 0.0), 4),
+            "iou": round(best_iou, 4),
+            "center_distance_ratio": round(float(best_distance_ratio or 0.0), 4),
+            "bbox_xyxy": [round(float(v), 3) for v in proposal_bbox],
+        }
+        support_list = list(best_match.get("player_detection_support") or [])
+        support_list.append(support_payload)
+        best_match["player_detection_support"] = support_list
+        if source == "grounded_detector":
+            best_match["grounded_detector_support"] = support_payload
+        supported_count += 1
+    return merged, {"novel_detection_count": novel_count, "supported_detection_count": supported_count}
+
+
 def _build_sam_recovered_detection(
     proposal,
     frame,
@@ -2333,21 +3097,22 @@ def _build_sam_recovered_detection(
     return detection
 
 
-def _track_frame_counts(frames):
+def _track_frame_counts(frames, key_fn=None):
     counts = {}
+    key_fn = key_fn or (lambda detection: detection.get("track_id"))
     for frame in frames:
         seen = set()
         for detection in frame.get("detections", []):
-            track_id = detection.get("track_id")
-            if track_id is None or track_id in seen:
+            track_key = key_fn(detection)
+            if track_key is None or track_key in seen:
                 continue
-            counts[track_id] = counts.get(track_id, 0) + 1
-            seen.add(track_id)
+            counts[track_key] = counts.get(track_key, 0) + 1
+            seen.add(track_key)
     return counts
 
 
 def annotate_active_players(frames, video_meta):
-    track_counts = _track_frame_counts(frames)
+    track_counts = _track_frame_counts(frames, key_fn=_tracklet_evidence_key)
     frame_width = int(video_meta["width"])
     frame_height = int(video_meta["height"])
     for frame in frames:
@@ -2359,7 +3124,7 @@ def annotate_active_players(frames, video_meta):
                 detection,
                 frame_width=frame_width,
                 frame_height=frame_height,
-                track_frame_count=track_counts.get(detection.get("track_id"), 1),
+                track_frame_count=track_counts.get(_tracklet_evidence_key(detection), 1),
                 bootstrap_context=bootstrap_context,
                 scene_prior=scene_prior,
                 frame_motion_context=frame_motion_context,
@@ -2442,7 +3207,7 @@ def annotate_sam_player_recovery(
                 }
                 summary["refined_detection_count"] += 1
                 continue
-            if proposal.get("source_kind") in {"unexplained_dino_blob", "grounding_anchor_region"}:
+            if proposal.get("source_kind") in {"unexplained_grounding_dino_region", "grounding_anchor_region"}:
                 detections.append(
                     _build_sam_recovered_detection(
                         proposal,
@@ -2763,7 +3528,8 @@ def annotate_bootstrap_contexts(
     frames,
     *,
     bootstrap_foreground_backend="none",
-    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+    bootstrap_foreground_model=DEFAULT_GROUNDING_DINO_MODEL,
+    bootstrap_foreground_prompt=DEFAULT_GROUNDING_DINO_PROMPT,
     device="cpu",
 ):
     """Attach per-segment bootstrap and grounding contexts to frames.
@@ -2776,22 +3542,27 @@ def annotate_bootstrap_contexts(
         return {"backend": bootstrap_foreground_backend, "contexts": []}
 
     contexts = []
-    context_by_segment_id = {}
+    context_by_bootstrap_key = {}
+    bootstrapper = None
     for frame in frames:
         segment_id = frame.get("continuity_segment_id")
-        if segment_id in context_by_segment_id:
-            payload = context_by_segment_id[segment_id]
+        camera_pose_segment_id = frame.get("camera_pose_segment_id", segment_id)
+        bootstrap_key = (segment_id, camera_pose_segment_id)
+        if bootstrap_key in context_by_bootstrap_key:
+            payload = context_by_bootstrap_key[bootstrap_key]
             frame["bootstrap_context"] = payload
             frame["grounding_context"] = json.loads(json.dumps(payload.get("grounding_context") or {}))
             continue
 
-        if bootstrap_foreground_backend == "dinov3":
+        if bootstrap_foreground_backend == "grounding_dino":
             source_frame = frame.get("_frame_bgr")
             if source_frame is not None:
-                bootstrapper = Dinov3Bootstrapper(
-                    model_name=bootstrap_foreground_model,
-                    device=device,
-                )
+                if bootstrapper is None:
+                    bootstrapper = GroundingDinoBootstrapper(
+                        model_name=bootstrap_foreground_model,
+                        text_prompt=bootstrap_foreground_prompt,
+                        device=device,
+                    )
                 payload = bootstrapper.run_on_frame(
                     source_frame,
                     frame_idx=frame.get("frame_idx", 0),
@@ -2813,15 +3584,23 @@ def annotate_bootstrap_contexts(
                 "frame_idx": frame.get("frame_idx", 0),
             }
 
-        trigger_reason = "initial" if int(segment_id or 0) == 0 else "discontinuity"
+        if int(segment_id or 0) == 0 and int(camera_pose_segment_id or 0) == 0:
+            trigger_reason = "initial"
+        elif segment_id is not None and segment_id != 0 and camera_pose_segment_id == segment_id:
+            trigger_reason = "discontinuity"
+        elif camera_pose_segment_id is not None:
+            trigger_reason = "camera_pose_segment"
+        else:
+            trigger_reason = "discontinuity"
         grounding_context = {
             "enabled": False,
-            "pipeline_order": ["dino", "sam", "yolo"],
+            "pipeline_order": ["grounding_dino", "sam", "yolo"],
             "trigger_reason": trigger_reason,
+            "camera_pose_segment_id": camera_pose_segment_id,
             "source_backend": payload.get("backend"),
             "source_status": payload.get("status"),
             "proposal_regions": [],
-            "sam_roi_policy": "unexplained_dino_blobs_and_ambiguous_yolo",
+            "sam_roi_policy": "unexplained_grounding_dino_regions_and_ambiguous_yolo",
             "yolo_search_policy": "full_frame",
             "yolo_search_region_mask_grid": None,
             "yolo_search_region_mask_shape": None,
@@ -2845,7 +3624,7 @@ def annotate_bootstrap_contexts(
                         bbox_width >= GROUNDED_YOLO_MIN_SIDE_PX and bbox_height >= GROUNDED_YOLO_MIN_SIDE_PX
                     )
                     component_regions.append({
-                        "kind": "dino_play_region_component",
+                        "kind": "grounding_dino_play_region_component",
                         "bbox_xyxy": [float(v) for v in bbox],
                         "confidence": round(float(component.get("area_ratio") or 0.0), 4),
                         "area_ratio": component.get("area_ratio"),
@@ -2860,8 +3639,9 @@ def annotate_bootstrap_contexts(
                 "should_rerun_yolo": should_rerun_yolo,
             })
         payload["continuity_segment_id"] = segment_id
+        payload["camera_pose_segment_id"] = camera_pose_segment_id
         payload["grounding_context"] = grounding_context
-        context_by_segment_id[segment_id] = payload
+        context_by_bootstrap_key[bootstrap_key] = payload
         frame["bootstrap_context"] = payload
         frame["grounding_context"] = json.loads(json.dumps(grounding_context))
         contexts.append(payload)
@@ -2965,7 +3745,7 @@ def annotate_scene_discovery_contracts(frames):
     """
     summary = {
         "kind": "scene_discovery_tracking_v1",
-        "pipeline_order": ["dino", "sam", "yolo"],
+        "pipeline_order": ["grounding_dino", "sam", "yolo"],
         "scene_prior_frame_count": 0,
         "scene_prior_ready_frame_count": 0,
         "scene_prior_trigger_reasons": [],
@@ -3013,12 +3793,14 @@ def _build_staged_perception_summary(
     collapse_summary,
     scene_discovery_summary,
     player_recovery_summary,
+    engagement_summary,
+    temporal_summary=None,
     identity_hypotheses,
 ):
     pipeline_order = (
         scene_discovery_summary.get("pipeline_order")
         or grounding_summary.get("pipeline_order")
-        or ["dino", "sam", "yolo"]
+        or ["grounding_dino", "sam", "yolo"]
     )
     bootstrap_contexts = bootstrap_summary.get("contexts") or []
     bootstrap_ready_contexts = [
@@ -3045,6 +3827,10 @@ def _build_staged_perception_summary(
     grounded_rerun_applied_frame_count = 0
     grounded_rerun_detection_count = 0
     collapse_triggered_frame_count = 0
+    raw_player_proposal_count = 0
+    player_detection_source_counts = {}
+    engagement_state_counts = {}
+    tracklet_temporal_state_counts = {}
     ball_state_source_counts = {}
     ball_detection_source_counts = {}
     ball_state_counts = {}
@@ -3058,6 +3844,7 @@ def _build_staged_perception_summary(
     for frame in frames:
         grounding_context = frame.get("grounding_context") or {}
         frame_has_ambiguous_identity = False
+        raw_player_proposal_count += len(frame.get("raw_player_detections") or [])
         if grounding_context.get("yolo_rerun_applied"):
             grounded_rerun_applied_frame_count += 1
             grounded_rerun_detection_count += int(grounding_context.get("yolo_rerun_detection_count") or 0)
@@ -3088,6 +3875,9 @@ def _build_staged_perception_summary(
             )
 
         for detection in frame.get("detections", []):
+            _increment_counter(player_detection_source_counts, detection.get("player_detection_source") or "unknown")
+            _increment_counter(engagement_state_counts, detection.get("engagement_state") or "unknown")
+            _increment_counter(tracklet_temporal_state_counts, detection.get("tracklet_temporal_state") or "unknown")
             reasons = detection.get("active_player_reasons") or {}
             if float(reasons.get("scene_center_prior") or 0.0) > 0.0 or float(reasons.get("scene_foot_prior") or 0.0) > 0.0:
                 scene_prior_supported_detection_count += 1
@@ -3147,11 +3937,23 @@ def _build_staged_perception_summary(
             "supported_detection_count": int(scene_prior_supported_detection_count),
             "strengthened_detection_count": int(scene_prior_strengthened_detection_count),
         },
+        "player": {
+            "raw_proposal_count": int(raw_player_proposal_count),
+            "observed_detection_source_counts": player_detection_source_counts,
+            "engagement_state_counts": engagement_state_counts,
+            "tracklet_temporal_state_counts": tracklet_temporal_state_counts,
+            "adjacent_or_other_detection_count": int((engagement_summary or {}).get("adjacent_or_other_detection_count") or 0),
+            "engaged_detection_count": int((engagement_summary or {}).get("engaged_detection_count") or 0),
+            "tracklet_promotion_ready_detection_count": int((temporal_summary or {}).get("promotion_ready_detection_count") or 0),
+            "tracklet_demotion_ready_detection_count": int((temporal_summary or {}).get("demotion_ready_detection_count") or 0),
+        },
         "grounded_yolo": {
             "requested_frame_count": int(grounding_summary.get("frame_count_with_grounding") or 0),
             "rerun_frame_count": int(grounding_summary.get("frame_count_rerun") or 0),
             "rerun_applied_frame_count": int(grounded_rerun_applied_frame_count),
             "rerun_detection_count": int(grounded_rerun_detection_count),
+            "novel_detection_count": int(grounding_summary.get("novel_detection_count") or 0),
+            "supported_detection_count": int(grounding_summary.get("supported_detection_count") or 0),
             "collapse_triggered_segment_count": len(collapse_summary.get("triggered_segment_ids") or []),
             "collapse_triggered_frame_count": int(collapse_triggered_frame_count),
         },
@@ -3213,17 +4015,19 @@ def _apply_grounding_mask(frame_bgr, grounding_context):
 def rerun_grounded_person_detections(
     frames,
     *,
-    model_name,
+    player_model_name,
     device,
     conf_threshold,
 ):
     summary = {
         "enabled": False,
         "status": "disabled",
-        "pipeline_order": ["dino", "sam", "yolo"],
+        "pipeline_order": ["grounding_dino", "sam", "yolo"],
         "frame_count_with_grounding": 0,
         "frame_count_rerun": 0,
         "detection_count": 0,
+        "novel_detection_count": 0,
+        "supported_detection_count": 0,
         "search_policy": "full_frame",
     }
     if not frames:
@@ -3238,7 +4042,7 @@ def rerun_grounded_person_detections(
         summary["status"] = "no_grounded_segments"
         return summary
 
-    pose_model = YOLO(model_name)
+    player_model = YOLO(player_model_name)
     summary["enabled"] = True
     summary["search_policy"] = "mask_outside_play_region"
     for frame in frames:
@@ -3246,28 +4050,37 @@ def rerun_grounded_person_detections(
         run_frame, was_masked = _apply_grounding_mask(frame.get("_frame_bgr"), grounding_context)
         if not grounding_context.get("should_rerun_yolo"):
             continue
-        pose_results = pose_model.track(
+        player_results = player_model.predict(
             run_frame,
-            persist=True,
             classes=[0],
             conf=conf_threshold,
             device=device,
             verbose=False,
         )
-        detections = []
         h_matrix = _h_matrix_as_array(frame.get("_h_matrix"))
-        if pose_results and pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
-            result = pose_results[0]
-            for det_idx in range(len(result.boxes)):
-                detection = build_detection(result, det_idx, pose_model.names, frame.get("_frame_bgr"), h_matrix=h_matrix)
-                detection["continuity_segment_id"] = frame.get("continuity_segment_id")
-                detections.append(detection)
-        frame["detections"] = detections
+        detections = _build_person_detections(
+            player_results,
+            player_model.names,
+            frame.get("_frame_bgr"),
+            h_matrix=h_matrix,
+            source="grounded_detector",
+            proposal_stage="grounded_rerun",
+            include_track_ids=False,
+        )
+        for detection in detections:
+            detection["continuity_segment_id"] = frame.get("continuity_segment_id")
+        merged, merge_summary = _merge_player_detections(frame.get("detections", []), detections)
+        frame["detections"] = merged
+        _extend_raw_player_candidates(frame, detections)
         grounding_context["yolo_rerun_applied"] = True
         grounding_context["yolo_rerun_detection_count"] = len(detections)
+        grounding_context["yolo_rerun_novel_detection_count"] = int(merge_summary["novel_detection_count"])
+        grounding_context["yolo_rerun_supported_detection_count"] = int(merge_summary["supported_detection_count"])
         grounding_context["yolo_rerun_masked"] = bool(was_masked)
         summary["frame_count_rerun"] += 1
         summary["detection_count"] += len(detections)
+        summary["novel_detection_count"] += int(merge_summary["novel_detection_count"])
+        summary["supported_detection_count"] += int(merge_summary["supported_detection_count"])
     summary["status"] = "ready"
     return summary
 
@@ -3646,8 +4459,13 @@ def annotate_clip(
     conf_threshold,
     calibration_file,
     *,
+    player_model_name=DEFAULT_PLAYER_MODEL,
+    player_tracker_backend="default",
+    player_conf_threshold=DEFAULT_PLAYER_PROPOSAL_CONFIDENCE,
+    pose_conf_threshold=DEFAULT_POSE_EXTRACTION_CONFIDENCE,
     bootstrap_foreground_backend="none",
-    bootstrap_foreground_model=DEFAULT_DINOV3_MODEL,
+    bootstrap_foreground_model=DEFAULT_GROUNDING_DINO_MODEL,
+    bootstrap_foreground_prompt=DEFAULT_GROUNDING_DINO_PROMPT,
     player_recovery_backend="none",
     player_recovery_model=DEFAULT_SAM3_REPO_MODEL,
     player_recovery_prompt=DEFAULT_SAM3_TEXT_PROMPT,
@@ -3662,6 +4480,10 @@ def annotate_clip(
     first, and the normalized staged-perception contracts are materialized just
     before serialization.
     """
+    resolved_torch_device, resource_policy = resolve_torch_device(device)
+    device = str(resolved_torch_device)
+    stage_timings = defaultdict(float)
+    overall_start = time.perf_counter()
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
@@ -3671,6 +4493,7 @@ def annotate_clip(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    player_model = YOLO(player_model_name)
     pose_model = YOLO(model_name)
     ball_model = YOLO(ball_model_name)
     sam_ball_detector = None
@@ -3697,20 +4520,42 @@ def annotate_clip(
     previous_person_track_ids = set()
     previous_person_detection_count = 0
     while True:
+        frame_loop_start = time.perf_counter()
         ok, frame = cap.read()
         if not ok:
             break
 
         t_ms = int((frame_idx / fps) * 1000)
-        pose_results = pose_model.track(
+        player_track_kwargs = {
+            "persist": True,
+            "classes": [0],
+            "conf": player_conf_threshold,
+            "device": device,
+            "verbose": False,
+        }
+        if player_tracker_backend != "default":
+            player_track_kwargs["tracker"] = player_tracker_backend
+        player_results = _timed_call(
+            stage_timings,
+            "frame.player_track",
+            player_model.track,
             frame,
-            persist=True,
+            **player_track_kwargs,
+        )
+        pose_results = _timed_call(
+            stage_timings,
+            "frame.pose_predict",
+            pose_model.predict,
+            frame,
             classes=[0],
-            conf=conf_threshold,
+            conf=pose_conf_threshold,
             device=device,
             verbose=False,
         )
-        ball_results = ball_model.predict(
+        ball_results = _timed_call(
+            stage_timings,
+            "frame.ball_predict",
+            ball_model.predict,
             frame,
             classes=[BALL_CLASS_ID],
             conf=0.05,
@@ -3720,11 +4565,23 @@ def annotate_clip(
 
         detections = []
         h_matrix = get_frame_homography(calibration, frame_idx)
-        if pose_results and pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
-            result = pose_results[0]
-            for det_idx in range(len(result.boxes)):
-                detections.append(build_detection(result, det_idx, pose_model.names, frame, h_matrix=h_matrix))
-        person_detections = list(detections)
+        person_detections = _build_person_detections(
+            player_results,
+            player_model.names,
+            frame,
+            h_matrix=h_matrix,
+            source="full_frame_detector",
+            proposal_stage="full_frame",
+            include_track_ids=True,
+        )
+        person_detections = _match_pose_to_person_detections(
+            person_detections,
+            pose_results,
+            pose_model.names,
+            frame,
+            h_matrix=h_matrix,
+        )
+        detections.extend(person_detections)
         current_frame_visual_signature = _frame_visual_signature(frame)
         current_person_track_ids = {
             int(detection["track_id"])
@@ -3779,7 +4636,10 @@ def annotate_clip(
         raw_ball_candidates = _serialize_ball_candidates(detections)
         best_ball_detection = _extract_best_ball_detection(detections)
         if _ball_detection_needs_search(best_ball_detection):
-            predictive_ball_detections, ball_predictive_summary = _run_ball_predictive_search(
+            predictive_ball_detections, ball_predictive_summary = _timed_call(
+                stage_timings,
+                "frame.ball_predictive_search",
+                _run_ball_predictive_search,
                 ball_model,
                 frame,
                 previous_ball_predictive_state,
@@ -3791,7 +4651,10 @@ def annotate_clip(
             raw_ball_candidates = _serialize_ball_candidates(detections)
             best_ball_detection = _extract_best_ball_detection(detections)
         if _ball_detection_needs_search(best_ball_detection):
-            fallback_ball_detections, ball_fallback_summary = _run_ball_roi_fallback(
+            fallback_ball_detections, ball_fallback_summary = _timed_call(
+                stage_timings,
+                "frame.ball_roi_fallback",
+                _run_ball_roi_fallback,
                 ball_model,
                 frame,
                 person_detections,
@@ -3807,7 +4670,10 @@ def annotate_clip(
             previous_ball_missing_streak,
             online_discontinuity,
         )
-        sam_ball_detections, ball_sam_summary, sam_ball_status = _run_sam_ball_search(
+        sam_ball_detections, ball_sam_summary, sam_ball_status = _timed_call(
+            stage_timings,
+            "frame.ball_sam_search",
+            _run_sam_ball_search,
             sam_ball_detector,
             frame,
             h_matrix=h_matrix,
@@ -3843,6 +4709,7 @@ def annotate_clip(
             "calibrated": h_matrix is not None,
             "detections": person_detections,
             "ball_detection": ball_detection,
+            "raw_player_detections": _serialize_player_candidates(person_detections),
             "raw_ball_detections": raw_ball_candidates,
             "ball_predictive_search": ball_predictive_summary,
             "ball_fallback": ball_fallback_summary,
@@ -3855,6 +4722,7 @@ def annotate_clip(
         previous_person_track_ids = current_person_track_ids
         previous_person_detection_count = len(person_detections)
         frame_idx += 1
+        stage_timings["frame.total"] += time.perf_counter() - frame_loop_start
 
     cap.release()
 
@@ -3865,60 +4733,102 @@ def annotate_clip(
         "width": width,
         "height": height,
     }
-    continuity = annotate_continuity_segments(frames)
-    bootstrap_summary = annotate_bootstrap_contexts(
+    continuity = _timed_call(stage_timings, "post.continuity_segments", annotate_continuity_segments, frames)
+    frame_quality_summary = _timed_call(stage_timings, "post.frame_quality", annotate_frame_quality, frames)
+    quality_miss_summary = summarize_detection_misses_by_quality(frames)
+    camera_pose_segments = _timed_call(stage_timings, "post.camera_pose_segments", annotate_camera_pose_segments, frames)
+    bootstrap_summary = _timed_call(
+        stage_timings,
+        "post.bootstrap_contexts",
+        annotate_bootstrap_contexts,
         frames,
         bootstrap_foreground_backend=bootstrap_foreground_backend,
         bootstrap_foreground_model=bootstrap_foreground_model,
+        bootstrap_foreground_prompt=bootstrap_foreground_prompt,
         device=device,
     )
-    frames = smooth_track_motion(frames, video_meta)
-    frames = annotate_active_players(frames, video_meta)
-    preliminary_live_play = annotate_live_play(frames, video_meta)
-    collapse_summary = mark_tracking_collapse_reground(frames)
-    grounding_summary = rerun_grounded_person_detections(
+    scene_discovery_summary = _timed_call(stage_timings, "post.scene_discovery_contracts", annotate_scene_discovery_contracts, frames)
+    target_court_first_pass = _timed_call(
+        stage_timings,
+        "post.target_court_first_pass",
+        build_target_court_first_pass,
         frames,
-        model_name=model_name,
+        video_meta,
+    )
+    frames = _timed_call(stage_timings, "post.smooth_track_motion.initial", smooth_track_motion, frames, video_meta)
+    frames = _timed_call(stage_timings, "post.annotate_active_players.initial", annotate_active_players, frames, video_meta)
+    preliminary_live_play = _timed_call(stage_timings, "post.live_play.initial", annotate_live_play, frames, video_meta)
+    collapse_summary = _timed_call(stage_timings, "post.collapse_reground", mark_tracking_collapse_reground, frames)
+    grounding_summary = _timed_call(
+        stage_timings,
+        "post.grounded_person_rerun",
+        rerun_grounded_person_detections,
+        frames,
+        player_model_name=player_model_name,
         device=device,
-        conf_threshold=conf_threshold,
+        conf_threshold=player_conf_threshold,
     )
     for frame in frames:
         if frame.get("_h_matrix") is not None:
             frame["_h_matrix"] = _h_matrix_as_array(frame["_h_matrix"])
-    retro_ball_summary = retrofit_ball_detections_before_first_observation(
+    retro_ball_summary = _timed_call(
+        stage_timings,
+        "post.retro_ball_before_first_observation",
+        retrofit_ball_detections_before_first_observation,
         frames,
         ball_model=ball_model,
         device=device,
     )
-    ball_state_summary = annotate_ball_state(frames)
-    player_recovery_summary = annotate_sam_player_recovery(
+    ball_state_summary = _timed_call(stage_timings, "post.ball_state", annotate_ball_state, frames)
+    player_recovery_summary = _timed_call(
+        stage_timings,
+        "post.sam_player_recovery",
+        annotate_sam_player_recovery,
         frames,
         player_recovery_backend=player_recovery_backend,
         player_recovery_model=player_recovery_model,
         player_recovery_prompt=player_recovery_prompt,
         device=device,
     )
-    appearance_summary = annotate_team_appearance_consistency(frames)
-    frames = annotate_active_players(frames, video_meta)
-    frames, identity_hypotheses = repair_short_track_gaps(
+    engagement_summary = _timed_call(stage_timings, "post.player_engagement.initial", annotate_player_engagement, frames, video_meta)
+    temporal_summary = _timed_call(stage_timings, "post.tracklet_temporal.initial", annotate_tracklet_temporal_evidence, frames, video_meta)
+    appearance_summary = _timed_call(stage_timings, "post.team_appearance", annotate_team_appearance_consistency, frames)
+    frames = _timed_call(stage_timings, "post.annotate_active_players.second", annotate_active_players, frames, video_meta)
+    frames, identity_hypotheses = _timed_call(
+        stage_timings,
+        "post.repair_short_track_gaps",
+        repair_short_track_gaps,
         frames,
         video_meta,
         return_hypothesis_summary=True,
     )
-    frames = smooth_track_motion(frames, video_meta)
-    frames = annotate_active_players(frames, video_meta)
-    jersey_ocr = annotate_identity_jersey_numbers(frames, identity_hypotheses=identity_hypotheses)
-    identity_global_resolution = resolve_identity_global_hypotheses_with_jersey(identity_hypotheses, jersey_ocr)
-    annotate_detections_with_jersey_global_resolution(frames, identity_global_resolution)
-    live_play = annotate_live_play(frames, video_meta)
-    scene_discovery_summary = annotate_scene_discovery_contracts(frames)
-    staged_perception_summary = _build_staged_perception_summary(
+    frames = _timed_call(stage_timings, "post.smooth_track_motion.second", smooth_track_motion, frames, video_meta)
+    engagement_summary = _timed_call(stage_timings, "post.player_engagement.second", annotate_player_engagement, frames, video_meta)
+    temporal_summary = _timed_call(stage_timings, "post.tracklet_temporal.second", annotate_tracklet_temporal_evidence, frames, video_meta)
+    frames = _timed_call(stage_timings, "post.annotate_active_players.third", annotate_active_players, frames, video_meta)
+    jersey_ocr = _timed_call(stage_timings, "post.identity_jersey_ocr", annotate_identity_jersey_numbers, frames, identity_hypotheses=identity_hypotheses)
+    identity_global_resolution = _timed_call(
+        stage_timings,
+        "post.identity_global_resolution",
+        resolve_identity_global_hypotheses_with_jersey,
+        identity_hypotheses,
+        jersey_ocr,
+    )
+    _timed_call(stage_timings, "post.apply_identity_global_resolution", annotate_detections_with_jersey_global_resolution, frames, identity_global_resolution)
+    live_play = _timed_call(stage_timings, "post.live_play.final", annotate_live_play, frames, video_meta)
+    court_pose_summary = _timed_call(stage_timings, "post.court_pose", annotate_court_pose, frames, video_meta)
+    staged_perception_summary = _timed_call(
+        stage_timings,
+        "post.staged_perception_summary",
+        _build_staged_perception_summary,
         frames,
         bootstrap_summary=bootstrap_summary,
         grounding_summary=grounding_summary,
         collapse_summary=collapse_summary,
         scene_discovery_summary=scene_discovery_summary,
         player_recovery_summary=player_recovery_summary,
+        engagement_summary=engagement_summary,
+        temporal_summary=temporal_summary,
         identity_hypotheses=identity_hypotheses,
     )
     segment_grounding = []
@@ -3934,7 +4844,7 @@ def annotate_clip(
         grounding_context = (source_frame or {}).get("grounding_context") or {}
         segment["grounding"] = {
             "status": "anchored" if grounding_context.get("enabled") else "inactive",
-            "pipeline_order": grounding_context.get("pipeline_order") or ["dino", "sam", "yolo"],
+            "pipeline_order": grounding_context.get("pipeline_order") or ["grounding_dino", "sam", "yolo"],
             "trigger_reason": grounding_context.get("trigger_reason"),
             "source_frame_idx": int((source_frame or {}).get("frame_idx", segment["start_frame"])),
             "yolo_search_policy": grounding_context.get("yolo_search_policy"),
@@ -3951,16 +4861,29 @@ def annotate_clip(
         "video_path": relative_path,
         "video": video_meta,
         "model": {
+            "player_name": player_model_name,
+            "player_tracker_backend": player_tracker_backend,
             "name": model_name,
             "ball_name": ball_model_name,
             "ball_bootstrap_backend": ball_bootstrap_backend,
             "ball_bootstrap_model": ball_bootstrap_model if ball_bootstrap_backend != "none" else None,
             "ball_bootstrap_prompt": ball_bootstrap_prompt if ball_bootstrap_backend != "none" else None,
-            "task": "pose_track_plus_ball_detect",
+            "task": "detector_first_pose_enrichment_plus_ball_detect",
             "device": device,
+            "requested_device": resource_policy.requested_device,
             "classes": ["person", "sports_ball"],
         },
         "postprocess": {
+            "resource_policy": resource_policy.to_payload(),
+            "timings_sec": {
+                key: round(float(value), 4)
+                for key, value in sorted(stage_timings.items())
+            },
+            "overall_runtime_sec": round(time.perf_counter() - overall_start, 4),
+            "frame_quality": frame_quality_summary,
+            "quality_miss_summary": quality_miss_summary,
+            "court_pose": court_pose_summary,
+            "camera_pose_segments": camera_pose_segments,
             "identity_policy": {
                 "source": str(IDENTITY_POLICY_FILE.relative_to(REPO_ROOT)),
                 "version": IDENTITY_POLICY_VERSION,
@@ -4025,6 +4948,7 @@ def annotate_clip(
             "grounding_workflow": grounding_summary,
             "grounding_collapse": collapse_summary,
             "scene_discovery_tracking": scene_discovery_summary,
+            "target_court_first_pass": target_court_first_pass,
             "preliminary_live_play_segments": len(preliminary_live_play["segments"]),
             "player_recovery": player_recovery_summary,
             "ball_state": {
@@ -4063,6 +4987,7 @@ def annotate_clip(
                 "min_sharpness": JERSEY_OCR_MIN_SHARPNESS,
                 "consensus_min_votes": JERSEY_OCR_CONSENSUS_MIN_VOTES,
                 "consensus_min_share": JERSEY_OCR_CONSENSUS_MIN_SHARE,
+                "min_on_court_track_frames": JERSEY_OCR_MIN_ON_COURT_TRACK_FRAMES,
                 "identity_count_with_consensus": jersey_ocr["identity_count_with_consensus"],
                 "track_option_count_with_consensus": jersey_ocr.get("track_option_count_with_consensus", 0),
                 "ambiguous_track_option_count_with_consensus": jersey_ocr.get("ambiguous_track_option_count_with_consensus", 0),
@@ -4101,24 +5026,38 @@ def annotate_clip(
 
     with open(output_path, "w") as f:
         json.dump(artifact, f, indent=2)
+    print("[TIMING] overall_runtime_sec", round(time.perf_counter() - overall_start, 4))
+    for key, value in sorted(stage_timings.items(), key=lambda item: item[1], reverse=True):
+        print("[TIMING]", key, round(float(value), 4))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Layer 1 annotations for the labeller.")
     parser.add_argument("clip_path", help="Absolute or repo-relative path to the clip")
     parser.add_argument("--output", default=None, help="Output JSON path")
-    parser.add_argument("--model", default="yolov8n-pose.pt", help="Ultralytics model name or path")
+    parser.add_argument("--player-model", default=DEFAULT_PLAYER_MODEL, help="Ultralytics detection model used for person proposals")
+    parser.add_argument(
+        "--player-tracker-backend",
+        default="default",
+        help="Ultralytics tracker backend for player tracking: default, bytetrack.yaml, or botsort.yaml",
+    )
+    parser.add_argument("--model", default="yolov8n-pose.pt", help="Ultralytics pose model name or path")
     parser.add_argument("--ball-model", default="yolov8n.pt", help="Ultralytics detection model used for sports-ball proposals")
     parser.add_argument(
         "--bootstrap-foreground-backend",
-        choices=["none", "dinov3"],
+        choices=["none", "grounding_dino"],
         default="none",
         help="Optional bootstrap foreground/background pre-pass backend",
     )
     parser.add_argument(
         "--bootstrap-foreground-model",
-        default=DEFAULT_DINOV3_MODEL,
-        help="Model id used when the DINOv3 bootstrap foreground backend is enabled",
+        default=DEFAULT_GROUNDING_DINO_MODEL,
+        help="Model id used when the Grounding DINO bootstrap foreground backend is enabled",
+    )
+    parser.add_argument(
+        "--bootstrap-foreground-prompt",
+        default=DEFAULT_GROUNDING_DINO_PROMPT,
+        help="Prompt text used when the Grounding DINO bootstrap foreground backend is enabled",
     )
     parser.add_argument(
         "--player-recovery-backend",
@@ -4153,7 +5092,9 @@ def main():
         help="Text prompt passed to SAM 3 when the ball bootstrap backend is enabled",
     )
     parser.add_argument("--device", default="cuda:0", help="Ultralytics device selector")
-    parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
+    parser.add_argument("--player-conf", type=float, default=DEFAULT_PLAYER_PROPOSAL_CONFIDENCE, help="Person detector proposal confidence threshold")
+    parser.add_argument("--pose-conf", type=float, default=DEFAULT_POSE_EXTRACTION_CONFIDENCE, help="Pose extraction confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.25, help="Backward-compatible alias for pose extraction confidence threshold")
     parser.add_argument(
         "--calibration-file",
         default=str(CALIBRATION_FILE),
@@ -4175,8 +5116,13 @@ def main():
         device=args.device,
         conf_threshold=args.conf,
         calibration_file=calibration_file,
+        player_model_name=args.player_model,
+        player_tracker_backend=args.player_tracker_backend,
+        player_conf_threshold=args.player_conf,
+        pose_conf_threshold=args.pose_conf if args.pose_conf is not None else args.conf,
         bootstrap_foreground_backend=args.bootstrap_foreground_backend,
         bootstrap_foreground_model=args.bootstrap_foreground_model,
+        bootstrap_foreground_prompt=args.bootstrap_foreground_prompt,
         player_recovery_backend=args.player_recovery_backend,
         player_recovery_model=args.player_recovery_model,
         player_recovery_prompt=args.player_recovery_prompt,

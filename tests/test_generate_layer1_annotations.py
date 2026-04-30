@@ -60,6 +60,7 @@ from tools.review.labeller.generate_layer1_annotations import (
     _build_staged_perception_summary,
     annotate_team_appearance_consistency,
     annotate_active_players,
+    annotate_tracklet_temporal_evidence,
     annotate_ball_state,
     annotate_bootstrap_contexts,
     annotate_continuity_segments,
@@ -340,6 +341,56 @@ class ActivePlayerScoreTest(unittest.TestCase):
         self.assertGreater(score_info["reasons"]["ungrounded_shared_motion_penalty"], 0.0)
         self.assertLess(score_info["on_court_score"], ON_COURT_SCORE_THRESHOLD)
 
+    def test_score_active_player_uses_tracklet_temporal_bonus_and_penalty(self):
+        baseline_detection = {
+            "confidence": 0.82,
+            "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+            "court_foot_xy": [1200.0, 760.0],
+            "motion_speed_px": 6.0,
+        }
+        baseline = score_active_player(
+            baseline_detection,
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+        )
+        promoted = score_active_player(
+            {
+                **baseline_detection,
+                "tracklet_temporal": {
+                    "smoothed_score": 0.92,
+                    "adjacent_risk": 0.08,
+                    "promotion_ready": True,
+                    "demotion_ready": False,
+                    "state": "promote_candidate",
+                },
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+        )
+        demoted = score_active_player(
+            {
+                **baseline_detection,
+                "tracklet_temporal": {
+                    "smoothed_score": 0.15,
+                    "adjacent_risk": 0.96,
+                    "promotion_ready": False,
+                    "demotion_ready": True,
+                    "state": "demote_candidate",
+                },
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+        )
+        self.assertGreater(promoted["score"], baseline["score"])
+        self.assertGreater(baseline["score"], demoted["score"])
+        self.assertGreater(promoted["reasons"]["tracklet_temporal_bonus"], 0.0)
+        self.assertGreater(demoted["reasons"]["tracklet_temporal_penalty"], 0.0)
+        self.assertEqual(promoted["reasons"]["tracklet_temporal_state"], "promote_candidate")
+        self.assertEqual(demoted["reasons"]["tracklet_temporal_state"], "demote_candidate")
+
     def test_score_active_player_uses_scene_prior_when_bootstrap_context_is_missing(self):
         detection = {
             "confidence": 0.78,
@@ -373,6 +424,202 @@ class ActivePlayerScoreTest(unittest.TestCase):
         self.assertGreater(inside["reasons"]["scene_foot_prior"], outside["reasons"]["scene_foot_prior"])
         self.assertGreater(inside["reasons"]["effective_foot_prior"], 0.0)
         self.assertGreater(inside["on_court_score"], outside["on_court_score"])
+
+
+class PlayerEngagementTest(unittest.TestCase):
+    def test_target_court_support_distinguishes_in_bounds_from_adjacent_court(self):
+        inside = gla._compute_detection_target_court_support(
+            {
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_foot_xy": [1200.0, 760.0],
+            },
+            frame_width=640,
+            frame_height=480,
+        )
+        outside = gla._compute_detection_target_court_support(
+            {
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_foot_xy": [3320.0, 760.0],
+            },
+            frame_width=640,
+            frame_height=480,
+        )
+        self.assertTrue(inside["court_in_bounds"])
+        self.assertFalse(outside["court_in_bounds"])
+        self.assertGreater(inside["target_court_score"], outside["target_court_score"])
+        self.assertGreater(outside["court_distance_outside"], 0.0)
+
+    def test_ball_affinity_rewards_ball_inside_player_bbox(self):
+        detection = {"bbox_xyxy": [100.0, 100.0, 160.0, 260.0]}
+        near = gla._score_detection_ball_affinity(
+            detection,
+            {"state": "observed", "center_xy": [128.0, 180.0]},
+            frame_width=640,
+            frame_height=480,
+        )
+        far = gla._score_detection_ball_affinity(
+            detection,
+            {"state": "observed", "center_xy": [520.0, 420.0]},
+            frame_width=640,
+            frame_height=480,
+        )
+        self.assertEqual(near["score"], 1.0)
+        self.assertLess(far["score"], 0.1)
+
+    def test_annotate_player_engagement_marks_adjacent_court_detections(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "ball_state": {"state": "observed", "center_xy": [138.0, 228.0]},
+                "detections": [
+                    {
+                        "track_id": 10,
+                        "bbox_xyxy": [100.0, 120.0, 180.0, 320.0],
+                        "court_foot_xy": [1220.0, 780.0],
+                        "motion_speed_px": 12.0,
+                    },
+                    {
+                        "track_id": 11,
+                        "bbox_xyxy": [560.0, 110.0, 620.0, 310.0],
+                        "court_foot_xy": [3360.0, 780.0],
+                        "motion_speed_px": 0.0,
+                    },
+                ],
+            }
+        ]
+        summary = gla.annotate_player_engagement(
+            frames,
+            {"fps": 30.0, "width": 640, "height": 480},
+        )
+        engaged = frames[0]["detections"][0]
+        adjacent = frames[0]["detections"][1]
+        self.assertEqual(engaged["engagement_state"], "target_game_engaged")
+        self.assertEqual(adjacent["engagement_state"], "adjacent_or_other")
+        self.assertGreater(engaged["engagement_score"], adjacent["engagement_score"])
+        self.assertEqual(summary["adjacent_or_other_detection_count"], 1)
+        self.assertEqual(summary["engaged_detection_count"], 1)
+
+    def test_score_active_player_penalizes_other_game_risk(self):
+        baseline = score_active_player(
+            {
+                "confidence": 0.82,
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_foot_xy": [1200.0, 760.0],
+                "motion_speed_px": 6.0,
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+        )
+        risky = score_active_player(
+            {
+                "confidence": 0.82,
+                "bbox_xyxy": [200.0, 120.0, 280.0, 320.0],
+                "court_foot_xy": [1200.0, 760.0],
+                "motion_speed_px": 6.0,
+                "engagement": {
+                    "engagement_score": 0.08,
+                    "target_court_score": 0.12,
+                    "other_game_risk": 0.92,
+                    "engagement_state": "adjacent_or_other",
+                },
+            },
+            frame_width=640,
+            frame_height=480,
+            track_frame_count=3,
+        )
+        self.assertLess(risky["score"], baseline["score"])
+        self.assertGreater(risky["reasons"]["engagement_penalty"], baseline["reasons"]["engagement_penalty"])
+        self.assertGreater(risky["reasons"]["other_game_risk"], 0.8)
+
+
+class TrackletTemporalEvidenceTest(unittest.TestCase):
+    def test_annotate_tracklet_temporal_evidence_emits_promotion_and_demotion_signals(self):
+        frames = [
+            {
+                "frame_idx": idx,
+                "detections": [
+                    {
+                        "track_id": 10,
+                        "bbox_xyxy": [100.0, 120.0, 180.0, 320.0],
+                        "motion_speed_px": 12.0,
+                        "engagement": {
+                            "engagement_score": 0.92,
+                            "target_court_score": 0.88,
+                            "other_game_risk": 0.08,
+                        },
+                    },
+                    {
+                        "track_id": 11,
+                        "bbox_xyxy": [420.0, 120.0, 500.0, 320.0],
+                        "motion_speed_px": 0.0,
+                        "engagement": {
+                            "engagement_score": 0.05,
+                            "target_court_score": 0.10,
+                            "other_game_risk": 0.95,
+                        },
+                    },
+                ],
+            }
+            for idx in range(4)
+        ]
+        summary = annotate_tracklet_temporal_evidence(frames, {"fps": 30.0})
+
+        promoted = frames[2]["detections"][0]
+        demoted = frames[3]["detections"][1]
+        self.assertEqual(promoted["tracklet_temporal_state"], "promote_candidate")
+        self.assertTrue(promoted["tracklet_temporal"]["promotion_ready"])
+        self.assertEqual(demoted["tracklet_temporal_state"], "demote_candidate")
+        self.assertTrue(demoted["tracklet_temporal"]["demotion_ready"])
+        self.assertGreater(summary["promotion_ready_detection_count"], 0)
+        self.assertGreater(summary["demotion_ready_detection_count"], 0)
+
+    def test_annotate_tracklet_temporal_evidence_uses_identity_track_id_when_available(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "detections": [
+                    {
+                        "track_id": 10,
+                        "identity_track_id": 100,
+                        "bbox_xyxy": [100.0, 120.0, 180.0, 320.0],
+                        "motion_speed_px": 10.0,
+                        "engagement": {
+                            "engagement_score": 0.8,
+                            "target_court_score": 0.85,
+                            "other_game_risk": 0.1,
+                        },
+                    }
+                ],
+            },
+            {
+                "frame_idx": 1,
+                "detections": [
+                    {
+                        "track_id": 11,
+                        "identity_track_id": 100,
+                        "bbox_xyxy": [110.0, 120.0, 190.0, 320.0],
+                        "motion_speed_px": 11.0,
+                        "engagement": {
+                            "engagement_score": 0.82,
+                            "target_court_score": 0.86,
+                            "other_game_risk": 0.1,
+                        },
+                    }
+                ],
+            },
+        ]
+        summary = annotate_tracklet_temporal_evidence(frames, {"fps": 30.0})
+
+        second = frames[1]["detections"][0]["tracklet_temporal"]
+        self.assertEqual(summary["track_count"], 1)
+        self.assertEqual(second["evidence_key_kind"], "identity_track_id")
+        self.assertEqual(second["evidence_key_id"], 100)
+        self.assertEqual(second["sample_count"], 2)
+        self.assertEqual(second["track_length_frames"], 2)
+
+
+
 
 
 class BallStateTest(unittest.TestCase):
@@ -457,6 +704,38 @@ class BallStateTest(unittest.TestCase):
         self.assertEqual(state["nearby_player_track_id"], 17)
         self.assertGreater(state["velocity_xy"][1], 0.0)
 
+    def test_update_ball_predictive_state_assigns_shot_or_lob_mode(self):
+        state = _update_ball_predictive_state(
+            {
+                "center_xy": [100.0, 150.0],
+                "last_seen_frame_idx": 3,
+            },
+            {
+                "confidence": 0.69,
+                "center_xy": [138.0, 112.0],
+            },
+            [],
+            4,
+        )
+        self.assertEqual(state["motion_mode"], "shot_or_lob")
+        self.assertLess(state["velocity_xy"][1], 0.0)
+
+    def test_predictive_ball_search_roi_advances_by_stale_frame_gap_for_shot(self):
+        roi = gla._predictive_ball_search_roi(
+            (360, 640, 3),
+            {
+                "center_xy": [240.0, 220.0],
+                "velocity_xy": [12.0, -30.0],
+                "last_seen_frame_idx": 10,
+                "confidence": 0.71,
+                "motion_mode": "shot_or_lob",
+            },
+            frame_idx=13,
+        )
+        x_mid = 0.5 * (roi[0] + roi[2])
+        self.assertGreater(x_mid, 270.0)
+        self.assertLessEqual(roi[1], 60)
+
     def test_run_ball_predictive_search_remaps_detections(self):
         class _FakeBoxes:
             cls = np.array([32], dtype=np.float32)
@@ -501,6 +780,73 @@ class BallStateTest(unittest.TestCase):
         self.assertEqual(detections[0]["ball_motion_mode"], "pass_or_loose")
         self.assertGreater(detections[0]["bbox_xyxy"][0], 0.0)
 
+    def test_run_ball_predictive_search_skips_degenerate_roi(self):
+        class _FakeBallModel:
+            names = {32: "sports_ball"}
+
+            def predict(self, *args, **kwargs):
+                raise AssertionError("degenerate ROI should not be passed to YOLO")
+
+        frame = np.zeros((2, 2, 3), dtype=np.uint8)
+        detections, summary = _run_ball_predictive_search(
+            _FakeBallModel(),
+            frame,
+            {
+                "center_xy": [1.0, 1.0],
+                "velocity_xy": [0.0, 0.0],
+                "last_seen_frame_idx": 0,
+                "confidence": 0.68,
+                "motion_mode": "unknown_recent",
+            },
+            frame_idx=1,
+            device="cpu",
+            h_matrix=None,
+        )
+        self.assertEqual(detections, [])
+        self.assertTrue(summary["triggered"])
+        self.assertEqual(summary["skipped_reason"], "degenerate_predictive_roi")
+
+    def test_run_ball_predictive_search_stays_active_for_pass_stale_gap(self):
+        class _FakeBoxes:
+            cls = np.array([32], dtype=np.float32)
+            conf = np.array([0.49], dtype=np.float32)
+            id = None
+            xyxy = np.array([[8.0, 8.0, 14.0, 14.0]], dtype=np.float32)
+            xywh = np.array([[11.0, 11.0, 6.0, 6.0]], dtype=np.float32)
+
+            def __len__(self):
+                return 1
+
+        class _FakeResult:
+            boxes = _FakeBoxes()
+            keypoints = None
+
+        class _FakeBallModel:
+            names = {32: "sports_ball"}
+
+            def predict(self, crop, classes, conf, device, verbose):
+                return [_FakeResult()]
+
+        frame = np.zeros((240, 360, 3), dtype=np.uint8)
+        detections, summary = _run_ball_predictive_search(
+            _FakeBallModel(),
+            frame,
+            {
+                "center_xy": [80.0, 120.0],
+                "velocity_xy": [18.0, 5.0],
+                "last_seen_frame_idx": 20,
+                "confidence": 0.68,
+                "motion_mode": "pass_or_loose",
+            },
+            frame_idx=27,
+            device="cpu",
+            h_matrix=None,
+        )
+        self.assertTrue(summary["triggered"])
+        self.assertEqual(summary["stale_frames"], 7)
+        self.assertEqual(summary["candidate_count"], 1)
+        self.assertEqual(detections[0]["ball_detection_source"], "predictive_roi_v1")
+
     def test_ball_detection_needs_search_uses_confidence_threshold(self):
         self.assertTrue(_ball_detection_needs_search(None))
         self.assertTrue(_ball_detection_needs_search({"confidence": 0.19}))
@@ -528,6 +874,38 @@ class BallStateTest(unittest.TestCase):
         self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
         self.assertEqual(frames[1]["ball_state"]["missing_gap_frames"], 1)
 
+    def test_annotate_ball_state_extends_pass_keep_alive_with_decay_provenance(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "ball_detection": {
+                    "confidence": 0.82,
+                    "bbox_xyxy": [94.0, 94.0, 106.0, 106.0],
+                    "bbox_xywh": [100.0, 100.0, 12.0, 12.0],
+                    "center_xy": [100.0, 100.0],
+                },
+            },
+            {
+                "frame_idx": 1,
+                "ball_detection": {
+                    "confidence": 0.80,
+                    "bbox_xyxy": [148.0, 96.0, 160.0, 108.0],
+                    "bbox_xywh": [154.0, 102.0, 12.0, 12.0],
+                    "center_xy": [154.0, 102.0],
+                },
+            },
+        ]
+        frames.extend({"frame_idx": idx, "ball_detection": None} for idx in range(2, 7))
+
+        annotate_ball_state(frames)
+
+        self.assertEqual(frames[1]["ball_state"]["motion_mode"], "pass_or_loose")
+        self.assertEqual(frames[6]["ball_state"]["state"], "predicted_short_gap")
+        self.assertEqual(frames[6]["ball_state"]["missing_gap_frames"], 5)
+        self.assertEqual(frames[6]["ball_state"]["keep_alive_kind"], "extended_pass_shot")
+        self.assertLess(frames[6]["ball_state"]["confidence"], frames[1]["ball_state"]["confidence"])
+        self.assertGreater(frames[6]["ball_state"]["center_xy"][0], frames[1]["ball_state"]["center_xy"][0])
+
     def test_annotate_ball_state_rejects_implausible_jump(self):
         frames = [
             {
@@ -551,6 +929,42 @@ class BallStateTest(unittest.TestCase):
         ]
         annotate_ball_state(frames)
         self.assertEqual(frames[1]["ball_state"]["state"], "predicted_short_gap")
+
+    def test_annotate_ball_state_prefers_target_court_candidate_over_background_candidate(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "target_court_prior": {
+                    "status": "ready",
+                    "bbox_xyxy": [100.0, 300.0, 700.0, 700.0],
+                },
+                "raw_ball_detections": [
+                    {
+                        "confidence": 0.50,
+                        "bbox_xyxy": [790.0, 90.0, 802.0, 102.0],
+                        "bbox_xywh": [796.0, 96.0, 12.0, 12.0],
+                        "center_xy": [796.0, 96.0],
+                        "source": "full_frame",
+                    },
+                    {
+                        "confidence": 0.35,
+                        "bbox_xyxy": [390.0, 490.0, 402.0, 502.0],
+                        "bbox_xywh": [396.0, 496.0, 12.0, 12.0],
+                        "center_xy": [396.0, 496.0],
+                        "source": "full_frame",
+                    },
+                ],
+            }
+        ]
+
+        annotate_ball_state(frames)
+
+        self.assertEqual(frames[0]["ball_state"]["state"], "observed")
+        self.assertEqual(frames[0]["ball_state"]["center_xy"], [396.0, 496.0])
+        self.assertEqual(
+            frames[0]["ball_state"]["candidate_scores"][0]["target_court_relation"],
+            "inside_target_court_region",
+        )
 
 
 class RetroBallSearchTest(unittest.TestCase):
@@ -634,7 +1048,7 @@ class RetroBallSearchTest(unittest.TestCase):
 
 
 class BootstrapContextTest(unittest.TestCase):
-    def test_annotate_bootstrap_contexts_reuses_context_within_segment(self):
+    def test_annotate_bootstrap_contexts_reuses_single_bootstrapper_across_segments(self):
         frames = [
             {
                 "frame_idx": 0,
@@ -643,12 +1057,82 @@ class BootstrapContextTest(unittest.TestCase):
             },
             {
                 "frame_idx": 1,
+                "continuity_segment_id": 1,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+        ]
+
+        init_calls = []
+        run_calls = []
+
+        class _FakeResult:
+            def __init__(self, frame_idx):
+                self.frame_idx = frame_idx
+
+            def to_payload(self):
+                return {
+                    "enabled": True,
+                    "status": "ready",
+                    "backend": "grounding_dino",
+                    "model_name": "fake",
+                    "frame_idx": self.frame_idx,
+                    "foreground_ratio": 0.5,
+                    "foreground_bbox_xyxy": [80, 90, 520, 430],
+                    "mask_shape": [2, 2],
+                    "mask_grid": [[1, 1], [0, 0]],
+                    "image_width": 640,
+                    "image_height": 480,
+                }
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, text_prompt=None, device=None):
+                init_calls.append(
+                    {
+                        "model_name": model_name,
+                        "text_prompt": text_prompt,
+                        "device": device,
+                    }
+                )
+
+            def run_on_frame(self, frame, frame_idx=0):
+                run_calls.append(frame_idx)
+                return _FakeResult(frame_idx)
+
+        import tools.review.labeller.generate_layer1_annotations as module
+
+        original = module.GroundingDinoBootstrapper
+        module.GroundingDinoBootstrapper = _FakeBootstrapper
+        try:
+            annotate_bootstrap_contexts(
+                frames,
+                bootstrap_foreground_backend="grounding_dino",
+                bootstrap_foreground_model="fake",
+                device="cuda:0",
+            )
+        finally:
+            module.GroundingDinoBootstrapper = original
+
+        self.assertEqual(len(init_calls), 1)
+        self.assertEqual(run_calls, [0, 1])
+
+    def test_annotate_bootstrap_contexts_reuses_context_within_segment(self):
+        frames = [
+            {
+                "frame_idx": 0,
                 "continuity_segment_id": 0,
+                "camera_pose_segment_id": 0,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+            {
+                "frame_idx": 1,
+                "continuity_segment_id": 0,
+                "camera_pose_segment_id": 0,
                 "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
             },
             {
                 "frame_idx": 2,
                 "continuity_segment_id": 1,
+                "camera_pose_segment_id": 1,
                 "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
             },
         ]
@@ -661,7 +1145,7 @@ class BootstrapContextTest(unittest.TestCase):
                 return {
                     "enabled": True,
                     "status": "ready",
-                    "backend": "dinov3",
+                    "backend": "grounding_dino",
                     "model_name": "fake",
                     "frame_idx": self.frame_idx,
                     "foreground_ratio": 0.5,
@@ -673,8 +1157,9 @@ class BootstrapContextTest(unittest.TestCase):
                 }
 
         class _FakeBootstrapper:
-            def __init__(self, model_name, device):
+            def __init__(self, model_name, text_prompt=None, device=None):
                 self.model_name = model_name
+                self.text_prompt = text_prompt
                 self.device = device
 
             def run_on_frame(self, frame, frame_idx=0):
@@ -682,23 +1167,23 @@ class BootstrapContextTest(unittest.TestCase):
 
         import tools.review.labeller.generate_layer1_annotations as module
 
-        original = module.Dinov3Bootstrapper
-        module.Dinov3Bootstrapper = _FakeBootstrapper
+        original = module.GroundingDinoBootstrapper
+        module.GroundingDinoBootstrapper = _FakeBootstrapper
         try:
             summary = annotate_bootstrap_contexts(
                 frames,
-                bootstrap_foreground_backend="dinov3",
+                bootstrap_foreground_backend="grounding_dino",
                 bootstrap_foreground_model="fake",
                 device="cuda:0",
             )
         finally:
-            module.Dinov3Bootstrapper = original
+            module.GroundingDinoBootstrapper = original
 
         self.assertEqual(len(summary["contexts"]), 2)
         self.assertEqual(frames[0]["bootstrap_context"]["frame_idx"], 0)
         self.assertEqual(frames[1]["bootstrap_context"]["frame_idx"], 0)
         self.assertEqual(frames[2]["bootstrap_context"]["frame_idx"], 2)
-        self.assertEqual(frames[0]["grounding_context"]["pipeline_order"], ["dino", "sam", "yolo"])
+        self.assertEqual(frames[0]["grounding_context"]["pipeline_order"], ["grounding_dino", "sam", "yolo"])
         self.assertEqual(frames[0]["grounding_context"]["trigger_reason"], "initial")
         self.assertEqual(frames[2]["grounding_context"]["trigger_reason"], "discontinuity")
         self.assertEqual(
@@ -709,6 +1194,79 @@ class BootstrapContextTest(unittest.TestCase):
         self.assertEqual(frames[0]["grounding_context"]["yolo_search_region_mask_shape"], [2, 2])
         self.assertTrue(frames[0]["grounding_context"]["proposal_regions"])
 
+    def test_annotate_bootstrap_contexts_reruns_across_camera_pose_segments(self):
+        frames = [
+            {
+                "frame_idx": 0,
+                "continuity_segment_id": 0,
+                "camera_pose_segment_id": 0,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+            {
+                "frame_idx": 1,
+                "continuity_segment_id": 0,
+                "camera_pose_segment_id": 0,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+            {
+                "frame_idx": 2,
+                "continuity_segment_id": 0,
+                "camera_pose_segment_id": 1,
+                "_frame_bgr": np.zeros((8, 8, 3), dtype=np.uint8),
+            },
+        ]
+        run_calls = []
+
+        class _FakeResult:
+            def __init__(self, frame_idx):
+                self.frame_idx = frame_idx
+
+            def to_payload(self):
+                return {
+                    "enabled": False,
+                    "status": "foreground_too_broad",
+                    "backend": "grounding_dino",
+                    "model_name": "fake",
+                    "frame_idx": self.frame_idx,
+                    "image_width": 640,
+                    "image_height": 480,
+                    "proposal_regions": [
+                        {
+                            "text_label": "basketball court",
+                            "bbox_xyxy": [10 + self.frame_idx, 100, 500, 450],
+                            "confidence": 0.5,
+                        }
+                    ],
+                }
+
+        class _FakeBootstrapper:
+            def __init__(self, model_name, text_prompt=None, device=None):
+                pass
+
+            def run_on_frame(self, frame, frame_idx=0):
+                run_calls.append(frame_idx)
+                return _FakeResult(frame_idx)
+
+        import tools.review.labeller.generate_layer1_annotations as module
+
+        original = module.GroundingDinoBootstrapper
+        module.GroundingDinoBootstrapper = _FakeBootstrapper
+        try:
+            summary = annotate_bootstrap_contexts(
+                frames,
+                bootstrap_foreground_backend="grounding_dino",
+                bootstrap_foreground_model="fake",
+                device="cuda:0",
+            )
+        finally:
+            module.GroundingDinoBootstrapper = original
+
+        self.assertEqual(run_calls, [0, 2])
+        self.assertEqual(len(summary["contexts"]), 2)
+        self.assertEqual(frames[0]["bootstrap_context"]["frame_idx"], 0)
+        self.assertEqual(frames[1]["bootstrap_context"]["frame_idx"], 0)
+        self.assertEqual(frames[2]["bootstrap_context"]["frame_idx"], 2)
+        self.assertEqual(frames[2]["grounding_context"]["trigger_reason"], "camera_pose_segment")
 
     def test_annotate_scene_discovery_contracts_materializes_scene_prior(self):
         frames = [
@@ -718,7 +1276,7 @@ class BootstrapContextTest(unittest.TestCase):
                 "bootstrap_context": {
                     "enabled": True,
                     "status": "ready",
-                    "backend": "dinov3",
+                    "backend": "grounding_dino",
                     "model_name": "fake",
                     "mask_shape": [2, 2],
                     "mask_grid": [[1, 0], [1, 1]],
@@ -727,7 +1285,7 @@ class BootstrapContextTest(unittest.TestCase):
                     "enabled": True,
                     "trigger_reason": "initial",
                     "proposal_regions": [
-                        {"kind": "dino_play_region_component", "bbox_xyxy": [80, 90, 520, 430], "confidence": 0.5},
+                        {"kind": "grounding_dino_play_region_component", "bbox_xyxy": [80, 90, 520, 430], "confidence": 0.5},
                     ],
                     "yolo_search_policy": "mask_outside_play_region",
                     "yolo_search_region_mask_shape": [2, 2],
@@ -815,20 +1373,20 @@ class BootstrapContextTest(unittest.TestCase):
         summary = _build_staged_perception_summary(
             frames,
             bootstrap_summary={
-                "backend": "dinov3",
+                "backend": "grounding_dino",
                 "contexts": [
                     {"enabled": True, "status": "ready", "reason": "initial"},
                     {"enabled": True, "status": "ready", "reason": "discontinuity"},
                 ],
             },
             grounding_summary={
-                "pipeline_order": ["dino", "sam", "yolo"],
+                "pipeline_order": ["grounding_dino", "sam", "yolo"],
                 "frame_count_with_grounding": 1,
                 "frame_count_rerun": 1,
             },
             collapse_summary={"triggered_segment_ids": [0]},
             scene_discovery_summary={
-                "pipeline_order": ["dino", "sam", "yolo"],
+                "pipeline_order": ["grounding_dino", "sam", "yolo"],
                 "scene_prior_ready_frame_count": 2,
                 "scene_prior_trigger_reasons": ["initial", "discontinuity"],
             },
@@ -837,6 +1395,10 @@ class BootstrapContextTest(unittest.TestCase):
                 "frame_count_with_rois": 1,
                 "refined_detection_count": 2,
                 "recovered_detection_count": 1,
+            },
+            engagement_summary={
+                "adjacent_or_other_detection_count": 1,
+                "engaged_detection_count": 1,
             },
             identity_hypotheses={
                 "group_count": 1,
@@ -1781,7 +2343,7 @@ class TrackRepairTest(unittest.TestCase):
                     "sam3_refinement": {
                         "sam_score": 0.78,
                         "refined_bbox_xyxy": [104.0, 81.0, 164.0, 261.0],
-                        "source_kind": "unexplained_dino_blob",
+                        "source_kind": "unexplained_grounding_dino_region",
                     },
                 }],
                 "discovery_proposals": [{
@@ -1865,8 +2427,8 @@ class JerseyIdentityTest(unittest.TestCase):
 
             gla._collect_jersey_evidence = fake_collect
             frames = [
-                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
-                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "active_player_candidate": True, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 3, "active_player_candidate": True, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
             ]
             summary = annotate_identity_jersey_numbers(frames)
             self.assertTrue(summary["reader_available"])
@@ -1898,8 +2460,9 @@ class JerseyIdentityTest(unittest.TestCase):
 
             gla._collect_jersey_evidence = fake_collect
             frames = [
-                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
-                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 19, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 0, "detections": [{"track_id": 3, "identity_track_id": 3, "active_player_candidate": True, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 1, "detections": [{"track_id": 3, "identity_track_id": 3, "active_player_candidate": True, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
+                {"frame_idx": 2, "detections": [{"track_id": 19, "identity_track_id": 19, "active_player_candidate": True, "_jersey_crop_bgr": np.zeros((24, 24, 3), dtype=np.uint8), "_jersey_crop_sharpness": 80.0}]},
             ]
             summary = annotate_identity_jersey_numbers(
                 frames,
@@ -1945,7 +2508,7 @@ class JerseyIdentityTest(unittest.TestCase):
             self.assertEqual(winning_option["consensus"]["evidence_count"], 2)
             fallback_option = next(option for option in track_19["options"] if option["canonical_track_id"] == 19)
             self.assertFalse(fallback_option["has_consensus"])
-            detection = frames[1]["detections"][0]
+            detection = frames[2]["detections"][0]
             self.assertTrue(detection["identity_jersey_is_ambiguous"])
             self.assertEqual(detection["identity_jersey_best_canonical_track_id"], 3)
             self.assertEqual(len(detection["identity_jersey_options"]), 2)
@@ -2348,7 +2911,7 @@ class SamPlayerRecoveryTest(unittest.TestCase):
             sam_refiner._connected_component_boxes = original_component_boxes
 
         kinds = [roi["kind"] for roi in rois]
-        self.assertIn("unexplained_dino_blob", kinds)
+        self.assertIn("unexplained_grounding_dino_region", kinds)
         self.assertIn("ambiguous_yolo_detection", kinds)
         self.assertIn("grounding_anchor_region", kinds)
 
@@ -2359,6 +2922,7 @@ class SamPlayerRecoveryTest(unittest.TestCase):
         class FakeRefiner:
             def __init__(self, model_name=None, text_prompt=None, device=None):
                 self.model_name = model_name
+                self.text_prompt = text_prompt
                 self.text_prompt = text_prompt
                 self.device = device
 
@@ -2381,13 +2945,13 @@ class SamPlayerRecoveryTest(unittest.TestCase):
                             "source_merge_risk": 0.66,
                         },
                         {
-                            "kind": "unexplained_dino_blob",
+                            "kind": "unexplained_grounding_dino_region",
                             "bbox_xyxy": [210.0, 40.0, 258.0, 172.0],
                             "bbox_xywh": [234.0, 106.0, 48.0, 132.0],
                             "mask_area_px": 6300,
                             "mask_area_ratio": 0.026,
                             "sam_score": 0.77,
-                            "source_kind": "unexplained_dino_blob",
+                            "source_kind": "unexplained_grounding_dino_region",
                             "source_iou": 0.04,
                             "source_roi_bbox_xyxy": [205.0, 35.0, 262.0, 178.0],
                         },
@@ -2455,7 +3019,7 @@ class SamPlayerRecoveryTest(unittest.TestCase):
         self.assertEqual(summary["recovered_detection_count"], 2)
         detections = frames[0]["detections"]
         self.assertIn("sam3_refinement", detections[0])
-        self.assertTrue(any(d.get("recovered_candidate_source") == "sam3_unexplained_dino_blob" for d in detections))
+        self.assertTrue(any(d.get("recovered_candidate_source") == "sam3_unexplained_grounding_dino_region" for d in detections))
         self.assertTrue(any(d.get("recovered_candidate_source") == "sam3_grounding_anchor_region" for d in detections))
         recovered_anchor = next(d for d in detections if d.get("recovered_candidate_source") == "sam3_grounding_anchor_region")
         self.assertEqual(recovered_anchor["sam3_refinement"]["source_trigger_reason"], "tracking_collapse")
@@ -2472,6 +3036,169 @@ class SamPlayerRecoveryTest(unittest.TestCase):
         self.assertEqual(proposals[0]["proposal_role"], "refinement")
         self.assertTrue(any(p.get("proposal_role") == "recovery" for p in proposals))
         self.assertTrue(any((p.get("source_region") or {}).get("kind") == "grounding_anchor_region" for p in proposals))
+
+
+
+class DetectorFirstPlayerRecallTest(unittest.TestCase):
+    class _ArrayWrapper:
+        def __init__(self, array):
+            self.array = np.array(array, dtype=float)
+
+        def __getitem__(self, idx):
+            return self.array[idx]
+
+        def __len__(self):
+            return len(self.array)
+
+    class _Boxes:
+        def __init__(self, xyxy, xywh, cls, conf, ids=None):
+            self.xyxy = DetectorFirstPlayerRecallTest._ArrayWrapper(xyxy)
+            self.xywh = DetectorFirstPlayerRecallTest._ArrayWrapper(xywh)
+            self.cls = np.array(cls, dtype=float)
+            self.conf = np.array(conf, dtype=float)
+            self.id = None if ids is None else np.array(ids, dtype=float)
+
+        def __len__(self):
+            return len(self.xyxy.array)
+
+    class _Keypoints:
+        def __init__(self, xy, conf=None):
+            self.xy = DetectorFirstPlayerRecallTest._ArrayWrapper(xy)
+            self.conf = None if conf is None else DetectorFirstPlayerRecallTest._ArrayWrapper(conf)
+
+        def __len__(self):
+            return len(self.xy)
+
+    class _Result:
+        def __init__(self, boxes, keypoints=None):
+            self.boxes = boxes
+            self.keypoints = keypoints
+
+    def test_match_pose_to_person_detections_enriches_detector_box(self):
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        person_detections = [
+            {
+                "track_id": 7,
+                "class_id": 0,
+                "class_name": "person",
+                "confidence": 0.82,
+                "bbox_xyxy": [100.0, 40.0, 150.0, 180.0],
+                "bbox_xywh": [125.0, 110.0, 50.0, 140.0],
+                "player_detection_source": "full_frame_detector",
+                "player_detection_sources": ["full_frame_detector"],
+                "player_proposal_stages": ["full_frame"],
+            }
+        ]
+        pose_result = [self._Result(self._Boxes(xyxy=[[102.0, 42.0, 148.0, 182.0]], xywh=[[125.0, 112.0, 46.0, 140.0]], cls=[0], conf=[0.77]))]
+        original_build_detection = gla.build_detection
+        try:
+            gla.build_detection = lambda *args, **kwargs: {
+                "track_id": None,
+                "class_id": 0,
+                "class_name": "person",
+                "confidence": 0.77,
+                "bbox_xyxy": [102.0, 42.0, 148.0, 182.0],
+                "bbox_xywh": [125.0, 112.0, 46.0, 140.0],
+                "keypoints_xy": [[110.0, 60.0]] * 17,
+                "keypoints_conf": [0.9] * 17,
+            }
+            enriched = gla._match_pose_to_person_detections(
+                person_detections,
+                pose_result,
+                {0: "person"},
+                frame,
+                h_matrix=None,
+            )
+        finally:
+            gla.build_detection = original_build_detection
+        self.assertIn("keypoints_xy", enriched[0])
+        self.assertEqual(enriched[0]["pose_detection_source"], "pose_enrichment")
+        self.assertGreater(enriched[0]["pose_match"]["iou"], 0.8)
+
+    def test_rerun_grounded_person_detections_unions_novel_proposals(self):
+        original_yolo = gla.YOLO
+        original_build_person_detections = gla._build_person_detections
+
+        class FakeYOLO:
+            names = {0: "person"}
+
+            def __init__(self, _model_name):
+                pass
+
+            def predict(self, *_args, **_kwargs):
+                return [object()]
+
+        try:
+            gla.YOLO = FakeYOLO
+            gla._build_person_detections = lambda *args, **kwargs: [
+                {
+                    "track_id": None,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.74,
+                    "bbox_xyxy": [102.0, 42.0, 148.0, 182.0],
+                    "bbox_xywh": [125.0, 112.0, 46.0, 140.0],
+                    "player_detection_source": "grounded_detector",
+                    "player_detection_sources": ["grounded_detector"],
+                    "player_proposal_stages": ["grounded_rerun"],
+                },
+                {
+                    "track_id": None,
+                    "class_id": 0,
+                    "class_name": "person",
+                    "confidence": 0.71,
+                    "bbox_xyxy": [210.0, 35.0, 258.0, 176.0],
+                    "bbox_xywh": [234.0, 105.5, 48.0, 141.0],
+                    "player_detection_source": "grounded_detector",
+                    "player_detection_sources": ["grounded_detector"],
+                    "player_proposal_stages": ["grounded_rerun"],
+                },
+            ]
+            frames = [
+                {
+                    "frame_idx": 0,
+                    "continuity_segment_id": 0,
+                    "_frame_bgr": np.zeros((240, 320, 3), dtype=np.uint8),
+                    "_h_matrix": None,
+                    "grounding_context": {
+                        "should_rerun_yolo": True,
+                        "proposal_regions": [{"kind": "dino_play_region", "bbox_xyxy": [80, 20, 280, 220]}],
+                    },
+                    "detections": [
+                        {
+                            "track_id": 7,
+                            "class_id": 0,
+                            "class_name": "person",
+                            "confidence": 0.82,
+                            "bbox_xyxy": [100.0, 40.0, 150.0, 180.0],
+                            "bbox_xywh": [125.0, 110.0, 50.0, 140.0],
+                            "player_detection_source": "full_frame_detector",
+                            "player_detection_sources": ["full_frame_detector"],
+                            "player_proposal_stages": ["full_frame"],
+                        }
+                    ],
+                    "raw_player_detections": [],
+                }
+            ]
+            summary = gla.rerun_grounded_person_detections(
+                frames,
+                player_model_name="yolov8n.pt",
+                device="cpu",
+                conf_threshold=0.12,
+            )
+        finally:
+            gla.YOLO = original_yolo
+            gla._build_person_detections = original_build_person_detections
+
+        self.assertEqual(summary["status"], "ready")
+        self.assertEqual(summary["detection_count"], 2)
+        self.assertEqual(summary["novel_detection_count"], 1)
+        self.assertEqual(summary["supported_detection_count"], 1)
+        detections = frames[0]["detections"]
+        self.assertEqual(len(detections), 2)
+        self.assertIn("grounded_detector_support", detections[0])
+        self.assertTrue(any(d.get("player_detection_source") == "grounded_detector" for d in detections))
+        self.assertEqual(len(frames[0]["raw_player_detections"]), 2)
 
 
 class GroundingCollapseTest(unittest.TestCase):
